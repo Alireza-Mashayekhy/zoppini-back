@@ -1,5 +1,6 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsOptional, IsString, IsUUID } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class CreateCategoryDto {
   @ApiProperty()
@@ -15,6 +16,18 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsString()
   slug?: string;
+
+  @ApiProperty()
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  isInHeroSection?: boolean;
+
+  @ApiProperty()
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  isInHome?: boolean;
 
   @ApiProperty()
   @IsOptional()

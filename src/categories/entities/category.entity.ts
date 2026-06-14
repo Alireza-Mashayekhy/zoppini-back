@@ -13,7 +13,7 @@ import {
 
 @Entity()
 export class Category {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn()
   id: number;
 
   @Column({
@@ -44,6 +44,12 @@ export class Category {
     unique: true,
   })
   slug: string;
+
+  @Column()
+  isInHeroSection: boolean;
+
+  @Column()
+  isInHome: boolean;
 
   @Column({
     nullable: true,

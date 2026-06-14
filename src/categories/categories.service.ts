@@ -51,11 +51,33 @@ export class CategoriesService {
     // sort
     applySort(qb, query.sort);
 
-    // pagination
-    const { skip, take } = getPagination(page, limit);
-    qb.skip(skip).take(take);
+    if (query['isInHeroSection'] !== undefined) {
+      const isHero =
+        query['isInHeroSection'] === 'true' ||
+        query['isInHeroSection'] === true;
+      qb.andWhere('category.isInHeroSection = :isHero', { isHero });
+    }
 
-    const [data, total] = await qb.getManyAndCount();
+    if (query['isInHome'] !== undefined) {
+      const isHome = query['isInHome'] === 'true' || query['isInHome'] === true;
+      qb.andWhere('category.isInHome = :isHome', { isHome });
+    }
+
+    const isAll = query['all'] === 'true' || query['all'] === true;
+
+    let data, total;
+    if (isAll) {
+      // بدون پیجینیشن - همه رکوردها
+      data = await qb.getMany();
+      total = data.length;
+    } else {
+      // با پیجینیشن
+      const { skip, take } = getPagination(page, limit);
+      qb.skip(skip).take(take);
+      const [result, count] = await qb.getManyAndCount();
+      data = result;
+      total = count;
+    }
 
     return {
       data,

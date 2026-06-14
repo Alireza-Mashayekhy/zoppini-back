@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -34,7 +35,7 @@ export class CategoriesController {
   }
 
   @Get()
-  findAll(@Body() query: QueryDto) {
+  findAll(@Query() query: QueryDto) {
     return this.categoriesService.findAll(query);
   }
 
