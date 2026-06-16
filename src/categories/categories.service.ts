@@ -105,13 +105,21 @@ export class CategoriesService {
     return categories;
   }
 
-  async update(id: number, updateCategoryDto: UpdateCategoryDto) {
+  async update(
+    id: number,
+    updateCategoryDto: UpdateCategoryDto,
+    file?: Express.Multer.File,
+  ) {
     const categoryEntity = await this.categoriesRepository.findOne({
       where: { id },
     });
 
     if (!categoryEntity) throw new NotFoundException();
 
+    if (file) {
+      const result = this.filesService.saveFile(file);
+      categoryEntity.image = result.filename;
+    }
     Object.assign(categoryEntity, updateCategoryDto);
 
     return this.categoriesRepository.save(categoryEntity);

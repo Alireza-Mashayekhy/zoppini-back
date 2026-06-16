@@ -46,11 +46,13 @@ export class CategoriesController {
 
   @Roles(Role.Admin)
   @Patch(':id')
+  @UseInterceptors(FileInterceptor('file'))
   update(
     @Param('id') id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
+    @UploadedFile() file?: Express.Multer.File,
   ) {
-    return this.categoriesService.update(+id, updateCategoryDto);
+    return this.categoriesService.update(+id, updateCategoryDto, file);
   }
 
   @Roles(Role.Admin)
