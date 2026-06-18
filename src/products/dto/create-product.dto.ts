@@ -1,47 +1,99 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNumber, IsString } from 'class-validator';
-
-export class VariantDto {
+import { Type } from 'class-transformer';
+import {
+  IsArray,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  ValidateNested,
+} from 'class-validator';
+class CreateVariantDto {
   @ApiProperty()
-  @IsString()
-  color: string;
-
-  @ApiProperty()
-  @IsString()
-  size: string;
+  @IsNumber()
+  @IsNotEmpty()
+  colorId: number;
 
   @ApiProperty()
   @IsNumber()
+  @IsNotEmpty()
+  sizeId: number;
+
+  @ApiProperty()
+  @IsNumber()
+  @Min(0)
   price: number;
 
   @ApiProperty()
   @IsNumber()
-  stock: number;
+  @Min(0)
+  @IsOptional()
+  stock?: number;
 }
 
 export class CreateProductDto {
   @ApiProperty()
   @IsString()
+  @IsNotEmpty()
   productCode: string;
 
   @ApiProperty()
   @IsString()
+  @IsNotEmpty()
   title: string;
 
   @ApiProperty()
   @IsString()
-  description: string;
+  @IsNotEmpty()
+  slug: string;
 
   @ApiProperty()
   @IsString()
-  careInstructionsHtml: string;
+  @IsOptional()
+  description?: string;
+
+  @ApiProperty({ type: [Number] })
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @IsNotEmpty()
+  categoryIds: number[];
 
   @ApiProperty()
-  variants: VariantDto[];
+  @IsString()
+  @IsOptional()
+  careInstructionsHtml?: string;
 
   @ApiProperty()
-  suggestedProductIds: number[];
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateVariantDto)
+  variants: CreateVariantDto[];
+}
+
+export class UploadColorImageDto {
+  @ApiProperty()
+  @IsNumber()
+  colorId: number;
 
   @ApiProperty()
-  categoryIds?: number[];
+  @IsOptional()
+  @IsString()
+  altText?: string;
+}
+
+export class AddColorDto {
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty()
+  @IsString()
+  hexCode: string;
+}
+
+export class AddSizeDto {
+  @ApiProperty()
+  @IsString()
+  name: string;
 }

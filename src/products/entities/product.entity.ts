@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 
 import { Comment } from './comment.entity';
+import { ProductColorImage } from './product-color-image.entity';
 import { Variant } from './variant.entity';
 
 @Entity()
@@ -21,6 +22,9 @@ export class Product {
 
   @Column({ length: 200 })
   title: string;
+
+  @Column({ unique: true })
+  slug: string;
 
   @Column({ type: 'text', nullable: true })
   description: string;
@@ -72,4 +76,7 @@ export class Product {
   // ارتباط یک‑به‑چند با نظرات
   @OneToMany(() => Comment, comment => comment.product, { cascade: true })
   comments: Comment[];
+
+  @OneToMany(() => ProductColorImage, image => image.product, { cascade: true })
+  colorImages: ProductColorImage[];
 }

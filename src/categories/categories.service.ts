@@ -7,7 +7,7 @@ import {
   QueryDto,
 } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -99,10 +99,7 @@ export class CategoriesService {
 
   async findManyByIds(ids: number[]): Promise<Category[]> {
     if (!ids.length) return [];
-    const categories = await this.categoriesRepository.findBy(
-      ids.map(id => ({ id })),
-    );
-    return categories;
+    return this.categoriesRepository.findBy({ id: In(ids) });
   }
 
   async update(

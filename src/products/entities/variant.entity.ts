@@ -4,20 +4,18 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryGeneratedColumn,
+  Unique,
 } from 'typeorm';
 
 import { Product } from './product.entity';
+import { Color } from './product-color.entity';
+import { Size } from './product-size.entity';
 
 @Entity()
+@Unique(['product', 'color', 'size'])
 export class Variant {
   @PrimaryGeneratedColumn()
   id: number;
-
-  @Column({ length: 50 })
-  color: string;
-
-  @Column({ length: 50 })
-  size: string;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: number;
@@ -25,9 +23,22 @@ export class Variant {
   @Column({ default: 0 })
   stock: number;
 
+  // ارتباط با محصول
   @ManyToOne(() => Product, product => product.variants, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'product_id' })
   product: Product;
+
+  @ManyToOne(() => Color, color => color.variants, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'color_id' })
+  color: Color;
+
+  @ManyToOne(() => Size, size => size.variants, {
+    onDelete: 'CASCADE',
+  })
+  @JoinColumn({ name: 'size_id' })
+  size: Size;
 }

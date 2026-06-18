@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -11,71 +12,165 @@ import {
   getPagination,
   QueryDto,
 } from 'src/common/query';
-import { DataSource, QueryRunner, Repository } from 'typeorm';
+import { FilesService } from 'src/files/files.service';
+import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 
-import { CreateProductDto } from './dto/create-product.dto';
+import {
+  AddColorDto,
+  AddSizeDto,
+  CreateProductDto,
+} from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Product } from './entities/product.entity';
+import { Color } from './entities/product-color.entity';
+import { ProductColorImage } from './entities/product-color-image.entity';
+import { Size } from './entities/product-size.entity';
 import { Variant } from './entities/variant.entity';
 
 @Injectable()
 export class ProductsService {
   constructor(
-    @InjectRepository(Product) private productRepository: Repository<Product>,
+    @InjectRepository(Product)
+    private productRepo: Repository<Product>,
     @InjectRepository(Variant)
-    private variantRepository: Repository<Variant>,
+    private variantRepo: Repository<Variant>,
+    @InjectRepository(Color)
+    private colorRepo: Repository<Color>,
+    @InjectRepository(Size)
+    private sizeRepo: Repository<Size>,
+    @InjectRepository(ProductColorImage)
+    private colorImageRepo: Repository<ProductColorImage>,
+
     private dataSource: DataSource,
     private readonly categoriesService: CategoriesService,
+    private readonly filesService: FilesService,
   ) {}
 
-  async create(createProductDto: CreateProductDto) {
-    const { categoryIds, variants, suggestedProductIds, ...rest } =
-      createProductDto;
+  async create(createProductDto: CreateProductDto): Promise<Product> {
+    const {
+      productCode,
+      title,
+      slug,
+      description,
+      careInstructionsHtml,
+      categoryIds,
+      variants,
+    } = createProductDto;
 
-    const product = this.productRepository.create(rest);
+    // ۱. ایجاد محصول اصلی
+    const product = this.productRepo.create({
+      productCode,
+      title,
+      slug,
+      description,
+      careInstructionsHtml,
+    });
+    await this.productRepo.save(product);
 
-    // ارتباط با دسته‌بندی‌ها (با استفاده از repository)
-    if (categoryIds?.length) {
-      const categoriesPromises = categoryIds.map(id =>
-        this.categoriesService.findOne(id),
-      );
-      const categories = await Promise.all(categoriesPromises);
-
-      const validCategories = categories.filter(cat => cat !== null);
-      if (validCategories.length !== categoryIds.length) {
-        throw new NotFoundException('One or more category IDs invalid');
+    if (categoryIds && categoryIds.length) {
+      const categories =
+        await this.categoriesService.findManyByIds(categoryIds);
+      if (categories.length !== categoryIds.length) {
+        throw new BadRequestException('یکی از دسته‌بندی‌ها وجود ندارد');
       }
-      product.categories = validCategories;
+      product.categories = categories;
+      await this.productRepo.save(product);
     }
 
-    // واریانت‌ها
-    if (variants?.length) {
-      product.variants = variants.map(v => this.variantRepository.create(v));
+    // ۲. واکشی رنگ‌ها و سایزها برای اعتبارسنجی
+    const colorIds = variants.map(v => v.colorId);
+    const sizeIds = variants.map(v => v.sizeId);
+
+    const existingColors = await this.colorRepo.findBy({ id: In(colorIds) });
+    const existingSizes = await this.sizeRepo.findBy({ id: In(sizeIds) });
+
+    if (existingColors.length !== new Set(colorIds).size) {
+      throw new BadRequestException('One or more color IDs are invalid.');
+    }
+    if (existingSizes.length !== new Set(sizeIds).size) {
+      throw new BadRequestException('One or more size IDs are invalid.');
     }
 
-    // محصولات پیشنهادی
-    if (suggestedProductIds?.length) {
-      const suggestedProducts = await this.productRepository.findBy(
-        suggestedProductIds.map(id => ({ id })),
-      );
-      if (suggestedProducts.length !== suggestedProductIds.length) {
-        throw new NotFoundException(
-          'One or more suggested product IDs invalid',
-        );
-      }
-      product.suggestedProducts = suggestedProducts;
+    // ۳. ایجاد واریانت‌ها
+    const variantEntities = variants.map(v => {
+      const color = existingColors.find(c => c.id === v.colorId);
+      const size = existingSizes.find(s => s.id === v.sizeId);
+      return this.variantRepo.create({
+        product,
+        color,
+        size,
+        price: v.price,
+        stock: v.stock ?? 0,
+      });
+    });
+
+    await this.variantRepo.save(variantEntities);
+
+    return this.productRepo.findOneOrFail({
+      where: { id: product.id },
+      relations: {
+        variants: {
+          color: true,
+          size: true,
+        },
+        categories: true,
+      },
+    });
+  }
+
+  async addColor(addColorDto: AddColorDto) {
+    const color = this.colorRepo.create(addColorDto);
+
+    return this.colorRepo.save(color);
+  }
+
+  async addSize(addSizeDto: AddSizeDto) {
+    const size = this.sizeRepo.create(addSizeDto);
+
+    return this.sizeRepo.save(size);
+  }
+
+  async addColorImages(
+    productId: number,
+    colorId: number,
+    files: Express.Multer.File[],
+  ): Promise<ProductColorImage[]> {
+    const product = await this.productRepo.findOneBy({ id: productId });
+    if (!product) throw new NotFoundException('محصول یافت نشد');
+
+    const color = await this.colorRepo.findOneBy({ id: colorId });
+    if (!color) throw new NotFoundException('رنگ یافت نشد');
+
+    const images: ProductColorImage[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      // ذخیره فایل با استفاده از سرویس FilesService (که مسیر را برمی‌گرداند)
+      const savedFile = this.filesService.saveFile(file);
+      // فرض می‌کنیم saveFile آدرس کامل فایل را برمی‌گرداند
+      const image = this.colorImageRepo.create({
+        url: savedFile.filename, // یا مسیر کامل
+        order: i,
+        product,
+        color,
+      });
+      images.push(image);
     }
 
-    return this.productRepository.save(product);
+    return this.colorImageRepo.save(images);
   }
 
   async findAll(query: QueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
-    const qb = this.productRepository.createQueryBuilder('user');
+    const qb = this.productRepo.createQueryBuilder('products');
 
     // search
-    applySearch(qb, query.search, ['user.fullName', 'user.phone']);
+    applySearch(qb, query.search, [
+      'products.title',
+      'products.slug',
+      'products.productCode',
+    ]);
 
     // sort
     applySort(qb, query.sort);
@@ -97,8 +192,16 @@ export class ProductsService {
     };
   }
 
+  async allColors() {
+    return this.colorRepo.find();
+  }
+
+  async allSizes() {
+    return this.sizeRepo.find();
+  }
+
   async findOne(id: number) {
-    const payload = await this.productRepository.findOne({
+    const payload = await this.productRepo.findOne({
       where: { id },
     });
     return payload;
@@ -106,7 +209,7 @@ export class ProductsService {
 
   async update(id: number, updateProductDto: UpdateProductDto) {
     // 1. پیدا کردن محصول همراه با واریانت‌ها و محصولات پیشنهادی
-    const product = await this.productRepository.findOne({
+    const product = await this.productRepo.findOne({
       where: { id },
       relations: {
         variants: true,
@@ -122,7 +225,7 @@ export class ProductsService {
       updateProductDto.productCode &&
       updateProductDto.productCode !== product.productCode
     ) {
-      const existing = await this.productRepository.findOneBy({
+      const existing = await this.productRepo.findOneBy({
         productCode: updateProductDto.productCode,
       });
       if (existing) {
@@ -134,52 +237,52 @@ export class ProductsService {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    return;
+    // try {
+    //   // 3. به‌روزرسانی فیلدهای ساده (جدا کردن فیلدهای روابط)
+    //   const { variants, suggestedProductIds, categoryIds, ...simpleFields } =
+    //     updateProductDto;
+    //   Object.assign(product, simpleFields);
+    //   await queryRunner.manager.save(product);
 
-    try {
-      // 3. به‌روزرسانی فیلدهای ساده (جدا کردن فیلدهای روابط)
-      const { variants, suggestedProductIds, categoryIds, ...simpleFields } =
-        updateProductDto;
-      Object.assign(product, simpleFields);
-      await queryRunner.manager.save(product);
+    //   // 4. به‌روزرسانی واریانت‌ها (با queryRunner)
+    //   if (variants) {
+    //     await this.updateVariants(product.id, variants, queryRunner);
+    //   }
 
-      // 4. به‌روزرسانی واریانت‌ها (با queryRunner)
-      if (variants) {
-        await this.updateVariants(product.id, variants, queryRunner);
-      }
+    //   // 5. به‌روزرسانی محصولات پیشنهادی (با queryRunner)
+    //   if (suggestedProductIds !== undefined) {
+    //     await this.updateSuggestedProducts(
+    //       product,
+    //       suggestedProductIds,
+    //       queryRunner,
+    //     );
+    //   }
 
-      // 5. به‌روزرسانی محصولات پیشنهادی (با queryRunner)
-      if (suggestedProductIds !== undefined) {
-        await this.updateSuggestedProducts(
-          product,
-          suggestedProductIds,
-          queryRunner,
-        );
-      }
+    //   // 6. به‌روزرسانی دسته‌بندی‌ها (با استفاده از سرویس CategoriesService)
+    //   if (categoryIds !== undefined) {
+    //     await this.updateProductCategories(product, categoryIds, queryRunner);
+    //   }
 
-      // 6. به‌روزرسانی دسته‌بندی‌ها (با استفاده از سرویس CategoriesService)
-      if (categoryIds !== undefined) {
-        await this.updateProductCategories(product, categoryIds, queryRunner);
-      }
+    //   // 7. دریافت محصول نهایی با تمام روابط
+    //   const updatedProduct = await queryRunner.manager.findOne(Product, {
+    //     where: { id: product.id },
+    //     relations: {
+    //       variants: true,
+    //       suggestedProducts: true,
+    //       comments: true,
+    //       categories: true,
+    //     },
+    //   });
 
-      // 7. دریافت محصول نهایی با تمام روابط
-      const updatedProduct = await queryRunner.manager.findOne(Product, {
-        where: { id: product.id },
-        relations: {
-          variants: true,
-          suggestedProducts: true,
-          comments: true,
-          categories: true,
-        },
-      });
-
-      await queryRunner.commitTransaction();
-      return updatedProduct;
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
-    }
+    //   await queryRunner.commitTransaction();
+    //   return updatedProduct;
+    // } catch (error) {
+    //   await queryRunner.rollbackTransaction();
+    //   throw error;
+    // } finally {
+    //   await queryRunner.release();
+    // }
   }
 
   // متد کمکی برای به‌روزرسانی واریانت‌ها
@@ -278,12 +381,12 @@ export class ProductsService {
   }
 
   async remove(id: number) {
-    const product = await this.productRepository.findOne({
+    const product = await this.productRepo.findOne({
       where: { id },
     });
 
     if (!product) throw new NotFoundException();
 
-    return this.productRepository.delete(id);
+    return this.productRepo.delete(id);
   }
 }
