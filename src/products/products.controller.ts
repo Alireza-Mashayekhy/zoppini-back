@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -22,7 +23,6 @@ import {
   AddColorDto,
   AddSizeDto,
   CreateProductDto,
-  UploadColorImageDto,
 } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { ProductsService } from './products.service';
@@ -41,17 +41,28 @@ export class ProductsController {
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(Role.Admin)
   @Post(':productId/color-images')
-  @UseInterceptors(FilesInterceptor('images', 10))
+  @UseInterceptors(FilesInterceptor('files', 20))
   async uploadColorImages(
     @Param('productId') productId: number,
-    @Body() uploadDto: UploadColorImageDto,
     @UploadedFiles() files: Express.Multer.File[],
+    @Body() body: { colorIds?: string },
   ) {
-    return this.productsService.addColorImages(
-      productId,
-      uploadDto.colorId,
-      files,
-    );
+    const colorIds = body.colorIds ? JSON.parse(body.colorIds) : [];
+
+    if (files.length !== colorIds.length) {
+      throw new BadRequestException(
+        'تعداد فایل‌ها و تعداد رنگ‌ها باید برابر باشد',
+      );
+    }
+
+    return this.productsService.addColorImages(productId, files, colorIds);
+  }
+
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  @Delete('images/:id')
+  async deleteImage(@Param('id') id: number) {
+    return this.productsService.deleteImage(id);
   }
 
   @UseGuards(AuthGuard, RolesGuard)

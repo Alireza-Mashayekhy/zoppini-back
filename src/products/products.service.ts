@@ -132,24 +132,41 @@ export class ProductsService {
 
   async addColorImages(
     productId: number,
-    colorId: number,
     files: Express.Multer.File[],
+    colorIds: number[],
   ): Promise<ProductColorImage[]> {
     const product = await this.productRepo.findOneBy({ id: productId });
     if (!product) throw new NotFoundException('محصول یافت نشد');
 
-    const color = await this.colorRepo.findOneBy({ id: colorId });
-    if (!color) throw new NotFoundException('رنگ یافت نشد');
+    const uniqueColorIds = [...new Set(colorIds)];
+    const colors = await this.colorRepo.findBy({ id: In(uniqueColorIds) });
+    if (colors.length !== uniqueColorIds.length) {
+      throw new BadRequestException('یکی از رنگ‌ها معتبر نیست');
+    }
 
     const images: ProductColorImage[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      // ذخیره فایل با استفاده از سرویس FilesService (که مسیر را برمی‌گرداند)
+      const colorId = colorIds[i] || null; // اگر colorId ارسال نشده باشد
+
+      if (!colorId) {
+        throw new BadRequestException(
+          `برای فایل شماره ${i + 1} رنگ مشخص نشده است`,
+        );
+      }
+
+      const color = colors.find(c => c.id === colorId);
+      if (!color) {
+        throw new BadRequestException(
+          `رنگ با شناسه ${colorId} برای فایل شماره ${i + 1} معتبر نیست`,
+        );
+      }
+
       const savedFile = this.filesService.saveFile(file);
-      // فرض می‌کنیم saveFile آدرس کامل فایل را برمی‌گرداند
+
       const image = this.colorImageRepo.create({
-        url: savedFile.filename, // یا مسیر کامل
+        url: savedFile.filename,
         order: i,
         product,
         color,
@@ -160,10 +177,27 @@ export class ProductsService {
     return this.colorImageRepo.save(images);
   }
 
+  async deleteImage(id: number) {
+    const image = await this.colorImageRepo.findOneBy({ id });
+    if (!image) throw new NotFoundException('تصویر یافت نشد');
+
+    // حذف فایل از سرور (اختیاری)
+    this.filesService.deleteFile(image.url);
+
+    return this.colorImageRepo.delete(id);
+  }
+
   async findAll(query: QueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const qb = this.productRepo.createQueryBuilder('products');
+
+    qb.leftJoinAndSelect('products.variants', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('products.categories', 'category')
+      .leftJoinAndSelect('products.colorImages', 'colorImages')
+      .leftJoinAndSelect('colorImages.color', 'imageColor');
 
     // search
     applySearch(qb, query.search, [

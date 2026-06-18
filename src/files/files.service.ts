@@ -12,4 +12,13 @@ export class FilesService {
       filename: file.originalname,
     };
   }
+
+  deleteFile(filename: string) {
+    const filePath = path.join(__dirname, '../../uploads', filename);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      return { message: 'File deleted successfully' };
+    }
+    return { message: 'File not found' };
+  }
 }

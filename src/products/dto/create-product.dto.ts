@@ -75,11 +75,6 @@ export class UploadColorImageDto {
   @ApiProperty()
   @IsNumber()
   colorId: number;
-
-  @ApiProperty()
-  @IsOptional()
-  @IsString()
-  altText?: string;
 }
 
 export class AddColorDto {
