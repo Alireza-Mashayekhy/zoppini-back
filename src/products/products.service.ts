@@ -46,7 +46,10 @@ export class ProductsService {
     private readonly filesService: FilesService,
   ) {}
 
-  async create(createProductDto: CreateProductDto): Promise<Product> {
+  async create(
+    createProductDto: CreateProductDto,
+    file: Express.Multer.File,
+  ): Promise<Product> {
     const {
       productCode,
       title,
@@ -57,6 +60,14 @@ export class ProductsService {
       variants,
     } = createProductDto;
 
+    let image: string = '';
+
+    console.log(file, file?.originalname);
+    if (file) {
+      const result = this.filesService.saveFile(file);
+      image = result.filename;
+    }
+
     // ۱. ایجاد محصول اصلی
     const product = this.productRepo.create({
       productCode,
@@ -64,6 +75,7 @@ export class ProductsService {
       slug,
       description,
       careInstructionsHtml,
+      image,
     });
     await this.productRepo.save(product);
 
@@ -197,7 +209,8 @@ export class ProductsService {
       .leftJoinAndSelect('variant.size', 'size')
       .leftJoinAndSelect('products.categories', 'category')
       .leftJoinAndSelect('products.colorImages', 'colorImages')
-      .leftJoinAndSelect('colorImages.color', 'imageColor');
+      .leftJoinAndSelect('colorImages.color', 'imageColor')
+      .leftJoinAndSelect('products.suggestedProducts', 'suggestedProducts');
 
     // search
     applySearch(qb, query.search, [
@@ -241,13 +254,17 @@ export class ProductsService {
     return payload;
   }
 
-  async update(id: number, updateProductDto: UpdateProductDto) {
-    // 1. پیدا کردن محصول همراه با واریانت‌ها و محصولات پیشنهادی
+  async update(
+    id: number,
+    updateProductDto: UpdateProductDto,
+    file?: Express.Multer.File,
+  ): Promise<Product> {
+    // 1. پیدا کردن محصول موجود با روابط لازم
     const product = await this.productRepo.findOne({
       where: { id },
       relations: {
         variants: true,
-        suggestedProducts: true,
+        categories: true,
       },
     });
     if (!product) {
@@ -267,56 +284,99 @@ export class ProductsService {
       }
     }
 
-    // استفاده از تراکنش برای هماهنگی بین Product و Variant‌ها
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
-    return;
-    // try {
-    //   // 3. به‌روزرسانی فیلدهای ساده (جدا کردن فیلدهای روابط)
-    //   const { variants, suggestedProductIds, categoryIds, ...simpleFields } =
-    //     updateProductDto;
-    //   Object.assign(product, simpleFields);
-    //   await queryRunner.manager.save(product);
 
-    //   // 4. به‌روزرسانی واریانت‌ها (با queryRunner)
-    //   if (variants) {
-    //     await this.updateVariants(product.id, variants, queryRunner);
-    //   }
+    try {
+      // 3. به‌روزرسانی فیلدهای اصلی محصول (به جز روابط)
+      const { variants, categoryIds, ...simpleFields } = updateProductDto;
 
-    //   // 5. به‌روزرسانی محصولات پیشنهادی (با queryRunner)
-    //   if (suggestedProductIds !== undefined) {
-    //     await this.updateSuggestedProducts(
-    //       product,
-    //       suggestedProductIds,
-    //       queryRunner,
-    //     );
-    //   }
+      // به‌روزرسانی تصویر در صورت ارسال فایل جدید
+      if (file) {
+        const savedFile = this.filesService.saveFile(file);
+        // حذف فایل قبلی (اختیاری)
+        if (product.image) {
+          this.filesService.deleteFile(product.image);
+        }
+        product.image = savedFile.filename;
+      }
 
-    //   // 6. به‌روزرسانی دسته‌بندی‌ها (با استفاده از سرویس CategoriesService)
-    //   if (categoryIds !== undefined) {
-    //     await this.updateProductCategories(product, categoryIds, queryRunner);
-    //   }
+      // اعمال سایر فیلدهای ساده
+      Object.assign(product, simpleFields);
+      await queryRunner.manager.save(product);
 
-    //   // 7. دریافت محصول نهایی با تمام روابط
-    //   const updatedProduct = await queryRunner.manager.findOne(Product, {
-    //     where: { id: product.id },
-    //     relations: {
-    //       variants: true,
-    //       suggestedProducts: true,
-    //       comments: true,
-    //       categories: true,
-    //     },
-    //   });
+      // 4. به‌روزرسانی واریانت‌ها (حذف و ایجاد مجدد)
+      if (variants) {
+        // حذف واریانت‌های قبلی
+        await queryRunner.manager.delete(Variant, {
+          product: { id: product.id },
+        });
 
-    //   await queryRunner.commitTransaction();
-    //   return updatedProduct;
-    // } catch (error) {
-    //   await queryRunner.rollbackTransaction();
-    //   throw error;
-    // } finally {
-    //   await queryRunner.release();
-    // }
+        // اعتبارسنجی رنگ‌ها و سایزها
+        const colorIds = variants.map(v => v.colorId);
+        const sizeIds = variants.map(v => v.sizeId);
+
+        const existingColors = await this.colorRepo.findBy({
+          id: In(colorIds),
+        });
+        const existingSizes = await this.sizeRepo.findBy({ id: In(sizeIds) });
+
+        if (existingColors.length !== new Set(colorIds).size) {
+          throw new BadRequestException('One or more color IDs are invalid.');
+        }
+        if (existingSizes.length !== new Set(sizeIds).size) {
+          throw new BadRequestException('One or more size IDs are invalid.');
+        }
+
+        // ایجاد واریانت‌های جدید
+        const newVariants = variants.map(v => {
+          const color = existingColors.find(c => c.id === v.colorId);
+          const size = existingSizes.find(s => s.id === v.sizeId);
+          return queryRunner.manager.create(Variant, {
+            product,
+            color,
+            size,
+            price: v.price,
+            stock: v.stock ?? 0,
+          });
+        });
+        await queryRunner.manager.save(newVariants);
+      }
+
+      // 5. به‌روزرسانی دسته‌بندی‌ها
+      if (categoryIds !== undefined) {
+        if (categoryIds.length === 0) {
+          product.categories = [];
+        } else {
+          const categories =
+            await this.categoriesService.findManyByIds(categoryIds);
+          if (categories.length !== categoryIds.length) {
+            throw new BadRequestException('One or more category IDs invalid');
+          }
+          product.categories = categories;
+        }
+        await queryRunner.manager.save(product);
+      }
+
+      // 6. دریافت محصول نهایی با روابط مورد نیاز
+      const updatedProduct = await queryRunner.manager.findOneOrFail(Product, {
+        where: { id: product.id },
+        relations: {
+          variants: { color: true, size: true },
+          categories: true,
+          // colorImages و suggestedProducts عمداً حذف شده‌اند
+        },
+      });
+
+      await queryRunner.commitTransaction();
+      return updatedProduct;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   // متد کمکی برای به‌روزرسانی واریانت‌ها
@@ -393,34 +453,74 @@ export class ProductsService {
     await queryRunner.manager.save(product);
   }
 
-  // متد کمکی برای به‌روزرسانی محصولات پیشنهادی
-  private async updateSuggestedProducts(
-    product: Product,
+  // products.service.ts
+  async updateSuggestedProducts(
+    productId: number,
     suggestedProductIds: number[],
-    queryRunner: any,
-  ) {
-    if (!suggestedProductIds.length) {
-      product.suggestedProducts = [];
-    } else {
-      const suggestedProducts = await queryRunner.manager.findByIds(
-        Product,
-        suggestedProductIds,
-      );
-      if (suggestedProducts.length !== suggestedProductIds.length) {
-        throw new NotFoundException('Some suggested product IDs are invalid');
-      }
-      product.suggestedProducts = suggestedProducts;
+  ): Promise<Product> {
+    // ۱. پیدا کردن محصول اصلی
+    const product = await this.productRepo.findOne({
+      where: { id: productId },
+      relations: {
+        suggestedProducts: true,
+      },
+    });
+    if (!product) {
+      throw new NotFoundException(`Product with ID ${productId} not found`);
     }
-    await queryRunner.manager.save(product);
+
+    // ۲. پیدا کردن محصولات پیشنهادی با شناسه‌های ارسالی
+    let suggestedProducts: Product[] = [];
+    if (suggestedProductIds.length > 0) {
+      suggestedProducts = await this.productRepo.findBy({
+        id: In(suggestedProductIds),
+      });
+      if (suggestedProducts.length !== suggestedProductIds.length) {
+        throw new BadRequestException(
+          'One or more suggested product IDs are invalid',
+        );
+      }
+    }
+
+    // ۳. به‌روزرسانی رابطه many-to-many
+    product.suggestedProducts = suggestedProducts;
+    await this.productRepo.save(product);
+
+    // ۴. بازگرداندن محصول به‌روز شده با روابط
+    return this.productRepo.findOneOrFail({
+      where: { id: productId },
+      relations: {
+        suggestedProducts: true,
+      },
+    });
   }
 
   async remove(id: number) {
     const product = await this.productRepo.findOne({
       where: { id },
+      relations: {
+        colorImages: true,
+      },
     });
 
-    if (!product) throw new NotFoundException();
+    if (!product) {
+      throw new NotFoundException(`Product with ID ${id} not found`);
+    }
 
-    return this.productRepo.delete(id);
+    if (product.image) {
+      this.filesService.deleteFile(product.image);
+    }
+
+    if (product.colorImages && product.colorImages.length > 0) {
+      for (const image of product.colorImages) {
+        if (image.url) {
+          this.filesService.deleteFile(image.url);
+        }
+      }
+    }
+
+    await this.productRepo.delete(id);
+
+    return { message: 'Product deleted successfully' };
   }
 }

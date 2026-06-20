@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsNotEmpty,
@@ -9,6 +9,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+
 class CreateVariantDto {
   @ApiProperty()
   @IsNumber()
@@ -53,18 +54,34 @@ export class CreateProductDto {
   @IsOptional()
   description?: string;
 
-  @ApiProperty({ type: [Number] })
-  @IsArray()
-  @IsNumber({}, { each: true })
-  @IsNotEmpty()
-  categoryIds: number[];
-
   @ApiProperty()
   @IsString()
   @IsOptional()
   careInstructionsHtml?: string;
 
-  @ApiProperty()
+  // تبدیل رشته JSON به آرایه اعداد
+  @ApiProperty({ type: [Number] })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? JSON.parse(value) : value,
+  )
+  @IsArray()
+  @IsNumber({}, { each: true })
+  @IsNotEmpty()
+  categoryIds: number[];
+
+  // تبدیل رشته JSON به آرایه اشیاء CreateVariantDto
+  @ApiProperty({ type: [CreateVariantDto] })
+  @Transform(({ value }) => {
+    if (typeof value === 'string') {
+      return JSON.parse(value).map((item: any) => ({
+        colorId: item.colorId,
+        sizeId: item.sizeId,
+        price: item.price,
+        stock: item.stock || 0,
+      }));
+    }
+    return value;
+  })
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => CreateVariantDto)

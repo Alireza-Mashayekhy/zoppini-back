@@ -8,11 +8,13 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
@@ -25,6 +27,7 @@ import {
   CreateProductDto,
 } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateSuggestedProductsDto } from './dto/update-suggested-products.dto';
 import { ProductsService } from './products.service';
 
 @Controller('products')
@@ -34,8 +37,12 @@ export class ProductsController {
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(Role.Admin)
   @Post()
-  async create(@Body() createProductDto: CreateProductDto) {
-    return this.productsService.create(createProductDto);
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  async create(
+    @Body() createProductDto: CreateProductDto,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.productsService.create(createProductDto, file);
   }
 
   @UseGuards(AuthGuard, RolesGuard)
@@ -106,8 +113,13 @@ export class ProductsController {
   @UseGuards(AuthGuard, RolesGuard)
   @Roles(Role.Admin)
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateProductDto: UpdateProductDto) {
-    return this.productsService.update(+id, updateProductDto);
+  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  update(
+    @Param('id') id: number,
+    @Body() updateProductDto: UpdateProductDto,
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    return this.productsService.update(+id, updateProductDto, file);
   }
 
   @UseGuards(AuthGuard, RolesGuard)
@@ -115,5 +127,16 @@ export class ProductsController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.productsService.remove(+id);
+  }
+
+  @Patch(':id/suggested-products')
+  async updateSuggestedProducts(
+    @Param('id') id: number,
+    @Body() dto: UpdateSuggestedProductsDto,
+  ) {
+    return this.productsService.updateSuggestedProducts(
+      id,
+      dto.suggestedProductIds,
+    );
   }
 }

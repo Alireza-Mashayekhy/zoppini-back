@@ -26,6 +26,11 @@ export class Product {
   @Column({ unique: true })
   slug: string;
 
+  @Column({
+    nullable: true,
+  })
+  image: string;
+
   @Column({ type: 'text', nullable: true })
   description: string;
 
