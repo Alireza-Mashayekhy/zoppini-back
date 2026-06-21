@@ -87,8 +87,19 @@ export class ProductsController {
   }
 
   @Get()
-  findAll(@Query() query: QueryDto) {
-    return this.productsService.findAll(query);
+  findAll(
+    @Query() query: QueryDto,
+    @Query('categoryIds') categoryIds?: string,
+    @Query('colorIds') colorIds?: string,
+    @Query('sizeIds') sizeIds?: string,
+  ) {
+    const filters = {
+      categoryIds: categoryIds ? categoryIds.split(',').map(Number) : undefined,
+      colorIds: colorIds ? colorIds.split(',').map(Number) : undefined,
+      sizeIds: sizeIds ? sizeIds.split(',').map(Number) : undefined,
+    };
+
+    return this.productsService.findAll(query, filters);
   }
 
   @UseGuards(AuthGuard, RolesGuard)

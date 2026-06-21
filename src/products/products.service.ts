@@ -6,12 +6,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { CategoriesService } from 'src/categories/categories.service';
-import {
-  applySearch,
-  applySort,
-  getPagination,
-  QueryDto,
-} from 'src/common/query';
+import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
 import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 
@@ -199,7 +194,14 @@ export class ProductsService {
     return this.colorImageRepo.delete(id);
   }
 
-  async findAll(query: QueryDto) {
+  async findAll(
+    query: QueryDto,
+    filters?: {
+      categoryIds?: number[];
+      colorIds?: number[];
+      sizeIds?: number[];
+    },
+  ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
     const qb = this.productRepo.createQueryBuilder('products');
@@ -212,6 +214,24 @@ export class ProductsService {
       .leftJoinAndSelect('colorImages.color', 'imageColor')
       .leftJoinAndSelect('products.suggestedProducts', 'suggestedProducts');
 
+    if (filters?.categoryIds?.length) {
+      qb.andWhere('category.id IN (:...categoryIds)', {
+        categoryIds: filters.categoryIds,
+      });
+    }
+
+    if (filters?.colorIds?.length) {
+      qb.andWhere('color.id IN (:...colorIds)', {
+        colorIds: filters.colorIds,
+      });
+    }
+
+    if (filters?.sizeIds?.length) {
+      qb.andWhere('size.id IN (:...sizeIds)', {
+        sizeIds: filters.sizeIds,
+      });
+    }
+
     // search
     applySearch(qb, query.search, [
       'products.title',
@@ -220,7 +240,23 @@ export class ProductsService {
     ]);
 
     // sort
-    applySort(qb, query.sort);
+    if (query.sort) {
+      const [field, order] = query.sort.split(':');
+      const direction = (order?.toUpperCase() as any) || 'ASC';
+      switch (field) {
+        case 'title':
+          qb.orderBy('products.title', direction);
+          break;
+        case 'price':
+          qb.orderBy('variant.price', direction);
+          break;
+        case 'createdAt':
+          qb.orderBy('products.createdAt', direction);
+          break;
+        default:
+          qb.orderBy('products.id', direction);
+      }
+    }
 
     // pagination
     const { skip, take } = getPagination(page, limit);

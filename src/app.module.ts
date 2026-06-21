@@ -13,9 +13,9 @@ import { CategoriesModule } from './categories/categories.module';
 import { TypeOrmConfigService } from './common/config/typeorm.config';
 import { FilesModule } from './files/files.module';
 import { OtpModule } from './otp/otp.module';
+import { ProductsModule } from './products/products.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
-import { ProductsModule } from './products/products.module';
 
 @Module({
   imports: [
@@ -33,7 +33,7 @@ import { ProductsModule } from './products/products.module';
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
-        limit: 10,
+        limit: 100,
       },
     ]),
     FilesModule,

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -59,5 +60,14 @@ export class CategoriesController {
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.categoriesService.remove(+id);
+  }
+
+  @Get('slug/:slug')
+  async findBySlug(@Param('slug') slug: string) {
+    const category = await this.categoriesService.findOneBySlug(slug);
+    if (!category) {
+      throw new NotFoundException('دسته‌بندی یافت نشد');
+    }
+    return category;
   }
 }

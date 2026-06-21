@@ -97,6 +97,10 @@ export class CategoriesService {
     return payload;
   }
 
+  async findOneBySlug(slug: string) {
+    return this.categoriesRepository.findOne({ where: { slug } });
+  }
+
   async findManyByIds(ids: number[]): Promise<Category[]> {
     if (!ids.length) return [];
     return this.categoriesRepository.findBy({ id: In(ids) });
