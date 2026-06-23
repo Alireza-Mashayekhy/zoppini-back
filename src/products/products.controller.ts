@@ -102,23 +102,19 @@ export class ProductsController {
     return this.productsService.findAll(query, filters);
   }
 
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles(Role.Admin)
   @Get('/color')
   allColors() {
     return this.productsService.allColors();
   }
 
-  @UseGuards(AuthGuard, RolesGuard)
-  @Roles(Role.Admin)
   @Get('/size')
   allSizes() {
     return this.productsService.allSizes();
   }
 
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.productsService.findOne(+id);
+  @Get(':slug')
+  findOne(@Param('slug') slug: string) {
+    return this.productsService.findOne(slug);
   }
 
   @UseGuards(AuthGuard, RolesGuard)

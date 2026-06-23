@@ -283,11 +283,42 @@ export class ProductsService {
     return this.sizeRepo.find();
   }
 
-  async findOne(id: number) {
-    const payload = await this.productRepo.findOne({
-      where: { id },
-    });
-    return payload;
+  async findOne(slug: string) {
+    const product = await this.productRepo
+      .createQueryBuilder('product')
+      .leftJoinAndSelect('product.variants', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('product.categories', 'categories')
+      .leftJoinAndSelect('product.colorImages', 'colorImages')
+      .leftJoinAndSelect('colorImages.color', 'imageColor')
+      .leftJoinAndSelect('product.suggestedProducts', 'suggestedProducts')
+      .where('product.slug = :slug', { slug })
+      .getOne();
+
+    if (!product) {
+      throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
+    }
+
+    // 2. دریافت محصولات مرتبط (هم‌دسته)
+    let relatedProducts: Product[] = [];
+    if (product.categories && product.categories.length > 0) {
+      const categoryIds = product.categories.map(cat => cat.id);
+      relatedProducts = await this.productRepo
+        .createQueryBuilder('p')
+        .leftJoin('p.categories', 'cat')
+        .where('cat.id IN (:...categoryIds)', { categoryIds })
+        .andWhere('p.id != :productId', { productId: product.id })
+        .orderBy('p.createdAt', 'DESC')
+        .limit(10)
+        .getMany();
+    }
+
+    // 3. بازگرداندن محصول و محصولات مرتبط
+    return {
+      product,
+      relatedProducts,
+    };
   }
 
   async update(
