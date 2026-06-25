@@ -9,6 +9,7 @@ import { Color } from './entities/product-color.entity';
 import { ProductColorImage } from './entities/product-color-image.entity';
 import { Size } from './entities/product-size.entity';
 import { Variant } from './entities/variant.entity';
+import { AdmiProductsController } from './products.admin.controller';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
 
@@ -25,7 +26,7 @@ import { ProductsService } from './products.service';
     CategoriesModule,
     FilesModule,
   ],
-  controllers: [ProductsController],
+  controllers: [ProductsController, AdmiProductsController],
   providers: [ProductsService],
 })
 export class ProductsModule {}
