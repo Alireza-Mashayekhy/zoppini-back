@@ -23,14 +23,16 @@ export class CartsController {
 
   @Get()
   async getCart(@Request() req) {
-    const userId = req.user.id;
-    return this.cartsService.getCart(userId);
+    const userId = req.user?.id;
+    const guestId = req.cookies?.guestId || req.headers['x-guest-id'];
+    return this.cartsService.getCart(userId, guestId);
   }
 
   @Post('add')
   async addToCart(@Request() req, @Body() dto: AddToCartDto) {
-    const userId = req.user.id;
-    return this.cartsService.addToCart(userId, dto);
+    const userId = req.user?.id;
+    const guestId = req.cookies?.guestId || req.headers['x-guest-id'];
+    return this.cartsService.addToCart(userId, guestId, dto);
   }
 
   @Patch('item/:itemId')
@@ -39,20 +41,23 @@ export class CartsController {
     @Param('itemId') itemId: number,
     @Body() dto: UpdateCartItemDto,
   ) {
-    const userId = req.user.id;
-    return this.cartsService.updateItemQuantity(userId, itemId, dto);
+    const userId = req.user?.id;
+    const guestId = req.cookies?.guestId || req.headers['x-guest-id'];
+    return this.cartsService.updateItemQuantity(userId, guestId, itemId, dto);
   }
 
   @Delete('item/:itemId')
   async removeItem(@Request() req, @Param('itemId') itemId: number) {
-    const userId = req.user.id;
-    return this.cartsService.removeItem(userId, itemId);
+    const userId = req.user?.id;
+    const guestId = req.cookies?.guestId || req.headers['x-guest-id'];
+    return this.cartsService.removeItem(userId, guestId, itemId);
   }
 
   @Delete('clear')
   async clearCart(@Request() req) {
-    const userId = req.user.id;
-    await this.cartsService.clearCart(userId);
+    const userId = req.user?.id;
+    const guestId = req.cookies?.guestId || req.headers['x-guest-id'];
+    await this.cartsService.clearCart(userId, guestId);
     return { message: 'سبد خرید خالی شد' };
   }
 }

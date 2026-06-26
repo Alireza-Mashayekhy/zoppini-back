@@ -1,5 +1,6 @@
 import { User } from 'src/users/entities/user.entity';
 import {
+  Column,
   CreateDateColumn,
   Entity,
   JoinColumn,
@@ -19,6 +20,9 @@ export class Cart {
   @OneToOne(() => User, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })
   user: User;
+
+  @Column({ nullable: true, unique: true })
+  guestId: string;
 
   @OneToMany(() => CartItem, item => item.cart, { cascade: true })
   items: CartItem[];

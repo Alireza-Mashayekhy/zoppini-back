@@ -1,3 +1,4 @@
+// src/carts/carts.service.ts
 import {
   BadRequestException,
   Injectable,
@@ -23,56 +24,105 @@ export class CartsService {
     private variantRepo: Repository<Variant>,
   ) {}
 
-  // یافتن یا ایجاد سبد خرید برای کاربر
-  async getOrCreateCart(userId: number): Promise<Cart> {
-    let cart = await this.cartRepo.findOne({
-      where: { user: { id: userId } },
-      relations: {
-        items: {
-          variant: {
-            color: true,
-            size: true,
-            product: true,
+  // یافتن یا ایجاد سبد خرید (با userId یا guestId)
+  async getOrCreateCart(userId?: number, guestId?: string): Promise<Cart> {
+    // لاگین شده
+    if (userId) {
+      let cart = await this.cartRepo.findOne({
+        where: { user: { id: userId } },
+        relations: {
+          items: {
+            variant: {
+              color: true,
+              size: true,
+              product: true,
+            },
           },
         },
-      },
-    });
-
-    if (!cart) {
-      cart = this.cartRepo.create({ user: { id: userId } });
-      await this.cartRepo.save(cart);
+      });
+      if (!cart) {
+        cart = this.cartRepo.create({ user: { id: userId } });
+        await this.cartRepo.save(cart);
+      }
+      return cart;
     }
 
-    return cart;
+    // مهمان
+    if (guestId) {
+      let cart = await this.cartRepo.findOne({
+        where: { guestId },
+        relations: {
+          items: {
+            variant: {
+              color: true,
+              size: true,
+              product: true,
+            },
+          },
+        },
+      });
+      if (!cart) {
+        cart = this.cartRepo.create({ guestId });
+        await this.cartRepo.save(cart);
+      }
+      return cart;
+    }
+
+    // اگر هیچکدام نباشد
+    throw new BadRequestException('Either userId or guestId is required');
   }
 
-  // دریافت سبد خرید با روابط کامل
-  async getCart(userId: number): Promise<Cart> {
-    const cart = await this.cartRepo.findOne({
-      where: { user: { id: userId } },
-      relations: {
-        items: {
-          variant: {
-            color: true,
-            size: true,
-            product: true,
+  // دریافت سبد خرید
+  async getCart(userId?: number, guestId?: string): Promise<Cart> {
+    if (userId) {
+      const cart = await this.cartRepo.findOne({
+        where: { user: { id: userId } },
+        relations: {
+          items: {
+            variant: {
+              color: true,
+              size: true,
+              product: true,
+            },
           },
         },
-      },
-    });
-
-    if (!cart) {
-      throw new NotFoundException('سبد خرید یافت نشد');
+      });
+      if (!cart) {
+        throw new NotFoundException('سبد خرید یافت نشد');
+      }
+      return cart;
     }
 
-    return cart;
+    if (guestId) {
+      const cart = await this.cartRepo.findOne({
+        where: { guestId },
+        relations: {
+          items: {
+            variant: {
+              color: true,
+              size: true,
+              product: true,
+            },
+          },
+        },
+      });
+      if (!cart) {
+        throw new NotFoundException('سبد خرید یافت نشد');
+      }
+      return cart;
+    }
+
+    throw new BadRequestException('Either userId or guestId is required');
   }
 
   // اضافه کردن آیتم به سبد خرید
-  async addToCart(userId: number, dto: AddToCartDto): Promise<Cart> {
-    const cart = await this.getOrCreateCart(userId);
+  async addToCart(
+    userId: number | undefined,
+    guestId: string | undefined,
+    dto: AddToCartDto,
+  ): Promise<Cart> {
+    const cart = await this.getOrCreateCart(userId, guestId);
 
-    // بررسی موجودی واریانت
     const variant = await this.variantRepo.findOne({
       where: { id: dto.variantId },
       relations: {
@@ -90,20 +140,17 @@ export class CartsService {
       throw new BadRequestException('موجودی کافی نیست');
     }
 
-    // بررسی آیا آیتم قبلاً در سبد خرید وجود دارد
     const existingItem = cart.items.find(
       item => item.variant.id === dto.variantId,
     );
 
     if (existingItem) {
-      // افزایش تعداد
       if (variant.stock < existingItem.quantity + dto.quantity) {
         throw new BadRequestException('موجودی کافی نیست');
       }
       existingItem.quantity += dto.quantity;
       await this.cartItemRepo.save(existingItem);
     } else {
-      // ایجاد آیتم جدید
       const newItem = this.cartItemRepo.create({
         cart,
         variant,
@@ -112,16 +159,17 @@ export class CartsService {
       await this.cartItemRepo.save(newItem);
     }
 
-    return this.getCart(userId);
+    return this.getCart(userId, guestId);
   }
 
   // به‌روزرسانی تعداد آیتم
   async updateItemQuantity(
-    userId: number,
+    userId: number | undefined,
+    guestId: string | undefined,
     itemId: number,
     dto: UpdateCartItemDto,
   ): Promise<Cart> {
-    const cart = await this.getOrCreateCart(userId);
+    const cart = await this.getOrCreateCart(userId, guestId);
     const item = cart.items.find(i => i.id === itemId);
 
     if (!item) {
@@ -129,32 +177,31 @@ export class CartsService {
     }
 
     if (dto.quantity <= 0) {
-      // حذف آیتم
       await this.cartItemRepo.remove(item);
     } else {
-      // بررسی موجودی
       const variant = await this.variantRepo.findOne({
         where: { id: item.variant.id },
       });
-
       if (!variant) {
         throw new NotFoundException('واریانت یافت نشد');
       }
-
       if (variant.stock < dto.quantity) {
         throw new BadRequestException('موجودی کافی نیست');
       }
-
       item.quantity = dto.quantity;
       await this.cartItemRepo.save(item);
     }
 
-    return this.getCart(userId);
+    return this.getCart(userId, guestId);
   }
 
   // حذف آیتم از سبد خرید
-  async removeItem(userId: number, itemId: number): Promise<Cart> {
-    const cart = await this.getOrCreateCart(userId);
+  async removeItem(
+    userId: number | undefined,
+    guestId: string | undefined,
+    itemId: number,
+  ): Promise<Cart> {
+    const cart = await this.getOrCreateCart(userId, guestId);
     const item = cart.items.find(i => i.id === itemId);
 
     if (!item) {
@@ -162,12 +209,51 @@ export class CartsService {
     }
 
     await this.cartItemRepo.remove(item);
-    return this.getCart(userId);
+    return this.getCart(userId, guestId);
   }
 
   // خالی کردن سبد خرید
-  async clearCart(userId: number): Promise<void> {
-    const cart = await this.getCart(userId);
+  async clearCart(userId: number, guestId?: string): Promise<void> {
+    const cart = await this.getCart(userId, guestId);
     await this.cartItemRepo.delete({ cart: { id: cart.id } });
+  }
+
+  // ادغام سبد مهمان با حساب کاربری
+  async mergeGuestCart(userId: number, guestId: string): Promise<void> {
+    const guestCart = await this.cartRepo.findOne({
+      where: { guestId },
+      relations: {
+        items: {
+          variant: true,
+        },
+      },
+    });
+    if (!guestCart || guestCart.items.length === 0) return;
+
+    let userCart = await this.cartRepo.findOne({
+      where: { user: { id: userId } },
+      relations: {
+        items: true,
+      },
+    });
+    if (!userCart) {
+      userCart = this.cartRepo.create({ user: { id: userId } });
+      await this.cartRepo.save(userCart);
+    }
+
+    for (const guestItem of guestCart.items) {
+      const existing = userCart.items.find(
+        item => item.variant.id === guestItem.variant.id,
+      );
+      if (existing) {
+        existing.quantity += guestItem.quantity;
+      } else {
+        guestItem.cart = userCart;
+        userCart.items.push(guestItem);
+      }
+    }
+
+    await this.cartRepo.save(userCart);
+    await this.cartRepo.remove(guestCart);
   }
 }
