@@ -37,25 +37,31 @@ export class AuthController {
   @Post('/login')
   login(
     @Body() sendVerifyOtp: SendVerifyOtp,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.login(sendVerifyOtp, response);
+    const guestId = request.cookies?.guestId || request.headers['x-guest-id'];
+    return this.authService.login(sendVerifyOtp, guestId, response);
   }
 
   @Post('/sign-up')
   signUp(
     @Body() createUserDto: CreateUserDto,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.signUp(createUserDto, response);
+    const guestId = request.cookies?.guestId || request.headers['x-guest-id'];
+    return this.authService.signUp(createUserDto, guestId, response);
   }
 
   @Post('login-password')
   loginWithPassword(
     @Body() dto: LoginWithPasswordDto,
+    @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    return this.authService.loginWithPassword(dto, response);
+    const guestId = request.cookies?.guestId || request.headers['x-guest-id'];
+    return this.authService.loginWithPassword(dto, guestId, response);
   }
 
   @Post('/refresh')

@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
+import { CartsService } from 'src/cart/cart.service';
 import { OtpService } from 'src/otp/otp.service';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { User } from 'src/users/entities/user.entity';
@@ -18,6 +19,7 @@ export class AuthService {
     private jwtService: JwtService,
     private readonly usersService: UsersService,
     private readonly otpService: OtpService,
+    private readonly cartsService: CartsService,
   ) {}
 
   async sendCode(sendOtpDto: SendOtpDto) {
@@ -36,7 +38,11 @@ export class AuthService {
     };
   }
 
-  async login(sendVerifyOtp: SendVerifyOtp, response: Response) {
+  async login(
+    sendVerifyOtp: SendVerifyOtp,
+    guestId: string | undefined,
+    response: Response,
+  ) {
     await this.otpService.verifyOtp(sendVerifyOtp.phone, sendVerifyOtp.code);
 
     const user = await this.usersService.findWithPhone(sendVerifyOtp.phone);
@@ -45,12 +51,16 @@ export class AuthService {
       throw new BadRequestException('user doesnt exist');
     }
 
-    const accessToken = await this.generateAccessToken(user);
+    // ادغام سبد خرید مهمان
+    if (guestId) {
+      await this.cartsService.mergeGuestCart(user.id, guestId);
+      response.clearCookie('guestId', { path: '/' });
+    }
 
+    const accessToken = await this.generateAccessToken(user);
     const refreshToken = await this.generateRefreshToken(user);
 
     response.cookie('access_token', accessToken, this.accessCookieOptions);
-
     response.cookie('refresh_token', refreshToken, this.refreshCookieOptions);
 
     return {
@@ -58,7 +68,11 @@ export class AuthService {
     };
   }
 
-  async signUp(createUserDto: CreateUserDto, response: Response) {
+  async signUp(
+    createUserDto: CreateUserDto,
+    guestId: string | undefined,
+    response: Response,
+  ) {
     await this.otpService.verifyOtp(createUserDto.phone, createUserDto.code);
 
     const user = await this.usersService.findWithPhone(createUserDto.phone);
@@ -74,12 +88,16 @@ export class AuthService {
       password: hashedPassword,
     });
 
-    const accessToken = await this.generateAccessToken(newUser);
+    // ادغام سبد خرید مهمان
+    if (guestId) {
+      await this.cartsService.mergeGuestCart(newUser.id, guestId);
+      response.clearCookie('guestId', { path: '/' });
+    }
 
+    const accessToken = await this.generateAccessToken(newUser);
     const refreshToken = await this.generateRefreshToken(newUser);
 
     response.cookie('access_token', accessToken, this.accessCookieOptions);
-
     response.cookie('refresh_token', refreshToken, this.refreshCookieOptions);
 
     return {
@@ -87,7 +105,11 @@ export class AuthService {
     };
   }
 
-  async loginWithPassword(dto: LoginWithPasswordDto, response: Response) {
+  async loginWithPassword(
+    dto: LoginWithPasswordDto,
+    guestId: string | undefined,
+    response: Response,
+  ) {
     const user = await this.usersService.findWithPhone(dto.phone);
 
     if (!user) {
@@ -100,12 +122,16 @@ export class AuthService {
       throw new BadRequestException('phone or password is incorrect');
     }
 
-    const accessToken = await this.generateAccessToken(user);
+    // ادغام سبد خرید مهمان
+    if (guestId) {
+      await this.cartsService.mergeGuestCart(user.id, guestId);
+      response.clearCookie('guestId', { path: '/' });
+    }
 
+    const accessToken = await this.generateAccessToken(user);
     const refreshToken = await this.generateRefreshToken(user);
 
     response.cookie('access_token', accessToken, this.accessCookieOptions);
-
     response.cookie('refresh_token', refreshToken, this.refreshCookieOptions);
 
     return {
