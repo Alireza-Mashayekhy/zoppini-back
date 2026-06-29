@@ -75,7 +75,7 @@ export class CartsService {
   // دریافت سبد خرید
   async getCart(userId?: number, guestId?: string): Promise<Cart> {
     if (userId) {
-      const cart = await this.cartRepo.findOne({
+      let cart = await this.cartRepo.findOne({
         where: { user: { id: userId } },
         relations: {
           items: {
@@ -88,13 +88,15 @@ export class CartsService {
         },
       });
       if (!cart) {
-        throw new NotFoundException('سبد خرید یافت نشد');
+        // ایجاد سبد خرید جدید برای کاربر
+        cart = this.cartRepo.create({ user: { id: userId } });
+        await this.cartRepo.save(cart);
       }
       return cart;
     }
 
     if (guestId) {
-      const cart = await this.cartRepo.findOne({
+      let cart = await this.cartRepo.findOne({
         where: { guestId },
         relations: {
           items: {
@@ -107,7 +109,8 @@ export class CartsService {
         },
       });
       if (!cart) {
-        throw new NotFoundException('سبد خرید یافت نشد');
+        cart = this.cartRepo.create({ guestId });
+        await this.cartRepo.save(cart);
       }
       return cart;
     }
