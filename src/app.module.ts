@@ -18,6 +18,7 @@ import { ProductsModule } from './products/products.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
 import { ClubModule } from './club/club.module';
+import { WishlistModule } from './wishlist/wishlist.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { ClubModule } from './club/club.module';
     CartsModule,
     OrdersModule,
     ClubModule,
+    WishlistModule,
   ],
   controllers: [AppController],
   providers: [
