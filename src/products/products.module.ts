@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CategoriesModule } from 'src/categories/categories.module';
 import { FilesModule } from 'src/files/files.module';
@@ -23,7 +23,7 @@ import { ProductsService } from './products.service';
       Size,
       ProductColorImage,
     ]),
-    CategoriesModule,
+    forwardRef(() => CategoriesModule),
     FilesModule,
   ],
   controllers: [ProductsController, AdmiProductsController],

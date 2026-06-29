@@ -56,14 +56,11 @@ export class ProductsService {
     } = createProductDto;
 
     let image: string = '';
-
-    console.log(file, file?.originalname);
     if (file) {
       const result = this.filesService.saveFile(file);
       image = result.filename;
     }
 
-    // ۱. ایجاد محصول اصلی
     const product = this.productRepo.create({
       productCode,
       title,
@@ -84,49 +81,50 @@ export class ProductsService {
       await this.productRepo.save(product);
     }
 
-    // ۲. واکشی رنگ‌ها و سایزها برای اعتبارسنجی
-    const colorIds = variants.map(v => v.colorId);
-    const sizeIds = variants.map(v => v.sizeId);
+    if (variants && variants.length) {
+      const colorIds = variants.map(v => v.colorId);
+      const sizeIds = variants.map(v => v.sizeId);
 
-    const existingColors = await this.colorRepo.findBy({ id: In(colorIds) });
-    const existingSizes = await this.sizeRepo.findBy({ id: In(sizeIds) });
+      const existingColors = await this.colorRepo.findBy({ id: In(colorIds) });
+      const existingSizes = await this.sizeRepo.findBy({ id: In(sizeIds) });
 
-    if (existingColors.length !== new Set(colorIds).size) {
-      throw new BadRequestException('One or more color IDs are invalid.');
-    }
-    if (existingSizes.length !== new Set(sizeIds).size) {
-      throw new BadRequestException('One or more size IDs are invalid.');
-    }
-
-    // ۳. ایجاد واریانت‌ها
-    const variantEntities = variants.map(v => {
-      const color = existingColors.find(c => c.id === v.colorId);
-      const size = existingSizes.find(s => s.id === v.sizeId);
-
-      if (!color || !size) {
-        throw new BadRequestException(
-          `رنگ یا سایز معتبر برای واریانت یافت نشد: colorId=${v.colorId}, sizeId=${v.sizeId}`,
-        );
+      if (existingColors.length !== new Set(colorIds).size) {
+        throw new BadRequestException('One or more color IDs are invalid.');
+      }
+      if (existingSizes.length !== new Set(sizeIds).size) {
+        throw new BadRequestException('One or more size IDs are invalid.');
       }
 
-      return this.variantRepo.create({
-        product,
-        color,
-        size,
-        price: v.price,
-        stock: v.stock ?? 0,
-      });
-    });
+      // ساخت واریانت‌ها با مقداردهی همزمان ستون‌ها و روابط
+      const variantEntities = variants.map(v => {
+        const color = existingColors.find(c => c.id === v.colorId);
+        const size = existingSizes.find(s => s.id === v.sizeId);
+        if (!color || !size) {
+          throw new BadRequestException(
+            `رنگ یا سایز معتبر برای واریانت یافت نشد: colorId=${v.colorId}, sizeId=${v.sizeId}`,
+          );
+        }
 
-    await this.variantRepo.save(variantEntities);
+        return {
+          productId: product.id,
+          colorId: v.colorId,
+          sizeId: v.sizeId,
+          product,
+          color,
+          size,
+          price: v.price,
+          stock: v.stock ?? 0,
+          sku: v.sku || undefined,
+        };
+      });
+
+      await this.variantRepo.save(variantEntities);
+    }
 
     return this.productRepo.findOneOrFail({
       where: { id: product.id },
       relations: {
-        variants: {
-          color: true,
-          size: true,
-        },
+        variants: { color: true, size: true },
         categories: true,
       },
     });
@@ -328,24 +326,20 @@ export class ProductsService {
     };
   }
 
+  // ==================== متد update ====================
   async update(
     id: number,
     updateProductDto: UpdateProductDto,
     file?: Express.Multer.File,
   ): Promise<Product> {
-    // 1. پیدا کردن محصول موجود با روابط لازم
     const product = await this.productRepo.findOne({
       where: { id },
-      relations: {
-        variants: true,
-        categories: true,
-      },
+      relations: { variants: true, categories: true },
     });
     if (!product) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
 
-    // 2. بررسی یکتایی productCode در صورت تغییر
     if (
       updateProductDto.productCode &&
       updateProductDto.productCode !== product.productCode
@@ -363,69 +357,28 @@ export class ProductsService {
     await queryRunner.startTransaction();
 
     try {
-      // 3. به‌روزرسانی فیلدهای اصلی محصول (به جز روابط)
       const { variants, categoryIds, ...simpleFields } = updateProductDto;
 
-      // به‌روزرسانی تصویر در صورت ارسال فایل جدید
       if (file) {
         const savedFile = this.filesService.saveFile(file);
-        // حذف فایل قبلی (اختیاری)
-        if (product.image) {
-          this.filesService.deleteFile(product.image);
-        }
+        if (product.image) this.filesService.deleteFile(product.image);
         product.image = savedFile.filename;
       }
 
-      // اعمال سایر فیلدهای ساده
       Object.assign(product, simpleFields);
       await queryRunner.manager.save(product);
 
-      // 4. به‌روزرسانی واریانت‌ها (حذف و ایجاد مجدد)
-      if (variants) {
-        // حذف واریانت‌های قبلی
-        await queryRunner.manager.delete(Variant, {
-          product: { id: product.id },
+      // به‌روزرسانی واریانت‌ها (اگر وجود داشته باشند)
+      if (variants !== undefined) {
+        // حذف فیلد id از واریانت‌ها (در صورت وجود)
+        const cleanVariants = variants.map(v => {
+          const { id: _id, ...rest } = v as any;
+          return rest;
         });
-
-        // اعتبارسنجی رنگ‌ها و سایزها
-        const colorIds = variants.map(v => v.colorId);
-        const sizeIds = variants.map(v => v.sizeId);
-
-        const existingColors = await this.colorRepo.findBy({
-          id: In(colorIds),
-        });
-        const existingSizes = await this.sizeRepo.findBy({ id: In(sizeIds) });
-
-        if (existingColors.length !== new Set(colorIds).size) {
-          throw new BadRequestException('One or more color IDs are invalid.');
-        }
-        if (existingSizes.length !== new Set(sizeIds).size) {
-          throw new BadRequestException('One or more size IDs are invalid.');
-        }
-
-        // ایجاد واریانت‌های جدید
-        const newVariants = variants.map(v => {
-          const color = existingColors.find(c => c.id === v.colorId);
-          const size = existingSizes.find(s => s.id === v.sizeId);
-
-          if (!color || !size) {
-            throw new BadRequestException(
-              `رنگ یا سایز معتبر برای واریانت یافت نشد: colorId=${v.colorId}, sizeId=${v.sizeId}`,
-            );
-          }
-
-          return queryRunner.manager.create(Variant, {
-            product,
-            color,
-            size,
-            price: v.price,
-            stock: v.stock ?? 0,
-          });
-        });
-        await queryRunner.manager.save(newVariants);
+        await this.updateVariants(product.id, cleanVariants, queryRunner);
       }
 
-      // 5. به‌روزرسانی دسته‌بندی‌ها
+      // به‌روزرسانی دسته‌بندی‌ها
       if (categoryIds !== undefined) {
         if (categoryIds.length === 0) {
           product.categories = [];
@@ -440,13 +393,11 @@ export class ProductsService {
         await queryRunner.manager.save(product);
       }
 
-      // 6. دریافت محصول نهایی با روابط مورد نیاز
       const updatedProduct = await queryRunner.manager.findOneOrFail(Product, {
         where: { id: product.id },
         relations: {
           variants: { color: true, size: true },
           categories: true,
-          // colorImages و suggestedProducts عمداً حذف شده‌اند
         },
       });
 
@@ -460,57 +411,71 @@ export class ProductsService {
     }
   }
 
-  // متد کمکی برای به‌روزرسانی واریانت‌ها
+  // ==================== متد کمکی updateVariants ====================
   private async updateVariants(
     productId: number,
     newVariantsDto: {
-      color: string;
-      size: string;
+      colorId: number;
+      sizeId: number;
       price: number;
       stock?: number;
+      sku?: string | null;
     }[],
-    queryRunner: any,
+    queryRunner: QueryRunner,
   ) {
-    // دریافت واریانت‌های موجود
+    // دریافت واریانت‌های موجود برای این محصول
     const existingVariants = await queryRunner.manager.find(Variant, {
-      where: { product: { id: productId } },
+      where: { productId },
     });
 
-    // نگاشت برای جستجوی سریع (شناسایی با ترکیب color+size)
+    // نگاشت برای جستجوی سریع بر اساس کلید ترکیبی (colorId|sizeId)
     const existingMap = new Map<string, Variant>();
     for (const variant of existingVariants) {
-      existingMap.set(`${variant.color}|${variant.size}`, variant);
+      const key = `${variant.colorId}|${variant.sizeId}`;
+      existingMap.set(key, variant);
     }
 
     const toRemove: Variant[] = [];
     const toSave: Variant[] = [];
 
     for (const dto of newVariantsDto) {
-      const key = `${dto.color}|${dto.size}`;
+      const key = `${dto.colorId}|${dto.sizeId}`;
       const existing = existingMap.get(key);
+
       if (existing) {
-        // به‌روزرسانی واریانت موجود (فقط قیمت و موجودی)
+        // به‌روزرسانی واریانت موجود
         existing.price = dto.price;
         existing.stock = dto.stock ?? 0;
+        // اگر sku در DTO ارسال شده باشد، مقدار جدید را می‌گیرد (می‌تواند null باشد)
+        if (dto.sku !== undefined) {
+          existing.sku = dto.sku;
+        }
         toSave.push(existing);
         existingMap.delete(key);
       } else {
         // ایجاد واریانت جدید
-        const newVariant = queryRunner.manager.create(Variant, {
-          ...dto,
-          product: { id: productId },
-        });
+        const newVariant = new Variant();
+        newVariant.productId = productId;
+        newVariant.colorId = dto.colorId;
+        newVariant.sizeId = dto.sizeId;
+        newVariant.price = dto.price;
+        newVariant.stock = dto.stock ?? 0;
+        newVariant.sku = dto.sku ?? null;
         toSave.push(newVariant);
       }
     }
 
-    // واریانت‌هایی که باقی مانده‌اند باید حذف شوند
+    // واریانت‌هایی که در درخواست جدید نیستند، حذف می‌شوند
     for (const remaining of existingMap.values()) {
       toRemove.push(remaining);
     }
 
-    if (toRemove.length) await queryRunner.manager.remove(toRemove);
-    if (toSave.length) await queryRunner.manager.save(toSave);
+    if (toRemove.length) {
+      await queryRunner.manager.remove(toRemove);
+    }
+    if (toSave.length) {
+      await queryRunner.manager.save(toSave);
+    }
   }
 
   private async updateProductCategories(

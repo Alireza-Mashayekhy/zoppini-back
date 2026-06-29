@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { CartsModule } from 'src/cart/cart.module';
+import { ClubModule } from 'src/club/club.module';
 import { jwtConstants } from 'src/common/constants/constants';
 import { OtpModule } from 'src/otp/otp.module';
 import { UsersModule } from 'src/users/users.module';
@@ -13,6 +14,7 @@ import { AuthService } from './auth.service';
     UsersModule,
     OtpModule,
     CartsModule,
+    ClubModule,
     JwtModule.register({
       global: true,
       secret: jwtConstants.secret,

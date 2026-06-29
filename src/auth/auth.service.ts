@@ -3,6 +3,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { CartsService } from 'src/cart/cart.service';
+import { ClubService } from 'src/club/club.service';
 import { OtpService } from 'src/otp/otp.service';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { User } from 'src/users/entities/user.entity';
@@ -20,6 +21,7 @@ export class AuthService {
     private readonly usersService: UsersService,
     private readonly otpService: OtpService,
     private readonly cartsService: CartsService,
+    private readonly clubService: ClubService,
   ) {}
 
   async sendCode(sendOtpDto: SendOtpDto) {
@@ -93,6 +95,24 @@ export class AuthService {
       ...createUserDto,
       password: hashedPassword,
     });
+
+    const [firstName, ...lastNameParts] = createUserDto.fullName
+      .trim()
+      .split(' ');
+    const lastName = lastNameParts.join(' ') || '';
+
+    // ثبت غیرهمزمان (اجرا در پس‌زمینه) برای عدم تأخیر در پاسخ
+    this.clubService
+      .registerCustomer({
+        firstName: firstName,
+        lastName: lastName,
+        customerCode: createUserDto.phone,
+        email: createUserDto.email,
+        birthDate: createUserDto.birthDate || undefined,
+      })
+      .catch(err => {
+        return err;
+      });
 
     // ادغام سبد خرید مهمان
     if (guestId) {

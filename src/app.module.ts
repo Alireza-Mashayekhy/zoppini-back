@@ -1,4 +1,3 @@
-import { CacheModule } from '@nestjs/cache-manager';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -18,6 +17,7 @@ import { OtpModule } from './otp/otp.module';
 import { ProductsModule } from './products/products.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
+import { ClubModule } from './club/club.module';
 
 @Module({
   imports: [
@@ -28,10 +28,10 @@ import { UsersModule } from './users/users.module';
     TypeOrmModule.forRootAsync({
       useClass: TypeOrmConfigService,
     }),
-    CacheModule.register({
-      ttl: 5000,
-      max: 10,
-    }),
+    // CacheModule.register({
+    //   ttl: 5000,
+    //   max: 10,
+    // }),
     ThrottlerModule.forRoot([
       {
         ttl: 60000,
@@ -47,6 +47,7 @@ import { UsersModule } from './users/users.module';
     ProductsModule,
     CartsModule,
     OrdersModule,
+    ClubModule,
   ],
   controllers: [AppController],
   providers: [

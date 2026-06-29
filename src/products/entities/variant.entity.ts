@@ -12,7 +12,7 @@ import { Color } from './product-color.entity';
 import { Size } from './product-size.entity';
 
 @Entity()
-@Unique(['product', 'color', 'size'])
+@Unique(['productId', 'colorId', 'sizeId'])
 export class Variant {
   @PrimaryGeneratedColumn()
   id: number;
@@ -23,27 +23,29 @@ export class Variant {
   @Column({ default: 0 })
   stock: number;
 
-  @Column({ nullable: true, unique: true })
-  sku: string;
+  @Column({ type: 'varchar', length: 255, nullable: true, unique: true })
+  sku: string | null;
 
-  // ارتباط با محصول
+  @Column({ name: 'product_id' })
+  productId: number;
+
+  @Column({ name: 'color_id' })
+  colorId: number;
+
+  @Column({ name: 'size_id' })
+  sizeId: number;
+
   @ManyToOne(() => Product, product => product.variants, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'product_id' })
   product: Product;
 
-  @ManyToOne(() => Color, color => color.variants, {
-    onDelete: 'CASCADE',
-    nullable: false, // ← NOT NULL
-  })
+  @ManyToOne(() => Color, color => color.variants, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'color_id' })
   color: Color;
 
-  @ManyToOne(() => Size, size => size.variants, {
-    onDelete: 'CASCADE',
-    nullable: false, // ← NOT NULL
-  })
+  @ManyToOne(() => Size, size => size.variants, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'size_id' })
   size: Size;
 }
