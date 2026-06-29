@@ -102,6 +102,13 @@ export class ProductsService {
     const variantEntities = variants.map(v => {
       const color = existingColors.find(c => c.id === v.colorId);
       const size = existingSizes.find(s => s.id === v.sizeId);
+
+      if (!color || !size) {
+        throw new BadRequestException(
+          `رنگ یا سایز معتبر برای واریانت یافت نشد: colorId=${v.colorId}, sizeId=${v.sizeId}`,
+        );
+      }
+
       return this.variantRepo.create({
         product,
         color,
@@ -400,6 +407,13 @@ export class ProductsService {
         const newVariants = variants.map(v => {
           const color = existingColors.find(c => c.id === v.colorId);
           const size = existingSizes.find(s => s.id === v.sizeId);
+
+          if (!color || !size) {
+            throw new BadRequestException(
+              `رنگ یا سایز معتبر برای واریانت یافت نشد: colorId=${v.colorId}, sizeId=${v.sizeId}`,
+            );
+          }
+
           return queryRunner.manager.create(Variant, {
             product,
             color,

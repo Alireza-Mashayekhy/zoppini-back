@@ -36,13 +36,17 @@
     "class-validator": "^0.15.1",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^17.4.2",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "eslint-plugin-unused-imports": "^4.4.1",
+    "moment-jalaali": "^0.10.4",
     "mysql2": "^3.22.3",
+    "persian-date": "^1.1.0",
     "redis": "^5.12.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "typeorm": "^1.0.0"
+    "typeorm": "^1.0.0",
+    "uuid": "^14.0.1"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

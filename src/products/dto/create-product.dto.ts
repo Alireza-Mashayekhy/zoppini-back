@@ -31,6 +31,11 @@ class CreateVariantDto {
   @Min(0)
   @IsOptional()
   stock?: number;
+
+  @ApiProperty()
+  @IsString()
+  @IsOptional()
+  sku?: string;
 }
 
 export class CreateProductDto {
@@ -61,9 +66,9 @@ export class CreateProductDto {
 
   // تبدیل رشته JSON به آرایه اعداد
   @ApiProperty({ type: [Number] })
-  @Transform(({ value }) =>
-    typeof value === 'string' ? JSON.parse(value) : value,
-  )
+  @Transform(({ value }) => {
+    return typeof value === 'string' ? JSON.parse(value) : value;
+  })
   @IsArray()
   @IsNumber({}, { each: true })
   @IsNotEmpty()
@@ -72,15 +77,7 @@ export class CreateProductDto {
   // تبدیل رشته JSON به آرایه اشیاء CreateVariantDto
   @ApiProperty({ type: [CreateVariantDto] })
   @Transform(({ value }) => {
-    if (typeof value === 'string') {
-      return JSON.parse(value).map((item: any) => ({
-        colorId: item.colorId,
-        sizeId: item.sizeId,
-        price: item.price,
-        stock: item.stock || 0,
-      }));
-    }
-    return value;
+    return typeof value === 'string' ? JSON.parse(value) : value;
   })
   @IsArray()
   @ValidateNested({ each: true })

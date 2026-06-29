@@ -9,19 +9,29 @@ export class OtpService {
   async sendOtp(phone: string) {
     const redis = this.redisService.getClient();
 
+    // بررسی وجود OTP قبلی
+    const existingOtp = await redis.get(`otp:${phone}`);
+    if (existingOtp) {
+      // محاسبه زمان باقی‌مانده برای نمایش به کاربر
+      throw new BadRequestException('کد قبلا برای شما ارسال شده است');
+    }
+
+    // تولید کد جدید
     const code = Math.floor(10000 + Math.random() * 90000).toString();
 
+    // ذخیره در Redis با انقضای ۱۲۰ ثانیه
     await redis.set(`otp:${phone}`, code, {
       EX: 120,
     });
 
     console.log(code);
 
-    // sms provider
+    // ارسال پیامک (در صورت وجود)
+    // await this.smsService.send(phone, `کد تایید شما: ${code}`);
 
     return {
-      message: 'otp sent',
-      otp: code,
+      message: 'کد تایید ارسال شد',
+      otp: code, // فقط برای تست (در production حذف شود)
     };
   }
 
@@ -31,11 +41,11 @@ export class OtpService {
     const storedCode = await redis.get(`otp:${phone}`);
 
     if (!storedCode) {
-      throw new BadRequestException('otp expired');
+      throw new BadRequestException('کد منقضی شده است');
     }
 
     if (storedCode !== code) {
-      throw new BadRequestException('invalid otp');
+      throw new BadRequestException('کد وار شده اشتباه است');
     }
 
     await redis.del(`otp:${phone}`);

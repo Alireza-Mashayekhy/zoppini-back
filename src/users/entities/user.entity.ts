@@ -19,11 +19,8 @@ export class User {
   @Column()
   password: string;
 
-  @Column({
-    type: 'date',
-    nullable: true,
-  })
-  birthDate: Date;
+  @Column({ type: 'date', nullable: true })
+  birthDate: Date | null;
 
   @Column({
     type: 'simple-array',

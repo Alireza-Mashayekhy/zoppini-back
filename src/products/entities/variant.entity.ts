@@ -23,6 +23,9 @@ export class Variant {
   @Column({ default: 0 })
   stock: number;
 
+  @Column({ nullable: true, unique: true })
+  sku: string;
+
   // ارتباط با محصول
   @ManyToOne(() => Product, product => product.variants, {
     onDelete: 'CASCADE',
@@ -32,12 +35,14 @@ export class Variant {
 
   @ManyToOne(() => Color, color => color.variants, {
     onDelete: 'CASCADE',
+    nullable: false, // ← NOT NULL
   })
   @JoinColumn({ name: 'color_id' })
   color: Color;
 
   @ManyToOne(() => Size, size => size.variants, {
     onDelete: 'CASCADE',
+    nullable: false, // ← NOT NULL
   })
   @JoinColumn({ name: 'size_id' })
   size: Size;

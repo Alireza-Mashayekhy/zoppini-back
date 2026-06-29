@@ -34,6 +34,12 @@ export class UsersService {
     });
   }
 
+  async findWithEmail(email: string) {
+    return await this.usersRepository.findOne({
+      where: { email },
+    });
+  }
+
   async findAll(query: QueryDto) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;

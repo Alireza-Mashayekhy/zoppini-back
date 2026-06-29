@@ -48,7 +48,7 @@ export class AuthService {
     const user = await this.usersService.findWithPhone(sendVerifyOtp.phone);
 
     if (!user) {
-      throw new BadRequestException('user doesnt exist');
+      throw new BadRequestException('کاربری با این شماره تلفن یافت نشد');
     }
 
     // ادغام سبد خرید مهمان
@@ -76,9 +76,15 @@ export class AuthService {
     await this.otpService.verifyOtp(createUserDto.phone, createUserDto.code);
 
     const user = await this.usersService.findWithPhone(createUserDto.phone);
+    const userEmail = await this.usersService.findWithEmail(
+      createUserDto.email,
+    );
 
+    if (userEmail) {
+      throw new BadRequestException('کاربر با این ایمیل وجود دارد');
+    }
     if (user) {
-      throw new BadRequestException('user exist');
+      throw new BadRequestException('کاربر با این شماره تلفن وجود دارد');
     }
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
@@ -113,13 +119,13 @@ export class AuthService {
     const user = await this.usersService.findWithPhone(dto.phone);
 
     if (!user) {
-      throw new BadRequestException('phone or password is incorrect');
+      throw new BadRequestException('شماره تلفن یا رمز عبور اشتباه است');
     }
 
     const isMatch = await bcrypt.compare(dto.password, user.password);
 
     if (!isMatch) {
-      throw new BadRequestException('phone or password is incorrect');
+      throw new BadRequestException('شماره تلفن یا رمز عبور اشتباه است');
     }
 
     // ادغام سبد خرید مهمان
@@ -181,7 +187,7 @@ export class AuthService {
     const user = await this.usersService.findWithPhone(dto.phone);
 
     if (!user) {
-      throw new BadRequestException('user not found');
+      throw new BadRequestException('کاربری با این شماره تلفن یافت نشد.');
     }
 
     return this.otpService.sendOtp(dto.phone);
@@ -193,7 +199,7 @@ export class AuthService {
     const user = await this.usersService.findWithPhone(dto.phone);
 
     if (!user) {
-      throw new BadRequestException('user not found');
+      throw new BadRequestException('کاربری با این شماره تلفن یافت نشد.');
     }
 
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
