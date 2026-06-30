@@ -28,13 +28,17 @@ import {
 } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSuggestedProductsDto } from './dto/update-suggested-products.dto';
+import { FeaturedService } from './featured.service';
 import { ProductsService } from './products.service';
 
 @UseGuards(AuthGuard, RolesGuard)
 @Roles(Role.Admin)
 @Controller('admin/products')
 export class AdmiProductsController {
-  constructor(private readonly productsService: ProductsService) {}
+  constructor(
+    private readonly productsService: ProductsService,
+    private readonly featuredService: FeaturedService,
+  ) {}
 
   @Post()
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
