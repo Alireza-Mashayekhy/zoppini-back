@@ -1,11 +1,22 @@
-import { IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
+
+export enum ShippingMethod {
+  POST = 'post',
+  COURIER = 'courier',
+  TIBAX = 'tibax',
+}
 
 export class CreateOrderDto {
-  @IsString()
-  shippingAddress: string;
-
-  @IsString()
-  phone: string;
+  @IsNumber()
+  @IsNotEmpty()
+  addressId: number;
 
   @IsOptional()
   @IsString()
@@ -14,10 +25,8 @@ export class CreateOrderDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  shippingCost?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
   discount?: number;
+
+  @IsEnum(ShippingMethod)
+  shippingMethod: ShippingMethod;
 }

@@ -8,13 +8,16 @@ import {
   Patch,
   Post,
   Request,
+  UseGuards,
 } from '@nestjs/common';
+import { OptionalAuthGuard } from 'src/common/guards/optional-auth.guard';
 
 import { CartsService } from './cart.service';
 import { AddToCartDto } from './dto/add-to-cart.dto';
 import { UpdateCartItemDto } from './dto/update-cart-item.dto';
 
 @Controller('cart')
+@UseGuards(OptionalAuthGuard)
 export class CartsController {
   constructor(private readonly cartsService: CartsService) {}
 

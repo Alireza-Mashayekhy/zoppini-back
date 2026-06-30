@@ -11,6 +11,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+import { ShippingMethod } from '../dto/create-order.dto';
 import { OrderItem } from './order-item';
 
 export enum OrderStatus {
@@ -52,6 +53,9 @@ export class Order {
   status: OrderStatus;
 
   @Column({ nullable: true })
+  addressId: number;
+
+  @Column({ nullable: true })
   shippingAddress: string;
 
   @Column({ nullable: true })
@@ -59,6 +63,9 @@ export class Order {
 
   @Column({ nullable: true })
   note: string;
+
+  @Column({ type: 'enum', enum: ShippingMethod, nullable: true })
+  shippingMethod: ShippingMethod;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

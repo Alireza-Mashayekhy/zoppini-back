@@ -5,19 +5,21 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
 
+import { AddressesModule } from './address/address.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { CartsModule } from './cart/cart.module';
 import { CategoriesModule } from './categories/categories.module';
+import { ClubModule } from './club/club.module';
 import { TypeOrmConfigService } from './common/config/typeorm.config';
 import { FilesModule } from './files/files.module';
+import { LocationsModule } from './locations/locations.module';
 import { OrdersModule } from './order/order.module';
 import { OtpModule } from './otp/otp.module';
 import { ProductsModule } from './products/products.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
-import { ClubModule } from './club/club.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 
 @Module({
@@ -50,6 +52,8 @@ import { WishlistModule } from './wishlist/wishlist.module';
     OrdersModule,
     ClubModule,
     WishlistModule,
+    AddressesModule,
+    LocationsModule,
   ],
   controllers: [AppController],
   providers: [
