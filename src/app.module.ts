@@ -9,6 +9,7 @@ import { AddressesModule } from './address/address.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { BlogModule } from './blog/blog.module';
 import { CartsModule } from './cart/cart.module';
 import { CategoriesModule } from './categories/categories.module';
 import { ClubModule } from './club/club.module';
@@ -47,6 +48,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     RedisModule,
     OtpModule,
     CategoriesModule,
+    BlogModule,
     ProductsModule,
     CartsModule,
     OrdersModule,
