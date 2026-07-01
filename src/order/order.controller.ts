@@ -6,10 +6,12 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Request,
   UseGuards,
 } from '@nestjs/common';
 import { AuthGuard } from 'src/common/guards/auth.guard';
+import { QueryDto } from 'src/common/query';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './order.service';
@@ -20,9 +22,9 @@ export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
 
   @Get()
-  async findAll(@Request() req) {
+  async findAll(@Request() req, @Query() query: QueryDto) {
     const userId = req.user.id;
-    return this.ordersService.findAll(userId);
+    return this.ordersService.findAll(userId, query);
   }
 
   @Get(':id')

@@ -7,7 +7,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
-import { DataSource, Repository } from 'typeorm';
+import { getPagination, QueryDto } from 'src/common/query';
+import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
@@ -98,7 +99,7 @@ export class OrdersService {
       let shippingCost = 0;
       switch (dto.shippingMethod) {
         case ShippingMethod.POST:
-          shippingCost = isTehran ? 170000 : 250000;
+          shippingCost = 170000;
           break;
         case ShippingMethod.COURIER:
           if (!isTehran)
@@ -181,21 +182,64 @@ export class OrdersService {
       });
   }
 
-  // دریافت لیست سفارشات کاربر
-  async findAll(userId: number): Promise<Order[]> {
-    return this.orderRepo.find({
+  async findAll(
+    userId: number,
+    query: QueryDto,
+  ): Promise<{ data: Order[]; pagination: any; stats: any }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    // ۱. دریافت داده‌های صفحه‌بندی‌شده
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('items.variant', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('variant.product', 'product')
+      .where('order.user = :userId', { userId })
+      .orderBy('order.createdAt', 'DESC');
+
+    const { skip, take } = getPagination(page, limit);
+    qb.skip(skip).take(take);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    // ۲. محاسبه آمار
+    const totalCount = await this.orderRepo.count({
       where: { user: { id: userId } },
-      relations: {
-        items: {
-          variant: {
-            color: true,
-            size: true,
-            product: true,
-          },
-        },
-      },
-      order: { createdAt: 'DESC' },
     });
+
+    const cancelledCount = await this.orderRepo.count({
+      where: { user: { id: userId }, status: OrderStatus.CANCELLED },
+    });
+
+    const deliveredCount = await this.orderRepo.count({
+      where: { user: { id: userId }, status: OrderStatus.DELIVERED },
+    });
+
+    const inProgressCount = await this.orderRepo.count({
+      where: {
+        user: { id: userId },
+        status: Not(In([OrderStatus.CANCELLED, OrderStatus.DELIVERED])),
+      },
+    });
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+      stats: {
+        total: totalCount,
+        cancelled: cancelledCount,
+        delivered: deliveredCount,
+        inProgress: inProgressCount,
+      },
+    };
   }
 
   // لغو سفارش (فقط اگر pending باشد)
