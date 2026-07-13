@@ -22,6 +22,8 @@ import { ProductsModule } from './products/products.module';
 import { RedisModule } from './redis/redis.module';
 import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
+import { SmsModule } from './sms/sms.module';
+import { B2bRequestModule } from './b2b-request/b2b-request.module';
 
 @Module({
   imports: [
@@ -56,6 +58,8 @@ import { WishlistModule } from './wishlist/wishlist.module';
     WishlistModule,
     AddressesModule,
     LocationsModule,
+    SmsModule,
+    B2bRequestModule,
   ],
   controllers: [AppController],
   providers: [

@@ -5,6 +5,7 @@ import { Response } from 'express';
 import { CartsService } from 'src/cart/cart.service';
 import { ClubService } from 'src/club/club.service';
 import { OtpService } from 'src/otp/otp.service';
+import { SmsService } from 'src/sms/sms.service';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { User } from 'src/users/entities/user.entity';
 import { UsersService } from 'src/users/users.service';
@@ -22,21 +23,18 @@ export class AuthService {
     private readonly otpService: OtpService,
     private readonly cartsService: CartsService,
     private readonly clubService: ClubService,
+    private readonly smsService: SmsService,
   ) {}
 
   async sendCode(sendOtpDto: SendOtpDto) {
-    const user = await this.usersService.findWithPhone(sendOtpDto.phone);
-
     const response = await this.otpService.sendOtp(sendOtpDto.phone);
 
-    const { message, ...payload } = response;
+    await this.smsService.sendOtp(sendOtpDto.phone, response.otp);
+
+    const { message } = response;
 
     return {
       message,
-      data: {
-        ...payload,
-        newUser: !user,
-      },
     };
   }
 

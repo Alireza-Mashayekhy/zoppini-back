@@ -4,6 +4,7 @@ import { CartsModule } from 'src/cart/cart.module';
 import { ClubModule } from 'src/club/club.module';
 import { jwtConstants } from 'src/common/constants/constants';
 import { OtpModule } from 'src/otp/otp.module';
+import { SmsModule } from 'src/sms/sms.module';
 import { UsersModule } from 'src/users/users.module';
 
 import { AuthController } from './auth.controller';
@@ -15,6 +16,7 @@ import { AuthService } from './auth.service';
     OtpModule,
     CartsModule,
     ClubModule,
+    SmsModule,
     JwtModule.register({
       global: true,
       secret: jwtConstants.secret,

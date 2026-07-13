@@ -8,6 +8,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { getPagination, QueryDto } from 'src/common/query';
+import { SmsService } from 'src/sms/sms.service';
+import { User } from 'src/users/entities/user.entity';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
@@ -24,6 +26,7 @@ export class OrdersService {
     @InjectRepository(Cart)
     private cartRepo: Repository<Cart>,
     private dataSource: DataSource,
+    private readonly smsService: SmsService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -57,7 +60,13 @@ export class OrdersService {
         },
       });
 
-      console.log(cart, userId);
+      const user = await queryRunner.manager.findOne(User, {
+        where: { id: userId },
+      });
+      if (!user) {
+        throw new NotFoundException('کاربر یافت نشد');
+      }
+
       if (!cart) {
         throw new NotFoundException('سبد خرید یافت نشد');
       }
@@ -150,6 +159,20 @@ export class OrdersService {
 
       // ۷. خالی کردن سبد
       await queryRunner.manager.delete('cart_item', { cart: { id: cart.id } });
+
+      await this.smsService.sendOrderConfirmationToCustomer(
+        user.phone,
+        order.orderNumber,
+        user.fullName,
+      );
+
+      // ارسال پیامک به ادمین
+      await this.smsService.sendOrderNotificationToAdmin(
+        order.orderNumber,
+        user.fullName,
+        user.phone,
+        order.finalPrice,
+      );
 
       await queryRunner.commitTransaction();
       return this.findOne(order.id, userId);
