@@ -241,6 +241,7 @@ export class AuthService {
     secure: false,
     sameSite: 'lax' as const,
     maxAge: 15 * 60 * 1000,
+    path: '/',
   };
 
   private readonly refreshCookieOptions = {
@@ -249,6 +250,7 @@ export class AuthService {
     secure: false,
     sameSite: 'lax' as const,
     maxAge: 30 * 24 * 60 * 60 * 1000,
+    path: '/',
   };
 
   private async generateAccessToken(user: User) {
