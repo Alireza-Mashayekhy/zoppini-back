@@ -24,6 +24,7 @@ import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { SmsModule } from './sms/sms.module';
 import { B2bRequestModule } from './b2b-request/b2b-request.module';
+import { SitemapModule } from './sitemap/sitemap.module';
 
 @Module({
   imports: [
@@ -60,6 +61,7 @@ import { B2bRequestModule } from './b2b-request/b2b-request.module';
     LocationsModule,
     SmsModule,
     B2bRequestModule,
+    SitemapModule,
   ],
   controllers: [AppController],
   providers: [
