@@ -360,18 +360,25 @@ export class ProductsService {
   }
 
   async findOne(slug: string) {
-    const product = await this.productRepo
-      .createQueryBuilder('product')
-      .leftJoinAndSelect('product.variants', 'variant')
-      .leftJoinAndSelect('variant.color', 'color')
-      .leftJoinAndSelect('variant.size', 'size')
-      .leftJoinAndSelect('product.categories', 'categories')
-      .leftJoinAndSelect('product.colorImages', 'colorImages')
-      .leftJoinAndSelect('colorImages.color', 'imageColor')
-      .leftJoinAndSelect('product.suggestedProducts', 'suggestedProducts')
-      .leftJoinAndSelect('product.sameColorProducts', 'sameColorProducts')
-      .where('product.slug = :slug', { slug })
-      .getOne();
+    const product = await this.productRepo.findOne({
+      where: { slug },
+      relations: {
+        variants: {
+          color: true,
+          size: true,
+        },
+        categories: true,
+        colorImages: {
+          color: true,
+        },
+        suggestedProducts: true,
+        sameColorProducts: {
+          colorImages: {
+            color: true,
+          },
+        },
+      },
+    });
 
     if (!product) {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
@@ -385,10 +392,9 @@ export class ProductsService {
         `❌ خطا در همگام‌سازی محصول ${product.id}`,
         error.message,
       );
-      // ادامه کار بدون متوقف کردن درخواست
     }
 
-    // 2. دریافت محصولات مرتبط (هم‌دسته)
+    // دریافت محصولات مرتبط (هم‌دسته)
     let relatedProducts: Product[] = [];
     if (product.categories && product.categories.length > 0) {
       const categoryIds = product.categories.map(cat => cat.id);
@@ -402,7 +408,6 @@ export class ProductsService {
         .getMany();
     }
 
-    // 3. بازگرداندن محصول و محصولات مرتبط
     return {
       product,
       relatedProducts,
