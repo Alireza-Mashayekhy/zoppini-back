@@ -360,7 +360,7 @@ export class ProductsService {
   }
 
   async findOne(slug: string) {
-    const product = await this.productRepo.findOne({
+    let product = await this.productRepo.findOne({
       where: { slug },
       relations: {
         variants: {
@@ -379,6 +379,29 @@ export class ProductsService {
         },
       },
     });
+
+    if (!product) {
+      const encodedSlug = encodeURIComponent(slug);
+      product = await this.productRepo.findOne({
+        where: { slug: encodedSlug },
+        relations: {
+          variants: {
+            color: true,
+            size: true,
+          },
+          categories: true,
+          colorImages: {
+            color: true,
+          },
+          suggestedProducts: true,
+          sameColorProducts: {
+            colorImages: {
+              color: true,
+            },
+          },
+        },
+      });
+    }
 
     if (!product) {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
