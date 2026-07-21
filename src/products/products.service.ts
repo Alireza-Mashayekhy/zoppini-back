@@ -225,6 +225,7 @@ export class ProductsService {
       .leftJoinAndSelect('products.categories', 'category')
       .leftJoinAndSelect('products.colorImages', 'colorImages')
       .leftJoinAndSelect('colorImages.color', 'imageColor')
+      .leftJoinAndSelect('products.sameColorProducts', 'sameColorProducts')
       .leftJoinAndSelect('products.suggestedProducts', 'suggestedProducts');
 
     if (filters?.categoryIds?.length) {
@@ -368,6 +369,7 @@ export class ProductsService {
       .leftJoinAndSelect('product.colorImages', 'colorImages')
       .leftJoinAndSelect('colorImages.color', 'imageColor')
       .leftJoinAndSelect('product.suggestedProducts', 'suggestedProducts')
+      .leftJoinAndSelect('product.sameColorProducts', 'sameColorProducts')
       .where('product.slug = :slug', { slug })
       .getOne();
 
@@ -619,6 +621,39 @@ export class ProductsService {
       relations: {
         suggestedProducts: true,
       },
+    });
+  }
+
+  async updateSameColorProducts(
+    productId: number,
+    sameColorProductIds: number[],
+  ): Promise<Product> {
+    const product = await this.productRepo.findOne({
+      where: { id: productId },
+      relations: { sameColorProducts: true },
+    });
+    if (!product) {
+      throw new NotFoundException(`Product with ID ${productId} not found`);
+    }
+
+    let sameColorProducts: Product[] = [];
+    if (sameColorProductIds.length > 0) {
+      sameColorProducts = await this.productRepo.findBy({
+        id: In(sameColorProductIds),
+      });
+      if (sameColorProducts.length !== sameColorProductIds.length) {
+        throw new BadRequestException(
+          'One or more same-color product IDs are invalid',
+        );
+      }
+    }
+
+    product.sameColorProducts = sameColorProducts;
+    await this.productRepo.save(product);
+
+    return this.productRepo.findOneOrFail({
+      where: { id: productId },
+      relations: { sameColorProducts: true },
     });
   }
 

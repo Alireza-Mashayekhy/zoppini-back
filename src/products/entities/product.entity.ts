@@ -71,6 +71,22 @@ export class Product {
   })
   categories: Category[];
 
+  @ManyToMany(() => Product, product => product.sameColorOf, {
+    cascade: true,
+  })
+  @JoinTable({
+    name: 'product_same_color',
+    joinColumn: { name: 'product_id', referencedColumnName: 'id' },
+    inverseJoinColumn: {
+      name: 'same_color_product_id',
+      referencedColumnName: 'id',
+    },
+  })
+  sameColorProducts: Product[];
+
+  @ManyToMany(() => Product, product => product.sameColorProducts)
+  sameColorOf: Product[];
+
   @ManyToMany(() => Product, product => product.suggestedProducts)
   suggestedBy: Product[];
 

@@ -27,6 +27,7 @@ import {
   CreateProductDto,
 } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateSameColorProductsDto } from './dto/update-same-color-products.dto';
 import { UpdateSuggestedProductsDto } from './dto/update-suggested-products.dto';
 import { FeaturedService } from './featured.service';
 import { ProductsService } from './products.service';
@@ -121,6 +122,14 @@ export class AdmiProductsController {
     @UploadedFile() file?: Express.Multer.File,
   ) {
     return this.productsService.update(+id, updateProductDto, file);
+  }
+
+  @Patch(':id/same-color-products')
+  async updateSameColorProducts(
+    @Param('id') id: number,
+    @Body() dto: UpdateSameColorProductsDto,
+  ) {
+    return this.productsService.updateSameColorProducts(id, dto.productIds);
   }
 
   @Delete(':id')
