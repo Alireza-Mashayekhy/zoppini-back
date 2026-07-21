@@ -1,13 +1,17 @@
 // src/orders/orders.service.ts
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { getPagination, QueryDto } from 'src/common/query';
+import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
 import { User } from 'src/users/entities/user.entity';
 import { DataSource, In, Not, Repository } from 'typeorm';
@@ -18,6 +22,8 @@ import { OrderItem } from './entities/order-item';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectRepository(Order)
     private orderRepo: Repository<Order>,
@@ -27,6 +33,8 @@ export class OrdersService {
     private cartRepo: Repository<Cart>,
     private dataSource: DataSource,
     private readonly smsService: SmsService,
+    @Inject(forwardRef(() => RahkaranService)) // ⬅️ این خط
+    private readonly rahkaranService: RahkaranService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -148,6 +156,20 @@ export class OrdersService {
       });
       await queryRunner.manager.save(order);
 
+      this.rahkaranService
+        .syncOrderToRahkaran(order.id)
+        .then(rahkaranOrderId => {
+          this.logger.log(
+            `✅ سفارش ${order.id} در راهکاران با شناسه ${rahkaranOrderId} ثبت شد.`,
+          );
+        })
+        .catch(err => {
+          this.logger.error(
+            `❌ خطا در ثبت سفارش ${order.id} در راهکاران`,
+            err.message,
+          );
+        });
+
       // ۶. کاهش موجودی
       for (const cartItem of cart.items) {
         await queryRunner.manager.update(
@@ -185,24 +207,28 @@ export class OrdersService {
   }
 
   // دریافت یک سفارش
-  async findOne(id: number, userId: number): Promise<Order> {
-    return this.orderRepo
-      .findOneOrFail({
-        where: { id, user: { id: userId } },
-        relations: {
-          items: {
-            variant: {
-              color: true,
-              size: true,
-              product: true,
-            },
+  async findOne(id: number, userId?: number): Promise<Order> {
+    const where: any = { id };
+    if (userId) {
+      where.user = { id: userId };
+    }
+    const order = await this.orderRepo.findOne({
+      where,
+      relations: {
+        user: true,
+        items: {
+          variant: {
+            color: true,
+            size: true,
+            product: true,
           },
-          user: true,
         },
-      })
-      .catch(() => {
-        throw new NotFoundException('سفارش یافت نشد');
-      });
+      },
+    });
+    if (!order) {
+      throw new NotFoundException('سفارش یافت نشد');
+    }
+    return order;
   }
 
   async findAll(

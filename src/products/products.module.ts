@@ -2,6 +2,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CategoriesModule } from 'src/categories/categories.module';
 import { FilesModule } from 'src/files/files.module';
+import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
 
 import { Comment } from './entities/comment.entity';
 import { FeaturedProduct } from './entities/featured-product.entity';
@@ -35,6 +36,7 @@ import { StyleService } from './style.service';
     ]),
     forwardRef(() => CategoriesModule),
     FilesModule,
+    forwardRef(() => RahkaranModule),
   ],
   controllers: [
     ProductsController,
@@ -45,5 +47,6 @@ import { StyleService } from './style.service';
     AdminStyleController,
   ],
   providers: [ProductsService, FeaturedService, StyleService],
+  exports: [ProductsService],
 })
 export class ProductsModule {}

@@ -30,6 +30,12 @@ export class User {
   @Column({ default: true })
   isActive: boolean;
 
+  @Column({ nullable: true })
+  nationalCode: string;
+
+  @Column({ nullable: true })
+  rahkaranId: number;
+
   @Column({
     type: 'timestamp',
     default: () => 'CURRENT_TIMESTAMP',

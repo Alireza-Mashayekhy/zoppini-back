@@ -43,7 +43,7 @@ export class AdminUsersController {
 
   @Patch(':id')
   update(@Param('id') id: number, @Body() dto: UpdateUserDto, @Req() req) {
-    return this.usersService.update(id, dto, req.user);
+    return this.usersService.updateUser(id, dto, req.user);
   }
 
   @Delete(':id')

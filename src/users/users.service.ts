@@ -75,7 +75,7 @@ export class UsersService {
     return payload;
   }
 
-  async update(id: number, updateUserDto: UpdateUserDto, user: any) {
+  async updateUser(id: number, updateUserDto: UpdateUserDto, user: any) {
     if (user.id !== id && !user.roles.includes('admin')) {
       throw new ForbiddenException('access denied');
     }
@@ -89,6 +89,15 @@ export class UsersService {
     Object.assign(userEntity, updateUserDto);
 
     return this.usersRepository.save(userEntity);
+  }
+
+  async update(id: number, data: Partial<User>): Promise<User> {
+    const user = await this.usersRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException(`User with id ${id} not found`);
+    }
+    Object.assign(user, data);
+    return this.usersRepository.save(user);
   }
 
   async remove(id: number) {

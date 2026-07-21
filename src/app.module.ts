@@ -25,6 +25,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
 import { SmsModule } from './sms/sms.module';
 import { B2bRequestModule } from './b2b-request/b2b-request.module';
 import { SitemapModule } from './sitemap/sitemap.module';
+import { RahkaranModule } from './rahkaran/rahkaran.module';
 
 @Module({
   imports: [
@@ -62,6 +63,7 @@ import { SitemapModule } from './sitemap/sitemap.module';
     SmsModule,
     B2bRequestModule,
     SitemapModule,
+    RahkaranModule,
   ],
   controllers: [AppController],
   providers: [

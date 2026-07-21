@@ -1,13 +1,17 @@
 import {
   BadRequestException,
   ConflictException,
+  forwardRef,
+  Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { CategoriesService } from 'src/categories/categories.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
+import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 
 import {
@@ -24,6 +28,8 @@ import { Variant } from './entities/variant.entity';
 
 @Injectable()
 export class ProductsService {
+  private readonly logger = new Logger(ProductsService.name);
+
   constructor(
     @InjectRepository(Product)
     private productRepo: Repository<Product>,
@@ -39,11 +45,13 @@ export class ProductsService {
     private dataSource: DataSource,
     private readonly categoriesService: CategoriesService,
     private readonly filesService: FilesService,
+    @Inject(forwardRef(() => RahkaranService))
+    private readonly rahkaranService: RahkaranService,
   ) {}
 
   async create(
     createProductDto: CreateProductDto,
-    file: Express.Multer.File,
+    file?: Express.Multer.File,
   ): Promise<Product> {
     const {
       productCode,
@@ -280,6 +288,68 @@ export class ProductsService {
     };
   }
 
+  async findByCode(code: string): Promise<Product | null> {
+    return this.productRepo.findOne({ where: { productCode: code } });
+  }
+
+  async findById(id: number): Promise<Product> {
+    const product = await this.productRepo.findOne({ where: { id } });
+    if (!product) {
+      throw new NotFoundException(`محصول با شناسه ${id} یافت نشد`);
+    }
+    return product;
+  }
+
+  async getVariantsByProductId(productId: number): Promise<Variant[]> {
+    return this.variantRepo.find({
+      where: { productId },
+      relations: {
+        color: true,
+        size: true,
+      },
+    });
+  }
+
+  async addVariant(data: {
+    productId: number;
+    colorId: number;
+    sizeId: number;
+    price: number;
+    stock: number;
+    sku?: string;
+  }): Promise<Variant> {
+    const product = await this.findById(data.productId);
+    const color = await this.colorRepo.findOne({ where: { id: data.colorId } });
+    if (!color) throw new NotFoundException('رنگ یافت نشد');
+    const size = await this.sizeRepo.findOne({ where: { id: data.sizeId } });
+    if (!size) throw new NotFoundException('سایز یافت نشد');
+
+    const variant = this.variantRepo.create({
+      product,
+      color,
+      size,
+      price: data.price,
+      stock: data.stock,
+      sku: data.sku,
+    });
+    return this.variantRepo.save(variant);
+  }
+
+  // به‌روزرسانی واریانت
+  async updateVariant(
+    variantId: number,
+    data: { price?: number; stock?: number; sku?: string },
+  ): Promise<Variant> {
+    const variant = await this.variantRepo.findOne({
+      where: { id: variantId },
+    });
+    if (!variant) {
+      throw new NotFoundException(`واریانت با شناسه ${variantId} یافت نشد`);
+    }
+    Object.assign(variant, data);
+    return this.variantRepo.save(variant);
+  }
+
   async allColors() {
     return this.colorRepo.find();
   }
@@ -303,6 +373,17 @@ export class ProductsService {
 
     if (!product) {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
+    }
+
+    try {
+      await this.rahkaranService.updateProductStockAndPrice(product.id);
+      this.logger.log(`✅ محصول ${product.id} با راهکاران همگام‌سازی شد.`);
+    } catch (error) {
+      this.logger.error(
+        `❌ خطا در همگام‌سازی محصول ${product.id}`,
+        error.message,
+      );
+      // ادامه کار بدون متوقف کردن درخواست
     }
 
     // 2. دریافت محصولات مرتبط (هم‌دسته)

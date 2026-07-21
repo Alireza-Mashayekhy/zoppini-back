@@ -1,10 +1,11 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { CartsService } from 'src/cart/cart.service';
 import { ClubService } from 'src/club/club.service';
 import { OtpService } from 'src/otp/otp.service';
+import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
 import { CreateUserDto } from 'src/users/dto/create-user.dto';
 import { User } from 'src/users/entities/user.entity';
@@ -17,6 +18,9 @@ import { SendVerifyOtp } from './dto/verify-otp.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  c;
+
   constructor(
     private jwtService: JwtService,
     private readonly usersService: UsersService,
@@ -24,6 +28,7 @@ export class AuthService {
     private readonly cartsService: CartsService,
     private readonly clubService: ClubService,
     private readonly smsService: SmsService,
+    private readonly rahkaranService: RahkaranService,
   ) {}
 
   async sendCode(sendOtpDto: SendOtpDto) {
@@ -93,6 +98,20 @@ export class AuthService {
       ...createUserDto,
       password: hashedPassword,
     });
+
+    this.rahkaranService
+      .createLoyaltyMemberForUser(newUser.id)
+      .then(loyaltyId => {
+        this.logger.log(
+          `✅ عضو وفادار برای کاربر ${newUser.id} با شناسه ${loyaltyId} ایجاد شد.`,
+        );
+      })
+      .catch(err => {
+        this.logger.error(
+          `❌ خطا در ایجاد عضو وفادار برای کاربر ${newUser.id}`,
+          err.message,
+        );
+      });
 
     const [firstName, ...lastNameParts] = createUserDto.fullName
       .trim()
@@ -222,7 +241,7 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
 
-    await this.usersService.update(
+    await this.usersService.updateUser(
       user.id,
       {
         password: hashedPassword,
