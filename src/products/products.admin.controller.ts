@@ -26,8 +26,10 @@ import {
   AddSizeDto,
   CreateProductDto,
 } from './dto/create-product.dto';
+import { UpdateColorDto } from './dto/update-color.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSameColorProductsDto } from './dto/update-same-color-products.dto';
+import { UpdateSizeDto } from './dto/update-size.dto';
 import { UpdateSuggestedProductsDto } from './dto/update-suggested-products.dto';
 import { FeaturedService } from './featured.service';
 import { ProductsService } from './products.service';
@@ -146,5 +148,25 @@ export class AdmiProductsController {
       id,
       dto.suggestedProductIds,
     );
+  }
+
+  @Patch('/color/:id')
+  updateColor(@Param('id') id: number, @Body() updateColorDto: UpdateColorDto) {
+    return this.productsService.updateColor(id, updateColorDto);
+  }
+
+  @Delete('/color/:id')
+  deleteColor(@Param('id') id: number) {
+    return this.productsService.deleteColor(id);
+  }
+
+  @Patch('/size/:id')
+  updateSize(@Param('id') id: number, @Body() updateSizeDto: UpdateSizeDto) {
+    return this.productsService.updateSize(id, updateSizeDto);
+  }
+
+  @Delete('/size/:id')
+  deleteSize(@Param('id') id: number) {
+    return this.productsService.deleteSize(id);
   }
 }

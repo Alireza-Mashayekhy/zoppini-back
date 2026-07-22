@@ -51,6 +51,12 @@ export class Category {
   @Column()
   isInHome: boolean;
 
+  @Column({ default: 0 })
+  orderInHome: number;
+
+  @Column({ default: 0 })
+  orderInHero: number;
+
   @Column({
     nullable: true,
   })

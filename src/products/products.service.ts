@@ -19,7 +19,9 @@ import {
   AddSizeDto,
   CreateProductDto,
 } from './dto/create-product.dto';
+import { UpdateColorDto } from './dto/update-color.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { UpdateSizeDto } from './dto/update-size.dto';
 import { Product } from './entities/product.entity';
 import { Color } from './entities/product-color.entity';
 import { ProductColorImage } from './entities/product-color-image.entity';
@@ -376,6 +378,10 @@ export class ProductsService {
           colorImages: {
             color: true,
           },
+          variants: {
+            color: true,
+            size: true,
+          },
         },
       },
     });
@@ -397,6 +403,10 @@ export class ProductsService {
           sameColorProducts: {
             colorImages: {
               color: true,
+            },
+            variants: {
+              color: true,
+              size: true,
             },
           },
         },
@@ -712,5 +722,49 @@ export class ProductsService {
     await this.productRepo.delete(id);
 
     return { message: 'Product deleted successfully' };
+  }
+
+  async findAllColors() {
+    return this.colorRepo.find();
+  }
+
+  async updateColor(id: number, updateColorDto: UpdateColorDto) {
+    const color = await this.colorRepo.findOne({ where: { id } });
+    if (!color) {
+      throw new NotFoundException(`رنگ با شناسه ${id} یافت نشد`);
+    }
+    Object.assign(color, updateColorDto);
+    return this.colorRepo.save(color);
+  }
+
+  async deleteColor(id: number) {
+    const color = await this.colorRepo.findOne({ where: { id } });
+    if (!color) {
+      throw new NotFoundException(`رنگ با شناسه ${id} یافت نشد`);
+    }
+    // بررسی کنید که آیا رنگ در واریانت‌ها استفاده شده است (اختیاری)
+    return this.colorRepo.delete(id);
+  }
+
+  // ========== مدیریت سایزها ==========
+  async findAllSizes() {
+    return this.sizeRepo.find();
+  }
+
+  async updateSize(id: number, updateSizeDto: UpdateSizeDto) {
+    const size = await this.sizeRepo.findOne({ where: { id } });
+    if (!size) {
+      throw new NotFoundException(`سایز با شناسه ${id} یافت نشد`);
+    }
+    Object.assign(size, updateSizeDto);
+    return this.sizeRepo.save(size);
+  }
+
+  async deleteSize(id: number) {
+    const size = await this.sizeRepo.findOne({ where: { id } });
+    if (!size) {
+      throw new NotFoundException(`سایز با شناسه ${id} یافت نشد`);
+    }
+    return this.sizeRepo.delete(id);
   }
 }

@@ -7,7 +7,7 @@ import {
   QueryDto,
 } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
-import { In, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -19,25 +19,73 @@ export class CategoriesService {
     @InjectRepository(Category)
     private categoriesRepository: Repository<Category>,
     private readonly filesService: FilesService,
+    private dataSource: DataSource,
   ) {}
+
+  private async shiftOrders(
+    field: 'orderInHome' | 'orderInHero', // کدام فیلد
+    newOrder: number,
+    excludeId?: number, // در هنگام آپدیت، خود رکورد را استثنا کنیم
+  ): Promise<void> {
+    if (newOrder < 1) return; // orderهای کمتر از 1 نادیده گرفته شوند
+
+    const qb = this.categoriesRepository
+      .createQueryBuilder()
+      .update(Category)
+      .set({
+        [field]: () => `${field} + 1`, // افزایش order به‌میزان 1
+      })
+      .where(`${field} >= :newOrder`, { newOrder });
+
+    if (excludeId) {
+      qb.andWhere('id != :excludeId', { excludeId });
+    }
+
+    await qb.execute();
+  }
 
   async create(
     createCategoryDto: CreateCategoryDto,
     file?: Express.Multer.File,
   ) {
-    let image: string = '';
+    const { orderInHome, orderInHero, ...rest } = createCategoryDto;
 
-    if (file) {
-      const result = this.filesService.saveFile(file);
-      image = result.filename;
+    // شروع تراکنش
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // اگر order درخواستی داده شده، ابتدا orderهای موجود را shift کن
+      if (orderInHome && orderInHome > 0) {
+        await this.shiftOrders('orderInHome', orderInHome);
+      }
+      if (orderInHero && orderInHero > 0) {
+        await this.shiftOrders('orderInHero', orderInHero);
+      }
+
+      let image = '';
+      if (file) {
+        const result = this.filesService.saveFile(file);
+        image = result.filename;
+      }
+
+      const category = queryRunner.manager.create(Category, {
+        ...rest,
+        image,
+        orderInHome: orderInHome || 0,
+        orderInHero: orderInHero || 0,
+      });
+
+      const saved = await queryRunner.manager.save(category);
+      await queryRunner.commitTransaction();
+      return saved;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
-
-    const category = this.categoriesRepository.create({
-      ...createCategoryDto,
-      image,
-    });
-
-    return await this.categoriesRepository.save(category);
   }
 
   async findAll(query: QueryDto) {
@@ -45,12 +93,10 @@ export class CategoriesService {
     const limit = query.limit ?? 10;
     const qb = this.categoriesRepository.createQueryBuilder('category');
 
-    // search
+    // جستجو
     applySearch(qb, query.search, ['category.name', 'category.slug']);
 
-    // sort
-    applySort(qb, query.sort);
-
+    // فیلتر isInHeroSection
     if (query['isInHeroSection'] !== undefined) {
       const isHero =
         query['isInHeroSection'] === 'true' ||
@@ -58,16 +104,34 @@ export class CategoriesService {
       qb.andWhere('category.isInHeroSection = :isHero', { isHero });
     }
 
+    // فیلتر isInHome
     if (query['isInHome'] !== undefined) {
       const isHome = query['isInHome'] === 'true' || query['isInHome'] === true;
       qb.andWhere('category.isInHome = :isHome', { isHome });
+    }
+
+    // مرتب‌سازی
+    if (query.sort) {
+      // اگر کاربر sort را مشخص کرده، از آن استفاده کن
+      applySort(qb, query.sort);
+    } else {
+      // در غیر این صورت، بر اساس فیلترهای فعال، order مربوطه را اعمال کن
+      if (query['isInHome'] !== undefined) {
+        qb.orderBy('category.orderInHome', 'ASC');
+      }
+      if (query['isInHeroSection'] !== undefined) {
+        // اگر قبلاً orderBy تنظیم شده، از addOrderBy استفاده کن
+        qb.addOrderBy('category.orderInHero', 'ASC');
+      }
+      // اگر هیچ فیلتری فعال نبود، می‌توانیم یک مرتب‌سازی پیش‌فرض داشته باشیم (اختیاری)
+      // مثلاً بر اساس id: qb.orderBy('category.id', 'ASC');
     }
 
     const isAll = query['all'] === 'true' || query['all'] === true;
 
     let data, total;
     if (isAll) {
-      // بدون پیجینیشن - همه رکوردها
+      // بدون پیجینیشن
       data = await qb.getMany();
       total = data.length;
     } else {
@@ -82,8 +146,8 @@ export class CategoriesService {
     return {
       data,
       pagination: {
-        page: page,
-        limit: limit,
+        page,
+        limit,
         total,
         totalPages: Math.ceil(total / limit),
       },
@@ -111,19 +175,55 @@ export class CategoriesService {
     updateCategoryDto: UpdateCategoryDto,
     file?: Express.Multer.File,
   ) {
-    const categoryEntity = await this.categoriesRepository.findOne({
-      where: { id },
-    });
+    const category = await this.categoriesRepository.findOne({ where: { id } });
+    if (!category) throw new NotFoundException();
 
-    if (!categoryEntity) throw new NotFoundException();
+    const { orderInHome, orderInHero, ...rest } = updateCategoryDto;
 
-    if (file) {
-      const result = this.filesService.saveFile(file);
-      categoryEntity.image = result.filename;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      // مدیریت orderInHome
+      if (orderInHome !== undefined && orderInHome !== category.orderInHome) {
+        const newOrder = orderInHome ?? 0; // تبدیل null به 0
+        if (newOrder > 0) {
+          await this.shiftOrders('orderInHome', newOrder, id);
+        }
+        category.orderInHome = newOrder;
+      }
+
+      // مدیریت orderInHero
+      if (orderInHero !== undefined && orderInHero !== category.orderInHero) {
+        const newOrder = orderInHero ?? 0;
+        if (newOrder > 0) {
+          await this.shiftOrders('orderInHero', newOrder, id);
+        }
+        category.orderInHero = newOrder;
+      }
+
+      // به‌روزرسانی تصویر (اگر وجود داشته باشد)
+      if (file) {
+        const result = this.filesService.saveFile(file);
+        if (category.image) {
+          this.filesService.deleteFile(category.image);
+        }
+        category.image = result.filename;
+      }
+
+      // به‌روزرسانی سایر فیلدها
+      Object.assign(category, rest);
+
+      const updated = await queryRunner.manager.save(category);
+      await queryRunner.commitTransaction();
+      return updated;
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
     }
-    Object.assign(categoryEntity, updateCategoryDto);
-
-    return this.categoriesRepository.save(categoryEntity);
   }
 
   async remove(id: number) {
