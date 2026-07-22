@@ -166,18 +166,33 @@ export class ProductsService {
       throw new BadRequestException('یکی از رنگ‌ها معتبر نیست');
     }
 
+    // دریافت تصاویر موجود برای این محصول
+    const existingImages = await this.colorImageRepo.find({
+      where: { product: { id: productId } },
+      relations: { color: true },
+      order: { order: 'ASC' },
+    });
+
+    // نگاشت رنگ به حداکثر order موجود
+    const maxOrderMap = new Map<number, number>();
+    for (const img of existingImages) {
+      const colorId = img.color.id;
+      const currentMax = maxOrderMap.get(colorId) ?? -1;
+      if (img.order > currentMax) {
+        maxOrderMap.set(colorId, img.order);
+      }
+    }
+
     const images: ProductColorImage[] = [];
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const colorId = colorIds[i] || null; // اگر colorId ارسال نشده باشد
-
+      const colorId = colorIds[i];
       if (!colorId) {
         throw new BadRequestException(
           `برای فایل شماره ${i + 1} رنگ مشخص نشده است`,
         );
       }
-
       const color = colors.find(c => c.id === colorId);
       if (!color) {
         throw new BadRequestException(
@@ -185,11 +200,15 @@ export class ProductsService {
         );
       }
 
-      const savedFile = this.filesService.saveFile(file);
+      // محاسبه order جدید: max + 1
+      const currentMax = maxOrderMap.get(colorId) ?? -1;
+      const newOrder = currentMax + 1;
+      maxOrderMap.set(colorId, newOrder);
 
+      const savedFile = this.filesService.saveFile(file);
       const image = this.colorImageRepo.create({
         url: savedFile.filename,
-        order: i,
+        order: newOrder,
         product,
         color,
       });
