@@ -474,8 +474,11 @@ export class ProductsService {
   ): Promise<Product> {
     const product = await this.productRepo.findOne({
       where: { id },
-      relations: { variants: true, categories: true },
+      relations: {
+        categories: true,
+      },
     });
+
     if (!product) {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
@@ -510,12 +513,7 @@ export class ProductsService {
 
       // به‌روزرسانی واریانت‌ها (اگر وجود داشته باشند)
       if (variants !== undefined) {
-        // حذف فیلد id از واریانت‌ها (در صورت وجود)
-        const cleanVariants = variants.map(v => {
-          const { id: _id, ...rest } = v as any;
-          return rest;
-        });
-        await this.updateVariants(product.id, cleanVariants, queryRunner);
+        await this.updateVariants(product.id, variants, queryRunner);
       }
 
       // به‌روزرسانی دسته‌بندی‌ها
@@ -552,9 +550,11 @@ export class ProductsService {
   }
 
   // ==================== متد کمکی updateVariants ====================
+
   private async updateVariants(
     productId: number,
     newVariantsDto: {
+      id?: number;
       colorId: number;
       sizeId: number;
       price: number;
@@ -563,58 +563,71 @@ export class ProductsService {
     }[],
     queryRunner: QueryRunner,
   ) {
-    // دریافت واریانت‌های موجود برای این محصول
+    // دریافت واریانت‌های فعلی محصول
     const existingVariants = await queryRunner.manager.find(Variant, {
       where: { productId },
     });
 
-    // نگاشت برای جستجوی سریع بر اساس کلید ترکیبی (colorId|sizeId)
-    const existingMap = new Map<string, Variant>();
+    // ساخت Map بر اساس id واریانت
+    const existingMap = new Map<number, Variant>();
+
     for (const variant of existingVariants) {
-      const key = `${variant.colorId}|${variant.sizeId}`;
-      existingMap.set(key, variant);
+      existingMap.set(Number(variant.id), variant);
     }
 
-    const toRemove: Variant[] = [];
     const toSave: Variant[] = [];
 
+    // پردازش واریانت‌های ارسالی
     for (const dto of newVariantsDto) {
-      const key = `${dto.colorId}|${dto.sizeId}`;
-      const existing = existingMap.get(key);
+      const variantId =
+        dto.id !== undefined && dto.id !== null ? Number(dto.id) : undefined;
 
-      if (existing) {
-        // به‌روزرسانی واریانت موجود
-        existing.price = dto.price;
-        existing.stock = dto.stock ?? 0;
-        // اگر sku در DTO ارسال شده باشد، مقدار جدید را می‌گیرد (می‌تواند null باشد)
-        if (dto.sku !== undefined) {
-          existing.sku = dto.sku;
-        }
+      const colorId = Number(dto.colorId);
+      const sizeId = Number(dto.sizeId);
+      const price = Number(dto.price);
+      const stock = Number(dto.stock ?? 0);
+      const sku = dto.sku?.trim() || null;
+
+      // اگر واریانت موجود است، همان را آپدیت کن
+      if (variantId !== undefined && existingMap.has(variantId)) {
+        const existing = existingMap.get(variantId)!;
+
+        existing.colorId = colorId;
+        existing.sizeId = sizeId;
+        existing.price = price;
+        existing.stock = stock;
+        existing.sku = sku;
+
         toSave.push(existing);
-        existingMap.delete(key);
+
+        // این واریانت در درخواست جدید وجود دارد
+        // پس نباید حذف شود
+        existingMap.delete(variantId);
       } else {
-        // ایجاد واریانت جدید
-        const newVariant = new Variant();
-        newVariant.productId = productId;
-        newVariant.colorId = dto.colorId;
-        newVariant.sizeId = dto.sizeId;
-        newVariant.price = dto.price;
-        newVariant.stock = dto.stock ?? 0;
-        newVariant.sku = dto.sku ?? null;
+        // واریانت جدید
+        const newVariant = queryRunner.manager.create(Variant, {
+          productId,
+          colorId,
+          sizeId,
+          price,
+          stock,
+          sku,
+        });
+
         toSave.push(newVariant);
       }
     }
 
-    // واریانت‌هایی که در درخواست جدید نیستند، حذف می‌شوند
-    for (const remaining of existingMap.values()) {
-      toRemove.push(remaining);
+    // واریانت‌هایی که در درخواست جدید وجود ندارند حذف شوند
+    const toRemove = [...existingMap.values()];
+
+    if (toRemove.length > 0) {
+      await queryRunner.manager.remove(Variant, toRemove);
     }
 
-    if (toRemove.length) {
-      await queryRunner.manager.remove(toRemove);
-    }
-    if (toSave.length) {
-      await queryRunner.manager.save(toSave);
+    // ذخیره واریانت‌های جدید و آپدیت‌شده
+    if (toSave.length > 0) {
+      await queryRunner.manager.save(Variant, toSave);
     }
   }
 
@@ -683,35 +696,86 @@ export class ProductsService {
 
   async updateSameColorProducts(
     productId: number,
-    sameColorProductIds: number[],
+    newSameColorIds: number[],
   ): Promise<Product> {
     const product = await this.productRepo.findOne({
       where: { id: productId },
       relations: { sameColorProducts: true },
     });
     if (!product) {
-      throw new NotFoundException(`Product with ID ${productId} not found`);
+      throw new NotFoundException(`محصول با شناسه ${productId} یافت نشد`);
     }
 
-    let sameColorProducts: Product[] = [];
-    if (sameColorProductIds.length > 0) {
-      sameColorProducts = await this.productRepo.findBy({
-        id: In(sameColorProductIds),
+    const uniqueIds = [...new Set(newSameColorIds)].filter(
+      id => id !== productId,
+    );
+
+    if (uniqueIds.length > 0) {
+      const existingProducts = await this.productRepo.findBy({
+        id: In(uniqueIds),
       });
-      if (sameColorProducts.length !== sameColorProductIds.length) {
+      if (existingProducts.length !== uniqueIds.length) {
         throw new BadRequestException(
-          'One or more same-color product IDs are invalid',
+          'یکی از شناسه‌های محصولات هم‌رنگ نامعتبر است',
         );
       }
     }
 
-    product.sameColorProducts = sameColorProducts;
-    await this.productRepo.save(product);
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    return this.productRepo.findOneOrFail({
-      where: { id: productId },
-      relations: { sameColorProducts: true },
-    });
+    try {
+      const tableName = 'product_same_color';
+
+      // حذف همه روابط قبلی
+      await queryRunner.manager
+        .createQueryBuilder()
+        .delete()
+        .from(tableName)
+        .where(
+          'product_id = :productId OR same_color_product_id = :productId',
+          { productId },
+        )
+        .execute();
+
+      // درج روابط جدید (متقارن)
+      if (uniqueIds.length > 0) {
+        const insertValues: {
+          product_id: number;
+          same_color_product_id: number;
+        }[] = [];
+        for (const id of uniqueIds) {
+          insertValues.push({
+            product_id: productId,
+            same_color_product_id: id,
+          });
+          insertValues.push({
+            product_id: id,
+            same_color_product_id: productId,
+          });
+        }
+
+        await queryRunner.manager
+          .createQueryBuilder()
+          .insert()
+          .into(tableName)
+          .values(insertValues)
+          .execute();
+      }
+
+      await queryRunner.commitTransaction();
+
+      return this.productRepo.findOneOrFail({
+        where: { id: productId },
+        relations: { sameColorProducts: true },
+      });
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async remove(id: number) {

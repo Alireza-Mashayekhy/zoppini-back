@@ -26,6 +26,7 @@ import { SmsModule } from './sms/sms.module';
 import { B2bRequestModule } from './b2b-request/b2b-request.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { RahkaranModule } from './rahkaran/rahkaran.module';
+import { PaymentModule } from './payment/payment.module';
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { RahkaranModule } from './rahkaran/rahkaran.module';
     B2bRequestModule,
     SitemapModule,
     RahkaranModule,
+    PaymentModule,
   ],
   controllers: [AppController],
   providers: [

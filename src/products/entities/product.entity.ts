@@ -91,7 +91,7 @@ export class Product {
   suggestedBy: Product[];
 
   // ارتباط یک‑به‑چند با واریانت‌ها
-  @OneToMany(() => Variant, variant => variant.product, { cascade: true })
+  @OneToMany(() => Variant, variant => variant.product)
   variants: Variant[];
 
   // ارتباط یک‑به‑چند با نظرات
