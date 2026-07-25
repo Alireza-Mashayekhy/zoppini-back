@@ -453,10 +453,15 @@ export class ProductsService {
       relatedProducts = await this.productRepo
         .createQueryBuilder('p')
         .leftJoin('p.categories', 'cat')
+        .leftJoinAndSelect('p.variants', 'variant')
+        .leftJoinAndSelect('variant.color', 'color')
+        .leftJoinAndSelect('variant.size', 'size')
         .where('cat.id IN (:...categoryIds)', { categoryIds })
-        .andWhere('p.id != :productId', { productId: product.id })
+        .andWhere('p.id != :productId', {
+          productId: product.id,
+        })
         .orderBy('p.createdAt', 'DESC')
-        .limit(10)
+        .take(10)
         .getMany();
     }
 

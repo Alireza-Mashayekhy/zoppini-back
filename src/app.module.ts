@@ -9,6 +9,7 @@ import { AddressesModule } from './address/address.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
+import { B2bRequestModule } from './b2b-request/b2b-request.module';
 import { BlogModule } from './blog/blog.module';
 import { CartsModule } from './cart/cart.module';
 import { CategoriesModule } from './categories/categories.module';
@@ -18,15 +19,14 @@ import { FilesModule } from './files/files.module';
 import { LocationsModule } from './locations/locations.module';
 import { OrdersModule } from './order/order.module';
 import { OtpModule } from './otp/otp.module';
+import { PaymentModule } from './payment/payment.module';
 import { ProductsModule } from './products/products.module';
+import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
+import { SitemapModule } from './sitemap/sitemap.module';
+import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
-import { SmsModule } from './sms/sms.module';
-import { B2bRequestModule } from './b2b-request/b2b-request.module';
-import { SitemapModule } from './sitemap/sitemap.module';
-import { RahkaranModule } from './rahkaran/rahkaran.module';
-import { PaymentModule } from './payment/payment.module';
 
 @Module({
   imports: [
