@@ -9,10 +9,7 @@ import { Product } from 'src/products/entities/product.entity';
 import { Color } from 'src/products/entities/product-color.entity';
 import { Repository } from 'typeorm';
 
-import {
-  CreateFeaturedProductDto,
-  UpdateFeaturedProductDto,
-} from './dto/create-featured-product.dto';
+import { CreateSuggestedProductDto } from './dto/create-suggested-style.dto';
 import { StyleProduct } from './entities/style-product.entity';
 
 @Injectable()
@@ -65,7 +62,7 @@ export class StyleService {
   }
 
   async createStyleProduct(
-    dto: CreateFeaturedProductDto,
+    dto: CreateSuggestedProductDto,
   ): Promise<StyleProduct> {
     const product = await this.productRepo.findOne({
       where: { id: dto.productId },
@@ -95,6 +92,8 @@ export class StyleService {
       productId: dto.productId,
       colorId: dto.colorId,
       order: dto.order || 0,
+      faTitle: dto.faTitle,
+      enTitle: dto.enTitle,
     });
 
     return this.styleRepo.save(style);
@@ -102,7 +101,7 @@ export class StyleService {
 
   async updateStyleProduct(
     id: number,
-    dto: UpdateFeaturedProductDto,
+    dto: CreateSuggestedProductDto,
   ): Promise<StyleProduct> {
     const style = await this.styleRepo.findOne({ where: { id } });
     if (!style) {

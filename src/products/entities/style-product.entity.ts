@@ -19,6 +19,12 @@ export class StyleProduct {
   @JoinColumn({ name: 'product_id' })
   product: Product;
 
+  @Column({ length: 200 })
+  faTitle: string;
+
+  @Column({ length: 200 })
+  enTitle: string;
+
   @Column({ name: 'product_id' })
   productId: number;
 

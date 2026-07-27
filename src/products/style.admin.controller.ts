@@ -12,10 +12,7 @@ import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 
-import {
-  CreateFeaturedProductDto,
-  UpdateFeaturedProductDto,
-} from './dto/create-featured-product.dto';
+import { CreateSuggestedProductDto } from './dto/create-suggested-style.dto';
 import { StyleService } from './style.service';
 
 @UseGuards(AuthGuard, RolesGuard)
@@ -25,14 +22,14 @@ export class AdminStyleController {
   constructor(private readonly styleService: StyleService) {}
 
   @Post()
-  async createStyleProduct(@Body() dto: CreateFeaturedProductDto) {
+  async createStyleProduct(@Body() dto: CreateSuggestedProductDto) {
     return this.styleService.createStyleProduct(dto);
   }
 
   @Patch(':id')
   async updateStyleProduct(
     @Param('id') id: number,
-    @Body() dto: UpdateFeaturedProductDto,
+    @Body() dto: CreateSuggestedProductDto,
   ) {
     return this.styleService.updateStyleProduct(id, dto);
   }
