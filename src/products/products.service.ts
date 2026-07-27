@@ -218,6 +218,50 @@ export class ProductsService {
     return this.colorImageRepo.save(images);
   }
 
+  // src/products/products.service.ts
+
+  async updateColorImagesOrder(
+    productId: number,
+    orders: { id: number; order: number }[],
+  ): Promise<ProductColorImage[]> {
+    const product = await this.productRepo.findOneBy({ id: productId });
+    if (!product) throw new NotFoundException('محصول یافت نشد');
+
+    const imageIds = orders.map(o => o.id);
+    const existingImages = await this.colorImageRepo.findBy({
+      id: In(imageIds),
+    });
+    if (existingImages.length !== imageIds.length) {
+      throw new BadRequestException('یکی از تصاویر یافت نشد');
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      for (const item of orders) {
+        await queryRunner.manager.update(
+          ProductColorImage,
+          { id: item.id },
+          { order: item.order },
+        );
+      }
+      await queryRunner.commitTransaction();
+
+      return this.colorImageRepo.find({
+        where: { product: { id: productId } },
+        order: { order: 'ASC' },
+        relations: { color: true },
+      });
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async deleteImage(id: number) {
     const image = await this.colorImageRepo.findOneBy({ id });
     if (!image) throw new NotFoundException('تصویر یافت نشد');
@@ -434,6 +478,22 @@ export class ProductsService {
 
     if (!product) {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
+    }
+
+    // ========== مرتب‌سازی عکس‌های خود محصول ==========
+    if (product.colorImages && product.colorImages.length > 0) {
+      product.colorImages.sort((a, b) => (a.order || 0) - (b.order || 0));
+    }
+
+    // ========== مرتب‌سازی عکس‌های محصولات هم‌رنگ ==========
+    if (product.sameColorProducts && product.sameColorProducts.length > 0) {
+      for (const sameProduct of product.sameColorProducts) {
+        if (sameProduct.colorImages && sameProduct.colorImages.length > 0) {
+          sameProduct.colorImages.sort(
+            (a, b) => (a.order || 0) - (b.order || 0),
+          );
+        }
+      }
     }
 
     try {

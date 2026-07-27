@@ -70,6 +70,14 @@ export class AdmiProductsController {
     return this.productsService.addColorImages(productId, files, colorIds);
   }
 
+  @Patch(':productId/color-images/order')
+  async updateColorImagesOrder(
+    @Param('productId') productId: number,
+    @Body() body: { orders: { id: number; order: number }[] },
+  ) {
+    return this.productsService.updateColorImagesOrder(productId, body.orders);
+  }
+
   @Delete('images/:id')
   async deleteImage(@Param('id') id: number) {
     return this.productsService.deleteImage(id);
