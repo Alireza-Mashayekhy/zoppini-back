@@ -10,7 +10,6 @@ import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
 import { TaraAuthService } from './services/tara-auth.service';
 import { TaraPaymentService } from './services/tara-payment.service';
-import { ZarinpalAuthService } from './services/zarinpal-auth.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 
 @Module({
@@ -19,7 +18,6 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
   providers: [
     MellatPaymentService,
     ZarinpalPaymentService,
-    ZarinpalAuthService,
     ZarinpalPaymentService,
     DigipayAuthService,
     DigipayPaymentService,

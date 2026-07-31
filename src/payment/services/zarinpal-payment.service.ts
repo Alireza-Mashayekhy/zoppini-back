@@ -1,7 +1,8 @@
+import { HttpService } from '@nestjs/axios';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { GraphQLClient } from 'graphql-request';
+import { firstValueFrom } from 'rxjs';
 import { OrdersService } from 'src/order/order.service';
 import { Repository } from 'typeorm';
 
@@ -10,95 +11,158 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from '../entities/payment.entity';
-import { ZarinpalAuthService } from './zarinpal-auth.service';
 
 @Injectable()
 export class ZarinpalPaymentService {
   private readonly logger = new Logger(ZarinpalPaymentService.name);
-  private graphqlClient: GraphQLClient | null = null;
 
   constructor(
-    private configService: ConfigService,
+    private readonly configService: ConfigService,
+    private readonly httpService: HttpService,
+
     @InjectRepository(Payment)
-    private paymentRepo: Repository<Payment>,
-    private ordersService: OrdersService,
-    private authService: ZarinpalAuthService,
+    private readonly paymentRepo: Repository<Payment>,
+
+    private readonly ordersService: OrdersService,
   ) {}
 
-  private async getGraphQLClient(): Promise<GraphQLClient> {
-    if (this.graphqlClient) return this.graphqlClient;
+  private getMerchantId(): string {
+    const merchantId = this.configService.get<string>('ZARINPAL_MERCHANT_ID');
 
-    const accessToken = await this.authService.getAccessToken();
-    const apiUrl = this.configService.get<string>('ZARINPAL_API_URL')!;
+    if (!merchantId) {
+      throw new Error('ZARINPAL_MERCHANT_ID تنظیم نشده است');
+    }
 
-    this.graphqlClient = new GraphQLClient(apiUrl, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
-    });
-
-    return this.graphqlClient;
+    return merchantId;
   }
 
-  async requestPayment(
-    orderId: number,
-  ): Promise<{ refId: string; payUrl: string }> {
+  private getRequestUrl(): string {
+    return (
+      this.configService.get<string>('ZARINPAL_REQUEST_URL') ??
+      'https://payment.zarinpal.com/pg/v4/payment/request.json'
+    );
+  }
+
+  private getVerifyUrl(): string {
+    return (
+      this.configService.get<string>('ZARINPAL_VERIFY_URL') ??
+      'https://payment.zarinpal.com/pg/v4/payment/verify.json'
+    );
+  }
+
+  private getStartPayUrl(authority: string): string {
+    return `https://payment.zarinpal.com/pg/StartPay/${authority}`;
+  }
+
+  /**
+   * ایجاد درخواست پرداخت
+   */
+  async requestPayment(orderId: number): Promise<{
+    refId: string;
+    payUrl: string;
+  }> {
     const order = await this.ordersService.findOneForAdmin(orderId);
+
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
     const existingPayment = await this.paymentRepo.findOne({
-      where: { orderId, gateway: PaymentGateway.ZARINPAL },
+      where: {
+        orderId,
+        gateway: PaymentGateway.ZARINPAL,
+      },
+      order: {
+        id: 'DESC',
+      },
     });
+
     if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
       throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
     }
 
+    /*
+     * طبق مستندات زرین پال:
+     *
+     * amount باید به ریال ارسال شود.
+     *
+     * اگر finalPrice شما در دیتابیس تومان است:
+     * تومان × 10 = ریال
+     */
+    const amount = Math.round(Number(order.finalPrice) * 10);
+
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('مبلغ سفارش نامعتبر است');
+    }
+
     const callbackUrl = this.configService.get<string>(
       'ZARINPAL_PAYMENT_CALLBACK_URL',
-    )!;
-    const amount = Math.round(order.finalPrice * 10); // تبدیل به ریال
+    );
 
-    const mutation = `
-      mutation CreatePayment($input: PaymentInput!) {
-        createPayment(input: $input) {
-          authority
-          payment_url
-          errors {
-            code
-            message
-          }
-        }
-      }
-    `;
+    if (!callbackUrl) {
+      throw new BadRequestException('آدرس callback زرین پال تنظیم نشده است');
+    }
 
-    const variables = {
-      input: {
-        amount: amount,
-        description: `پرداخت سفارش شماره ${order.orderNumber}`,
-        email: order.user?.email || '',
+    const payload = {
+      merchant_id: this.getMerchantId(),
+      amount,
+      currency: 'IRR',
+      description: `پرداخت سفارش شماره ${order.orderNumber}`,
+      callback_url: callbackUrl,
+      metadata: {
         mobile: order.user?.phone || '',
-        callback_url: callbackUrl,
-        metadata: {
-          order_id: String(orderId),
-          order_number: order.orderNumber,
-        },
+        email: order.user?.email || '',
+        order_id: String(orderId),
       },
     };
 
     try {
-      const client = await this.getGraphQLClient();
-      const result = await client.request(mutation, variables);
+      const response = await firstValueFrom(
+        this.httpService.post(this.getRequestUrl(), payload, {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        }),
+      );
 
-      const response = result.createPayment;
-      if (response.errors && response.errors.length > 0) {
-        throw new BadRequestException(response.errors[0].message);
+      const data = response.data;
+
+      /*
+       * ساختار مستندات:
+       *
+       * {
+       *   data: {
+       *     code: 100,
+       *     message: "Success",
+       *     authority: "..."
+       *   },
+       *   errors: []
+       * }
+       */
+
+      const error = data?.errors?.[0];
+
+      if (error) {
+        this.logger.error(
+          `Zarinpal request error ${error.code}: ${error.message}`,
+        );
+
+        throw new BadRequestException(error.message);
       }
 
-      const authority = response.authority;
-      const paymentUrl = response.payment_url;
+      if (data?.data?.code !== 100) {
+        throw new BadRequestException(
+          data?.data?.message ||
+            `خطا در ایجاد تراکنش زرین پال (${data?.data?.code})`,
+        );
+      }
+
+      const authority = data.data.authority;
+
+      if (!authority) {
+        throw new BadRequestException('Authority از زرین پال دریافت نشد');
+      }
 
       const payment = this.paymentRepo.create({
         orderId,
@@ -106,28 +170,67 @@ export class ZarinpalPaymentService {
         amount,
         gateway: PaymentGateway.ZARINPAL,
         status: PaymentStatus.PENDING,
-        resCode: '0',
-        gatewayResponse: response,
+        resCode: String(data.data.code),
+        gatewayResponse: data,
       });
+
       await this.paymentRepo.save(payment);
 
-      return { refId: authority, payUrl: paymentUrl };
+      return {
+        refId: authority,
+        payUrl: this.getStartPayUrl(authority),
+      };
     } catch (error) {
-      this.logger.error(error.message, error.stack);
-      throw new BadRequestException('خطا در ارتباط با درگاه زرین‌پال');
+      if (error.isAxiosError) {
+        this.logger.error('Zarinpal status:', error.response?.status);
+
+        this.logger.error(
+          'Zarinpal response:',
+          JSON.stringify(error.response?.data, null, 2),
+        );
+
+        this.logger.error(
+          'Zarinpal request:',
+          JSON.stringify(error.config?.data, null, 2),
+        );
+      } else {
+        this.logger.error(error?.stack || error);
+      }
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new BadRequestException(
+        error.response?.data?.errors?.[0]?.message ||
+          error.response?.data?.message ||
+          'خطا در ارتباط با درگاه زرین پال',
+      );
     }
   }
 
-  async verifyPayment(
-    authority: string,
-  ): Promise<{ success: boolean; message: string; orderId?: number }> {
+  /**
+   * تایید تراکنش
+   */
+  async verifyPayment(authority: string): Promise<{
+    success: boolean;
+    message: string;
+    orderId?: number;
+  }> {
     const payment = await this.paymentRepo.findOne({
-      where: { refId: authority, gateway: PaymentGateway.ZARINPAL },
+      where: {
+        refId: authority,
+        gateway: PaymentGateway.ZARINPAL,
+      },
     });
+
     if (!payment) {
       throw new BadRequestException('تراکنش یافت نشد');
     }
 
+    /*
+     * اگر قبلاً موفق شده، دوباره موجودی کم نکن.
+     */
     if (payment.status === PaymentStatus.SUCCESS) {
       return {
         success: true,
@@ -136,69 +239,116 @@ export class ZarinpalPaymentService {
       };
     }
 
-    const mutation = `
-      mutation VerifyPayment($authority: String!) {
-        verifyPayment(authority: $authority) {
-          success
-          code
-          ref_id
-          errors {
-            code
-            message
-          }
-        }
-      }
-    `;
+    const payload = {
+      merchant_id: this.getMerchantId(),
+      amount: Number(payment.amount),
+      authority,
+    };
 
     try {
-      const client = await this.getGraphQLClient();
-      const result = await client.request(mutation, { authority });
+      const response = await firstValueFrom(
+        this.httpService.post(this.getVerifyUrl(), payload, {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        }),
+      );
 
-      const response = result.verifyPayment;
+      const data = response.data;
 
-      if (response.errors && response.errors.length > 0) {
+      const error = data?.errors?.[0];
+
+      if (error) {
         payment.status = PaymentStatus.FAILED;
-        payment.resCode = response.errors[0].code;
-        await this.paymentRepo.save(payment);
-        // لغو سفارش (بدون تغییر موجودی)
-        await this.ordersService.failOrderPayment(payment.orderId);
-        return { success: false, message: response.errors[0].message };
-      }
+        payment.resCode = String(error.code);
+        payment.gatewayResponse = data;
 
-      if (!response.success) {
-        payment.status = PaymentStatus.FAILED;
-        payment.resCode = response.code;
         await this.paymentRepo.save(payment);
+
         await this.ordersService.failOrderPayment(payment.orderId);
+
         return {
           success: false,
-          message: `پرداخت ناموفق: کد ${response.code}`,
+          message: error.message,
+          orderId: payment.orderId,
+        };
+      }
+
+      const code = Number(data?.data?.code);
+
+      /*
+       * code = 100
+       * پرداخت موفق و برای اولین بار verify شده.
+       *
+       * code = 101
+       * این تراکنش قبلاً verify شده و موفق بوده.
+       */
+      if (code !== 100 && code !== 101) {
+        payment.status = PaymentStatus.FAILED;
+        payment.resCode = String(code);
+        payment.gatewayResponse = data;
+
+        await this.paymentRepo.save(payment);
+
+        await this.ordersService.failOrderPayment(payment.orderId);
+
+        return {
+          success: false,
+          message: data?.data?.message || `پرداخت ناموفق: کد ${code}`,
+          orderId: payment.orderId,
         };
       }
 
       // پرداخت موفق
       payment.status = PaymentStatus.SUCCESS;
-      payment.resCode = '0';
-      payment.saleReferenceId = response.ref_id;
+      payment.resCode = String(code);
+
+      const refId = Number(data?.data?.ref_id);
+
+      if (Number.isFinite(refId)) {
+        payment.saleReferenceId = refId;
+      }
+
+      payment.gatewayResponse = data;
+
       await this.paymentRepo.save(payment);
 
-      // =============== تغییر اصلی اینجاست ===============
-      // به‌جای updateStatus، از confirmOrderPayment استفاده می‌کنیم
-      // این متد موجودی را کم کرده و سبد خرید را خالی می‌کند
-      await this.ordersService.confirmOrderPayment(payment.orderId);
-      // ====================================================
+      /*
+       * فقط در بار اول موجودی و سفارش را نهایی کن.
+       *
+       * چون 101 یعنی قبلاً verify شده.
+       */
+      if (code === 100) {
+        await this.ordersService.confirmOrderPayment(payment.orderId);
+      }
 
       return {
         success: true,
-        message: 'پرداخت با موفقیت انجام شد',
+        message:
+          code === 101
+            ? 'پرداخت قبلاً تأیید شده است'
+            : 'پرداخت با موفقیت انجام شد',
         orderId: payment.orderId,
       };
     } catch (error) {
-      this.logger.error(error.message, error.stack);
+      this.logger.error('خطا در verify زرین پال', error?.stack || error);
+
+      /*
+       * اینجا با احتیاط وضعیت payment را failed می‌کنیم.
+       */
       payment.status = PaymentStatus.FAILED;
+      payment.resCode = 'VERIFY_ERROR';
+
       await this.paymentRepo.save(payment);
+
       await this.ordersService.failOrderPayment(payment.orderId);
-      return { success: false, message: 'خطا در تأیید پرداخت' };
+
+      return {
+        success: false,
+        message: 'خطا در تأیید پرداخت',
+        orderId: payment.orderId,
+      };
     }
   }
 }

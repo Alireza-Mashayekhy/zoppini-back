@@ -54,65 +54,113 @@ export class PaymentController {
   @Post('callback/mellat')
   async callbackMellat(@Request() req, @Response() res) {
     const params = req.body;
+
     const refId = params?.RefId;
     const resCode = params?.ResCode;
 
+    if (!refId) {
+      return res.redirect(
+        `${process.env.APP_URL}/payment/result?status=failed`,
+      );
+    }
+
+    const payment = await this.mellatPaymentService['paymentRepo'].findOne({
+      where: {
+        refId,
+        gateway: PaymentGateway.MELLAT,
+      },
+    });
+
+    // پرداخت ناموفق
     if (resCode !== '0') {
-      const payment = await this.mellatPaymentService['paymentRepo'].findOne({
-        where: { refId },
-      });
       if (payment) {
         payment.status = 'failed' as any;
         payment.resCode = resCode;
+
         await this.mellatPaymentService['paymentRepo'].save(payment);
+
+        await this.ordersService.failOrderPayment(payment.orderId);
+
+        return res.redirect(
+          `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
+        );
       }
+
       return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${refId}`,
+        `${process.env.APP_URL}/payment/result?status=failed`,
       );
     }
 
     const result = await this.mellatPaymentService.verifyPayment(refId);
+
     if (result.success) {
       return res.redirect(
         `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
       );
-    } else {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${refId}`,
-      );
     }
+
+    return res.redirect(
+      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment?.orderId ?? ''}`,
+    );
   }
 
-  @Post('callback/zarinpal')
-  async callbackZarinpal(@Request() req, @Response() res) {
-    const params = req.body;
-    const authority = params?.authority;
-    const status = params?.status;
-
-    // status = 'OK' یا 'NOK'
-    if (status !== 'OK') {
+  @Get('callback/zarinpal')
+  async callbackZarinpal(
+    @Query('Authority') authority: string,
+    @Query('Status') status: string,
+    @Response() res,
+  ) {
+    if (!authority) {
       return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${authority}`,
+        `${process.env.APP_URL}/payment/result?status=failed`,
+      );
+    }
+
+    const payment = await this.zarinpalPaymentService['paymentRepo'].findOne({
+      where: {
+        refId: authority,
+        gateway: PaymentGateway.ZARINPAL,
+      },
+    });
+
+    if (!payment) {
+      return res.redirect(
+        `${process.env.APP_URL}/payment/result?status=failed`,
+      );
+    }
+
+    if (status !== 'OK') {
+      payment.status = 'failed' as any;
+      payment.resCode = 'CANCELLED';
+
+      await this.zarinpalPaymentService['paymentRepo'].save(payment);
+
+      await this.ordersService.failOrderPayment(payment.orderId);
+
+      return res.redirect(
+        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
       );
     }
 
     const result = await this.zarinpalPaymentService.verifyPayment(authority);
+
     if (result.success) {
       return res.redirect(
         `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
       );
-    } else {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${authority}`,
-      );
     }
+
+    return res.redirect(
+      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment.orderId}`,
+    );
   }
 
   @Post('callback/digipay')
   async callbackDigipay(@Request() req, @Response() res) {
     const params = req.body;
+
     const ticket = params?.ticket;
-    const status = params?.status; // ممکن است 'success' یا 'failed' باشد
+    const status = params?.status;
 
     if (!ticket) {
       return res.redirect(
@@ -120,41 +168,50 @@ export class PaymentController {
       );
     }
 
-    // اگر وضعیت از سمت دیجی‌پی ناموفق باشد
-    if (status !== 'success') {
-      // می‌توانیم مستقیماً failOrderPayment را صدا بزنیم
-      const payment = await this.digipayPaymentService['paymentRepo'].findOne({
-        where: { refId: ticket, gateway: PaymentGateway.DIGIPAY },
-      });
-      if (payment) {
-        payment.status = 'failed' as any;
-        await this.digipayPaymentService['paymentRepo'].save(payment);
-        await this.ordersService.failOrderPayment(payment.orderId);
-      }
+    const payment = await this.digipayPaymentService['paymentRepo'].findOne({
+      where: {
+        refId: ticket,
+        gateway: PaymentGateway.DIGIPAY,
+      },
+    });
+
+    if (!payment) {
       return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${ticket}`,
+        `${process.env.APP_URL}/payment/result?status=failed`,
       );
     }
 
-    // در غیر این صورت، تأیید نهایی را انجام بده
+    if (status !== 'success') {
+      payment.status = 'failed' as any;
+
+      await this.digipayPaymentService['paymentRepo'].save(payment);
+
+      await this.ordersService.failOrderPayment(payment.orderId);
+
+      return res.redirect(
+        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
+      );
+    }
+
     const result = await this.digipayPaymentService.verifyPayment(ticket);
+
     if (result.success) {
       return res.redirect(
         `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
       );
-    } else {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${ticket}`,
-      );
     }
+
+    return res.redirect(
+      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment.orderId}`,
+    );
   }
 
   @Post('callback/tara')
   async callbackTara(@Request() req, @Response() res) {
     const params = req.body;
+
     const token = params?.token;
-    const result = params?.result; // '0' یعنی موفق
-    const orderId = params?.orderId;
+    const resultCode = params?.result;
 
     if (!token) {
       return res.redirect(
@@ -162,33 +219,43 @@ export class PaymentController {
       );
     }
 
-    // اگر پرداخت ناموفق بوده
-    if (result !== '0') {
-      const payment = await this.taraPaymentService['paymentRepo'].findOne({
-        where: { refId: token, gateway: PaymentGateway.TARA },
-      });
-      if (payment) {
-        payment.status = 'failed' as any;
-        payment.resCode = result;
-        await this.taraPaymentService['paymentRepo'].save(payment);
-        await this.ordersService.failOrderPayment(payment.orderId);
-      }
+    const payment = await this.taraPaymentService['paymentRepo'].findOne({
+      where: {
+        refId: token,
+        gateway: PaymentGateway.TARA,
+      },
+    });
+
+    if (!payment) {
       return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${token}`,
+        `${process.env.APP_URL}/payment/result?status=failed`,
       );
     }
 
-    // تأیید نهایی پرداخت
+    if (resultCode !== '0') {
+      payment.status = 'failed' as any;
+      payment.resCode = resultCode;
+
+      await this.taraPaymentService['paymentRepo'].save(payment);
+
+      await this.ordersService.failOrderPayment(payment.orderId);
+
+      return res.redirect(
+        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
+      );
+    }
+
     const verifyResult = await this.taraPaymentService.verifyPayment(token);
+
     if (verifyResult.success) {
       return res.redirect(
         `${process.env.APP_URL}/payment/result?status=success&orderId=${verifyResult.orderId}`,
       );
-    } else {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&refId=${token}`,
-      );
     }
+
+    return res.redirect(
+      `${process.env.APP_URL}/payment/result?status=failed&orderId=${verifyResult.orderId ?? payment.orderId}`,
+    );
   }
 
   @Get('result')

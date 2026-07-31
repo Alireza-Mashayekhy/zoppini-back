@@ -33,87 +33,145 @@ export class DigipayPaymentService {
     orderId: number,
   ): Promise<{ refId: string; payUrl: string }> {
     const order = await this.ordersService.findOneForAdmin(orderId);
+
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
     const existingPayment = await this.paymentRepo.findOne({
-      where: { orderId, gateway: PaymentGateway.DIGIPAY },
+      where: {
+        orderId,
+        gateway: PaymentGateway.DIGIPAY,
+      },
     });
+
     if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
       throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
     }
 
     const accessToken = await this.authService.getAccessToken();
+
     const apiUrl = this.configService.get<string>('DIGIPAY_API_URL')!;
+
     const callbackUrl = this.configService.get<string>(
       'DIGIPAY_PAYMENT_CALLBACK_URL',
     )!;
+
     const providerId = `ORDER-${orderId}-${Date.now()}`;
-    const amount = Math.round(order.finalPrice * 10); // تبدیل به ریال
+
+    const amount = Math.round(Number(order.finalPrice) * 10);
 
     const payload = {
-      amount: amount,
       cellNumber: order.user?.phone || '',
-      providerId: providerId,
-      callbackUrl: callbackUrl,
-      preferredGateway: 2, // 2 برای IPG
+      amount,
+      providerId,
+      callbackUrl,
     };
 
+    const url = `${apiUrl}/tickets/business?type=11`;
+
+    this.logger.log('========== DIGIPAY REQUEST ==========');
+    this.logger.log(`URL: ${url}`);
+    this.logger.log(`Payload: ${JSON.stringify(payload, null, 2)}`);
+    this.logger.log('=====================================');
+
     try {
-      const response = await fetch(`${apiUrl}/tickets/business?type=11`, {
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
           Agent: 'WEB',
           'Digipay-Version': '2022-02-02',
+          'Content-Type': 'application/json; charset=UTF-8',
+          Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
 
-      if (data.result?.status !== 0) {
+      this.logger.log(`Digipay response status: ${response.status}`);
+
+      this.logger.log(`Digipay response: ${responseText}`);
+
+      let data: any;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new BadRequestException('پاسخ دیجی‌پی معتبر نیست');
+      }
+
+      if (!response.ok) {
         throw new BadRequestException(
-          data.result?.message || 'خطا در ایجاد تیکت خرید',
+          data?.result?.message ||
+            data?.message ||
+            `Digipay HTTP ${response.status}`,
         );
       }
 
-      const ticket = data.ticket; // شناسه تیکت
-      const payUrl = data.payUrl; // آدرس هدایت کاربر به درگاه پرداخت
+      if (data?.result?.status !== 0) {
+        throw new BadRequestException(
+          data?.result?.message || 'خطا در ایجاد تیکت خرید',
+        );
+      }
 
-      // ذخیره اطلاعات پرداخت
+      const ticket = data.ticket;
+      const payUrl = data.redirectUrl;
+
+      if (!ticket) {
+        throw new BadRequestException('Ticket از دیجی‌پی دریافت نشد');
+      }
+
+      if (!payUrl) {
+        throw new BadRequestException('Redirect URL از دیجی‌پی دریافت نشد');
+      }
+
       const payment = this.paymentRepo.create({
         orderId,
-        refId: ticket, // استفاده از ticket به عنوان refId
+        refId: ticket,
         amount,
         gateway: PaymentGateway.DIGIPAY,
         status: PaymentStatus.PENDING,
         resCode: '0',
         gatewayResponse: data,
       });
+
       await this.paymentRepo.save(payment);
 
-      return { refId: ticket, payUrl };
+      return {
+        refId: ticket,
+        payUrl,
+      };
     } catch (error) {
-      this.logger.error(error.message, error.stack);
+      this.logger.error(
+        '❌ خطا در درخواست پرداخت دیجی‌پی',
+        error?.stack || error,
+      );
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
       throw new BadRequestException('خطا در ارتباط با درگاه دیجی‌پی');
     }
   }
 
-  async verifyPayment(
-    ticket: string,
-  ): Promise<{ success: boolean; message: string; orderId?: number }> {
-    // ۱. پیدا کردن پرداخت بر اساس ticket
+  async verifyPayment(ticket: string): Promise<{
+    success: boolean;
+    message: string;
+    orderId?: number;
+  }> {
     const payment = await this.paymentRepo.findOne({
-      where: { refId: ticket, gateway: PaymentGateway.DIGIPAY },
+      where: {
+        refId: ticket,
+        gateway: PaymentGateway.DIGIPAY,
+      },
     });
+
     if (!payment) {
       throw new NotFoundException('تراکنش یافت نشد');
     }
 
-    // ۲. اگر قبلاً موفق بوده، برگردان
     if (payment.status === PaymentStatus.SUCCESS) {
       return {
         success: true,
@@ -122,13 +180,22 @@ export class DigipayPaymentService {
       };
     }
 
-    // ۳. استعلام وضعیت از دیجی‌پی
     const accessToken = await this.authService.getAccessToken();
+
     const apiUrl = this.configService.get<string>('DIGIPAY_API_URL')!;
 
+    const url = `${apiUrl}/tickets/business/${ticket}`;
+
+    this.logger.log('========== DIGIPAY VERIFY ==========');
+    this.logger.log(`URL: ${url}`);
+    this.logger.log(`Ticket: ${ticket}`);
+    this.logger.log(`Token exists: ${Boolean(accessToken)}`);
+    this.logger.log('====================================');
+
     try {
-      const response = await fetch(`${apiUrl}/tickets/business/${ticket}`, {
+      const response = await fetch(url, {
         method: 'GET',
+
         headers: {
           Authorization: `Bearer ${accessToken}`,
           Agent: 'WEB',
@@ -136,31 +203,55 @@ export class DigipayPaymentService {
         },
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
 
-      // بررسی موفقیت (مطابق مستندات دیجی‌پی)
+      this.logger.log('========== DIGIPAY VERIFY RESPONSE ==========');
+      this.logger.log(`HTTP Status: ${response.status}`);
+      this.logger.log(`Response Body: ${responseText}`);
+      this.logger.log('==============================================');
+
+      let data: any;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        throw new BadRequestException('پاسخ نامعتبر از دیجی‌پی');
+      }
+
+      if (!response.ok) {
+        throw new BadRequestException(
+          data?.result?.message ||
+            data?.message ||
+            `Digipay HTTP ${response.status}`,
+        );
+      }
+
       const isSuccess = data.result?.status === 0 && data.status === 'success';
 
       if (!isSuccess) {
-        // پرداخت ناموفق
         payment.status = PaymentStatus.FAILED;
         payment.resCode = data.result?.code || 'FAILED';
+
         await this.paymentRepo.save(payment);
-        // لغو سفارش بدون تغییر موجودی
+
         await this.ordersService.failOrderPayment(payment.orderId);
+
         return {
           success: false,
           message: data.result?.message || 'پرداخت ناموفق بود',
+          orderId: payment.orderId,
         };
       }
 
-      // ۴. پرداخت موفق
       payment.status = PaymentStatus.SUCCESS;
       payment.resCode = '0';
-      payment.saleReferenceId = data.referenceId || null;
+
+      if (data.referenceId != null) {
+        payment.saleReferenceId = Number(data.referenceId);
+      }
+
       await this.paymentRepo.save(payment);
 
-      // ۵. تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد)
       await this.ordersService.confirmOrderPayment(payment.orderId);
 
       return {
@@ -169,13 +260,19 @@ export class DigipayPaymentService {
         orderId: payment.orderId,
       };
     } catch (error) {
-      this.logger.error('خطا در استعلام وضعیت پرداخت دیجی‌پی', error.message);
+      this.logger.error('❌ خطا در استعلام وضعیت پرداخت دیجی‌پی');
+
+      this.logger.error(error?.stack || error);
+
       payment.status = PaymentStatus.FAILED;
       await this.paymentRepo.save(payment);
+
       await this.ordersService.failOrderPayment(payment.orderId);
+
       return {
         success: false,
         message: 'خطا در تأیید پرداخت',
+        orderId: payment.orderId,
       };
     }
   }
