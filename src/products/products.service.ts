@@ -320,12 +320,22 @@ export class ProductsService {
 
   async deleteImage(id: number) {
     const image = await this.colorImageRepo.findOneBy({ id });
-    if (!image) throw new NotFoundException('تصویر یافت نشد');
 
-    // حذف فایل از سرور (اختیاری)
-    this.filesService.deleteFile(image.url);
+    if (!image) {
+      throw new NotFoundException('تصویر یافت نشد');
+    }
 
-    return this.colorImageRepo.delete(id);
+    const filename = image.url;
+
+    // اول DB
+    await this.colorImageRepo.delete(id);
+
+    // بعد فایل
+    this.filesService.deleteFile(filename);
+
+    return {
+      message: 'تصویر با موفقیت حذف شد',
+    };
   }
 
   async findAll(
@@ -611,59 +621,84 @@ export class ProductsService {
       const existing = await this.productRepo.findOneBy({
         productCode: updateProductDto.productCode,
       });
+
       if (existing) {
         throw new ConflictException('Product code already exists');
       }
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
+
     await queryRunner.connect();
     await queryRunner.startTransaction();
+
+    const oldProductImage = product.image;
+    let newProductImage: string | null = null;
 
     try {
       const { variants, categoryIds, ...simpleFields } = updateProductDto;
 
+      // فایل جدید را ذخیره کن
       if (file) {
         const savedFile = this.filesService.saveFile(file);
-        if (product.image) this.filesService.deleteFile(product.image);
-        product.image = savedFile.filename;
+
+        newProductImage = savedFile.filename;
+        product.image = newProductImage;
       }
 
       Object.assign(product, simpleFields);
+
       await queryRunner.manager.save(product);
 
-      // به‌روزرسانی واریانت‌ها (اگر وجود داشته باشند)
       if (variants !== undefined) {
         await this.updateVariants(product.id, variants, queryRunner);
       }
 
-      // به‌روزرسانی دسته‌بندی‌ها
       if (categoryIds !== undefined) {
         if (categoryIds.length === 0) {
           product.categories = [];
         } else {
           const categories =
             await this.categoriesService.findManyByIds(categoryIds);
+
           if (categories.length !== categoryIds.length) {
             throw new BadRequestException('One or more category IDs invalid');
           }
+
           product.categories = categories;
         }
+
         await queryRunner.manager.save(product);
       }
 
       const updatedProduct = await queryRunner.manager.findOneOrFail(Product, {
         where: { id: product.id },
         relations: {
-          variants: { color: true, size: true },
+          variants: {
+            color: true,
+            size: true,
+          },
           categories: true,
         },
       });
 
       await queryRunner.commitTransaction();
+
+      // فقط بعد از موفقیت DB
+      if (oldProductImage && newProductImage) {
+        this.filesService.deleteFile(oldProductImage);
+      }
+
       return updatedProduct;
     } catch (error) {
       await queryRunner.rollbackTransaction();
+
+      // اگر فایل جدید ذخیره شد ولی DB شکست خورد،
+      // فایل جدید orphan نشود
+      if (newProductImage) {
+        this.filesService.deleteFile(newProductImage);
+      }
+
       throw error;
     } finally {
       await queryRunner.release();
@@ -954,21 +989,26 @@ export class ProductsService {
       throw new NotFoundException(`Product with ID ${id} not found`);
     }
 
-    if (product.image) {
-      this.filesService.deleteFile(product.image);
-    }
+    const productImage = product.image;
 
-    if (product.colorImages && product.colorImages.length > 0) {
-      for (const image of product.colorImages) {
-        if (image.url) {
-          this.filesService.deleteFile(image.url);
-        }
-      }
-    }
+    const colorImageFiles =
+      product.colorImages?.map(image => image.url).filter(Boolean) ?? [];
 
+    // اول DB
     await this.productRepo.delete(id);
 
-    return { message: 'Product deleted successfully' };
+    // بعد فایل‌ها
+    if (productImage) {
+      this.filesService.deleteFile(productImage);
+    }
+
+    for (const filename of colorImageFiles) {
+      this.filesService.deleteFile(filename);
+    }
+
+    return {
+      message: 'محصول با موفقیت حذف شد',
+    };
   }
 
   async findAllColors() {

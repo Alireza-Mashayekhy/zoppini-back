@@ -36,12 +36,36 @@ export class FilesService {
   }
 
   deleteFile(filename: string) {
-    if (!filename) return { message: 'Filename is empty' };
-    const filePath = path.join(process.cwd(), 'uploads', filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      return { message: 'File deleted successfully' };
+    if (!filename) {
+      return {
+        success: false,
+        message: 'Filename is empty',
+      };
     }
-    return { message: 'File not found' };
+
+    const filePath = path.join(process.cwd(), 'uploads', filename);
+
+    try {
+      if (!fs.existsSync(filePath)) {
+        return {
+          success: false,
+          message: 'File not found',
+        };
+      }
+
+      fs.unlinkSync(filePath);
+
+      return {
+        success: true,
+        message: 'File deleted successfully',
+      };
+    } catch (error) {
+      console.error(`Failed to delete file: ${filename}`, error);
+
+      return {
+        success: false,
+        message: 'Failed to delete file',
+      };
+    }
   }
 }
