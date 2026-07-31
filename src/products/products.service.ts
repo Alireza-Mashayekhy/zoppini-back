@@ -689,7 +689,6 @@ export class ProductsService {
       where: { productId },
     });
 
-    // ساخت Map بر اساس id واریانت
     const existingMap = new Map<number, Variant>();
 
     for (const variant of existingVariants) {
@@ -698,7 +697,20 @@ export class ProductsService {
 
     const toSave: Variant[] = [];
 
-    // پردازش واریانت‌های ارسالی
+    // چون هر محصول فقط یک رنگ دارد
+    const colorIds = [
+      ...new Set(
+        newVariantsDto.map(dto => Number(dto.colorId)).filter(Boolean),
+      ),
+    ];
+
+    if (colorIds.length > 1) {
+      throw new BadRequestException('هر محصول فقط می‌تواند یک رنگ داشته باشد');
+    }
+
+    const finalColorId = colorIds[0];
+
+    // پردازش واریانت‌ها
     for (const dto of newVariantsDto) {
       const variantId =
         dto.id !== undefined && dto.id !== null ? Number(dto.id) : undefined;
@@ -709,7 +721,7 @@ export class ProductsService {
       const stock = Number(dto.stock ?? 0);
       const sku = dto.sku?.trim() || null;
 
-      // اگر واریانت موجود است، همان را آپدیت کن
+      // واریانت موجود
       if (variantId !== undefined && existingMap.has(variantId)) {
         const existing = existingMap.get(variantId)!;
 
@@ -721,8 +733,7 @@ export class ProductsService {
 
         toSave.push(existing);
 
-        // این واریانت در درخواست جدید وجود دارد
-        // پس نباید حذف شود
+        // این واریانت هنوز وجود دارد
         existingMap.delete(variantId);
       } else {
         // واریانت جدید
@@ -739,16 +750,48 @@ export class ProductsService {
       }
     }
 
-    // واریانت‌هایی که در درخواست جدید وجود ندارند حذف شوند
+    // واریانت‌هایی که دیگر ارسال نشده‌اند حذف شوند
     const toRemove = [...existingMap.values()];
 
     if (toRemove.length > 0) {
       await queryRunner.manager.remove(Variant, toRemove);
     }
 
-    // ذخیره واریانت‌های جدید و آپدیت‌شده
+    // ذخیره واریانت‌ها
     if (toSave.length > 0) {
       await queryRunner.manager.save(Variant, toSave);
+    }
+
+    // =====================================================
+    // تغییر رنگ تمام تصاویر محصول
+    // =====================================================
+
+    if (finalColorId) {
+      // مطمئن شو رنگ وجود دارد
+      const color = await queryRunner.manager.findOne(Color, {
+        where: {
+          id: finalColorId,
+        },
+      });
+
+      if (!color) {
+        throw new BadRequestException(`رنگ با شناسه ${finalColorId} یافت نشد`);
+      }
+
+      /*
+       * تمام تصاویر محصول، بدون توجه به رنگ قبلی،
+       * به رنگ جدید وصل می‌شوند.
+       */
+      await queryRunner.manager
+        .createQueryBuilder()
+        .update(ProductColorImage)
+        .set({
+          color: color,
+        })
+        .where('product_id = :productId', {
+          productId,
+        })
+        .execute();
     }
   }
 
