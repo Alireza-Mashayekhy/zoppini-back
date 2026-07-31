@@ -225,34 +225,90 @@ export class ProductsService {
     orders: { id: number; order: number }[],
   ): Promise<ProductColorImage[]> {
     const product = await this.productRepo.findOneBy({ id: productId });
-    if (!product) throw new NotFoundException('محصول یافت نشد');
+
+    if (!product) {
+      throw new NotFoundException('محصول یافت نشد');
+    }
 
     const imageIds = orders.map(o => o.id);
-    const existingImages = await this.colorImageRepo.findBy({
-      id: In(imageIds),
+
+    const existingImages = await this.colorImageRepo.find({
+      where: {
+        id: In(imageIds),
+      },
+      relations: {
+        product: true,
+        color: true,
+      },
     });
+
     if (existingImages.length !== imageIds.length) {
       throw new BadRequestException('یکی از تصاویر یافت نشد');
     }
 
+    // مطمئن شو تمام عکس‌ها متعلق به همین محصول هستند
+    const invalidImage = existingImages.find(
+      image => image.product.id !== productId,
+    );
+
+    if (invalidImage) {
+      throw new BadRequestException('یکی از تصاویر متعلق به این محصول نیست');
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
+
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
+      /*
+       * مرحله اول:
+       *
+       * تمام order های فعلی را موقتاً به مقادیر منفی
+       * و غیرتکراری منتقل می‌کنیم تا Unique Constraint
+       * هیچ برخوردی نداشته باشد.
+       */
+      for (let index = 0; index < existingImages.length; index++) {
+        const image = existingImages[index];
+
+        await queryRunner.manager.update(
+          ProductColorImage,
+          { id: image.id },
+          {
+            order: -(index + 1),
+          },
+        );
+      }
+
+      /*
+       * مرحله دوم:
+       *
+       * order نهایی را اعمال می‌کنیم.
+       */
       for (const item of orders) {
         await queryRunner.manager.update(
           ProductColorImage,
           { id: item.id },
-          { order: item.order },
+          {
+            order: item.order,
+          },
         );
       }
+
       await queryRunner.commitTransaction();
 
       return this.colorImageRepo.find({
-        where: { product: { id: productId } },
-        order: { order: 'ASC' },
-        relations: { color: true },
+        where: {
+          product: {
+            id: productId,
+          },
+        },
+        order: {
+          order: 'ASC',
+        },
+        relations: {
+          color: true,
+        },
       });
     } catch (error) {
       await queryRunner.rollbackTransaction();
