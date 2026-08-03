@@ -41,7 +41,10 @@ export class CategoriesAdminController {
 
   @Get()
   findAll(@Query() query: QueryDto) {
-    return this.categoriesService.findAll(query);
+    return this.categoriesService.findAll({
+      ...query,
+      includeInactive: 'true',
+    });
   }
 
   @Get(':id')

@@ -88,57 +88,68 @@ export class CategoriesService {
     }
   }
 
-  async findAll(query: QueryDto) {
+  async findAll(query: QueryDto & { includeInactive?: string }) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+
     const qb = this.categoriesRepository.createQueryBuilder('category');
 
-    // جستجو
+    // فقط در API عمومی دسته‌بندی‌های فعال
+    const includeInactive = query.includeInactive === 'true';
+
+    if (!includeInactive) {
+      qb.andWhere('category.isActive = :isActive', {
+        isActive: true,
+      });
+    }
+
     applySearch(qb, query.search, ['category.name', 'category.slug']);
 
-    // فیلتر isInHeroSection
     if (query['isInHeroSection'] !== undefined) {
       const isHero =
         query['isInHeroSection'] === 'true' ||
         query['isInHeroSection'] === true;
-      qb.andWhere('category.isInHeroSection = :isHero', { isHero });
+
+      qb.andWhere('category.isInHeroSection = :isHero', {
+        isHero,
+      });
     }
 
-    // فیلتر isInHome
     if (query['isInHome'] !== undefined) {
       const isHome = query['isInHome'] === 'true' || query['isInHome'] === true;
-      qb.andWhere('category.isInHome = :isHome', { isHome });
+
+      qb.andWhere('category.isInHome = :isHome', {
+        isHome,
+      });
     }
 
-    // مرتب‌سازی
     if (query.sort) {
-      // اگر کاربر sort را مشخص کرده، از آن استفاده کن
       applySort(qb, query.sort);
     } else {
-      // در غیر این صورت، بر اساس فیلترهای فعال، order مربوطه را اعمال کن
       if (query['isInHome'] !== undefined) {
         qb.orderBy('category.orderInHome', 'ASC');
       }
+
       if (query['isInHeroSection'] !== undefined) {
-        // اگر قبلاً orderBy تنظیم شده، از addOrderBy استفاده کن
         qb.addOrderBy('category.orderInHero', 'ASC');
       }
-      // اگر هیچ فیلتری فعال نبود، می‌توانیم یک مرتب‌سازی پیش‌فرض داشته باشیم (اختیاری)
-      // مثلاً بر اساس id: qb.orderBy('category.id', 'ASC');
     }
 
     const isAll = query['all'] === 'true' || query['all'] === true;
 
-    let data, total;
+    let data;
+    let total;
+
     if (isAll) {
-      // بدون پیجینیشن
       data = await qb.getMany();
       total = data.length;
     } else {
-      // با پیجینیشن
       const { skip, take } = getPagination(page, limit);
+
       qb.skip(skip).take(take);
+
       const [result, count] = await qb.getManyAndCount();
+
       data = result;
       total = count;
     }
@@ -214,6 +225,9 @@ export class CategoriesService {
 
       // به‌روزرسانی سایر فیلدها
       Object.assign(category, rest);
+
+      console.log(updateCategoryDto);
+      console.log(typeof updateCategoryDto.isActive);
 
       const updated = await queryRunner.manager.save(category);
       await queryRunner.commitTransaction();

@@ -42,4 +42,9 @@ export class CreateCategoryDto {
   @ApiProperty()
   @IsOptional()
   parentId?: string;
+
+  @IsOptional()
+  @Transform(({ value }) => value === 'true' || value === true)
+  @IsBoolean()
+  isActive?: boolean;
 }
