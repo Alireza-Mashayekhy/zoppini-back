@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, PipeTransform } from '@nestjs/common';
 
 @Injectable()
 export class FileSizeValidationPipe implements PipeTransform {
-  private readonly maxSize = 1024 * 1024; //1MB
+  private readonly maxSize = 1024 * 1024 * 2; //2 MB
 
   transform(file: Express.Multer.File) {
     if (!file) {
