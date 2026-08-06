@@ -1,12 +1,5 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Post,
-  Query,
-  Request,
-  Response,
-} from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
+import { Request, Response } from 'express';
 import { OrdersService } from 'src/order/order.service';
 
 import { RequestPaymentDto } from './dto/request-payment.dto';
@@ -19,250 +12,199 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 @Controller('payment')
 export class PaymentController {
   constructor(
-    private mellatPaymentService: MellatPaymentService,
-    private zarinpalPaymentService: ZarinpalPaymentService,
-    private digipayPaymentService: DigipayPaymentService,
-    private ordersService: OrdersService,
-    private taraPaymentService: TaraPaymentService,
+    private readonly mellatService: MellatPaymentService,
+    private readonly zarinpalService: ZarinpalPaymentService,
+    private readonly digipayService: DigipayPaymentService,
+    private readonly taraService: TaraPaymentService,
+    private readonly ordersService: OrdersService,
   ) {}
+
+  private redirect(
+    res: Response,
+    status: 'success' | 'failed',
+    orderId?: number | string,
+  ) {
+    let url = `${process.env.APP_URL}/payment/result?status=${status}`;
+
+    if (orderId) {
+      url += `&orderId=${orderId}`;
+    }
+
+    return res.redirect(url);
+  }
+
+  //==============================================================
+  // Start Payment
+  //==============================================================
 
   @Post('start')
   async startPayment(@Body() dto: RequestPaymentDto) {
-    if (dto.gateway === PaymentGateway.MELLAT) {
-      return this.mellatPaymentService.requestPayment(dto.orderId);
+    switch (dto.gateway) {
+      case PaymentGateway.MELLAT:
+        return this.mellatService.requestPayment(dto.orderId);
+
+      case PaymentGateway.ZARINPAL:
+        return this.zarinpalService.requestPayment(dto.orderId);
+
+      case PaymentGateway.DIGIPAY:
+        return this.digipayService.requestPayment(dto.orderId);
+
+      case PaymentGateway.TARA:
+        return this.taraService.requestPayment(dto.orderId);
+
+      default:
+        throw new Error('درگاه پشتیبانی نمی‌شود');
     }
-    if (dto.gateway === PaymentGateway.ZARINPAL) {
-      return this.zarinpalPaymentService.requestPayment(dto.orderId);
-    }
-    if (dto.gateway === PaymentGateway.DIGIPAY) {
-      return this.digipayPaymentService.requestPayment(dto.orderId);
-    }
-    if (dto.gateway === PaymentGateway.TARA) {
-      return this.taraPaymentService.requestPayment(dto.orderId);
-    }
-    throw new Error('درگاه انتخاب شده پشتیبانی نمی‌شود');
   }
 
-  @Post('request')
-  async requestPayment(@Body() dto: RequestPaymentDto) {
-    if (dto.gateway === PaymentGateway.MELLAT) {
-      return this.mellatPaymentService.requestPayment(dto.orderId);
-    }
-    throw new Error('درگاه انتخاب شده پشتیبانی نمی‌شود');
-  }
+  //==============================================================
+  // Mellat
+  //==============================================================
 
   @Post('callback/mellat')
-  async callbackMellat(@Request() req, @Response() res) {
-    const params = req.body;
+  async callbackMellat(@Req() req, @Res() res) {
+    const { RefId, ResCode } = req.body;
 
-    const refId = params?.RefId;
-    const resCode = params?.ResCode;
-
-    if (!refId) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+    if (!RefId) {
+      return this.redirect(res, 'failed');
     }
 
-    const payment = await this.mellatPaymentService['paymentRepo'].findOne({
-      where: {
-        refId,
-        gateway: PaymentGateway.MELLAT,
-      },
-    });
+    if (ResCode !== '0') {
+      const payment = await this.mellatService.findPaymentByRefId(RefId);
 
-    // پرداخت ناموفق
-    if (resCode !== '0') {
       if (payment) {
-        payment.status = 'failed' as any;
-        payment.resCode = resCode;
-
-        await this.mellatPaymentService['paymentRepo'].save(payment);
-
+        await this.mellatService.failPayment(payment, ResCode);
         await this.ordersService.failOrderPayment(payment.orderId);
 
-        return res.redirect(
-          `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
-        );
+        return this.redirect(res, 'failed', payment.orderId);
       }
 
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+      return this.redirect(res, 'failed');
     }
 
-    const result = await this.mellatPaymentService.verifyPayment(refId);
+    const result = await this.mellatService.verifyPayment(RefId);
 
-    if (result.success) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
-      );
-    }
-
-    return res.redirect(
-      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment?.orderId ?? ''}`,
+    return this.redirect(
+      res,
+      result.success ? 'success' : 'failed',
+      result.orderId,
     );
   }
+
+  //==============================================================
+  // Zarinpal
+  //==============================================================
 
   @Get('callback/zarinpal')
   async callbackZarinpal(
     @Query('Authority') authority: string,
     @Query('Status') status: string,
-    @Response() res,
+    @Res() res,
   ) {
     if (!authority) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
-    }
-
-    const payment = await this.zarinpalPaymentService['paymentRepo'].findOne({
-      where: {
-        refId: authority,
-        gateway: PaymentGateway.ZARINPAL,
-      },
-    });
-
-    if (!payment) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+      return this.redirect(res, 'failed');
     }
 
     if (status !== 'OK') {
-      payment.status = 'failed' as any;
-      payment.resCode = 'CANCELLED';
+      const payment = await this.zarinpalService.findPaymentByRefId(authority);
 
-      await this.zarinpalPaymentService['paymentRepo'].save(payment);
+      if (payment) {
+        await this.zarinpalService.failPayment(payment, 'CANCELLED');
+        await this.ordersService.failOrderPayment(payment.orderId);
 
-      await this.ordersService.failOrderPayment(payment.orderId);
+        return this.redirect(res, 'failed', payment.orderId);
+      }
 
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
-      );
+      return this.redirect(res, 'failed');
     }
 
-    const result = await this.zarinpalPaymentService.verifyPayment(authority);
+    const result = await this.zarinpalService.verifyPayment(authority);
 
-    if (result.success) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
-      );
-    }
-
-    return res.redirect(
-      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment.orderId}`,
+    return this.redirect(
+      res,
+      result.success ? 'success' : 'failed',
+      result.orderId,
     );
   }
 
-  @Post('callback/digipay')
-  async callbackDigipay(@Request() req, @Response() res) {
-    const params = req.body;
+  //==============================================================
+  // Digipay
+  //==============================================================
 
-    const ticket = params?.ticket;
-    const status = params?.status;
+  @Post('callback/digipay')
+  async callbackDigipay(@Req() req, @Res() res) {
+    const { ticket, status } = req.body;
 
     if (!ticket) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
-    }
-
-    const payment = await this.digipayPaymentService['paymentRepo'].findOne({
-      where: {
-        refId: ticket,
-        gateway: PaymentGateway.DIGIPAY,
-      },
-    });
-
-    if (!payment) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+      return this.redirect(res, 'failed');
     }
 
     if (status !== 'success') {
-      payment.status = 'failed' as any;
+      const payment = await this.digipayService.findPaymentByRefId(ticket);
 
-      await this.digipayPaymentService['paymentRepo'].save(payment);
+      if (payment) {
+        await this.digipayService.failPayment(payment);
+        await this.ordersService.failOrderPayment(payment.orderId);
 
-      await this.ordersService.failOrderPayment(payment.orderId);
+        return this.redirect(res, 'failed', payment.orderId);
+      }
 
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
-      );
+      return this.redirect(res, 'failed');
     }
 
-    const result = await this.digipayPaymentService.verifyPayment(ticket);
+    const result = await this.digipayService.verifyPayment(ticket);
 
-    if (result.success) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=success&orderId=${result.orderId}`,
-      );
-    }
-
-    return res.redirect(
-      `${process.env.APP_URL}/payment/result?status=failed&orderId=${result.orderId ?? payment.orderId}`,
+    return this.redirect(
+      res,
+      result.success ? 'success' : 'failed',
+      result.orderId,
     );
   }
+
+  //==============================================================
+  // Tara
+  //==============================================================
 
   @Post('callback/tara')
-  async callbackTara(@Request() req, @Response() res) {
-    const params = req.body;
-
-    const token = params?.token;
-    const resultCode = params?.result;
+  async callbackTara(@Req() req, @Res() res) {
+    const { token, result } = req.body;
 
     if (!token) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+      return this.redirect(res, 'failed');
     }
 
-    const payment = await this.taraPaymentService['paymentRepo'].findOne({
-      where: {
-        refId: token,
-        gateway: PaymentGateway.TARA,
-      },
-    });
+    if (result !== '0') {
+      const payment = await this.taraService.findPaymentByRefId(token);
 
-    if (!payment) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed`,
-      );
+      if (payment) {
+        await this.taraService.failPayment(payment, result);
+        await this.ordersService.failOrderPayment(payment.orderId);
+
+        return this.redirect(res, 'failed', payment.orderId);
+      }
+
+      return this.redirect(res, 'failed');
     }
 
-    if (resultCode !== '0') {
-      payment.status = 'failed' as any;
-      payment.resCode = resultCode;
+    const verify = await this.taraService.verifyPayment(token);
 
-      await this.taraPaymentService['paymentRepo'].save(payment);
-
-      await this.ordersService.failOrderPayment(payment.orderId);
-
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=failed&orderId=${payment.orderId}`,
-      );
-    }
-
-    const verifyResult = await this.taraPaymentService.verifyPayment(token);
-
-    if (verifyResult.success) {
-      return res.redirect(
-        `${process.env.APP_URL}/payment/result?status=success&orderId=${verifyResult.orderId}`,
-      );
-    }
-
-    return res.redirect(
-      `${process.env.APP_URL}/payment/result?status=failed&orderId=${verifyResult.orderId ?? payment.orderId}`,
+    return this.redirect(
+      res,
+      verify.success ? 'success' : 'failed',
+      verify.orderId,
     );
   }
+
+  //==============================================================
 
   @Get('result')
   paymentResult(
     @Query('status') status: string,
     @Query('orderId') orderId: string,
   ) {
-    return { status, orderId };
+    return {
+      status,
+      orderId,
+    };
   }
 }

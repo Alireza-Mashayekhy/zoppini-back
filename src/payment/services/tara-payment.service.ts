@@ -221,4 +221,20 @@ export class TaraPaymentService {
       throw new BadRequestException('خطا در استعلام پرداخت');
     }
   }
+
+  async findPaymentByRefId(refId: string) {
+    return this.paymentRepo.findOne({
+      where: {
+        refId,
+        gateway: PaymentGateway.TARA,
+      },
+    });
+  }
+
+  async failPayment(payment: Payment, resCode: string) {
+    payment.status = PaymentStatus.FAILED;
+    payment.resCode = resCode;
+
+    return this.paymentRepo.save(payment);
+  }
 }

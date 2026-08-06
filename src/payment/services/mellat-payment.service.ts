@@ -193,4 +193,20 @@ export class MellatPaymentService {
       return { success: false, message: 'خطا در تأیید پرداخت' };
     }
   }
+
+  async findPaymentByRefId(refId: string) {
+    return this.paymentRepo.findOne({
+      where: {
+        refId,
+        gateway: PaymentGateway.MELLAT,
+      },
+    });
+  }
+
+  async failPayment(payment: Payment, resCode: string) {
+    payment.status = PaymentStatus.FAILED;
+    payment.resCode = resCode;
+
+    return this.paymentRepo.save(payment);
+  }
 }

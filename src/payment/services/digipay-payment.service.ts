@@ -276,4 +276,19 @@ export class DigipayPaymentService {
       };
     }
   }
+
+  async findPaymentByRefId(refId: string) {
+    return this.paymentRepo.findOne({
+      where: {
+        refId,
+        gateway: PaymentGateway.DIGIPAY,
+      },
+    });
+  }
+
+  async failPayment(payment: Payment) {
+    payment.status = PaymentStatus.FAILED;
+
+    return this.paymentRepo.save(payment);
+  }
 }
