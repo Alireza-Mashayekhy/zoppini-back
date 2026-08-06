@@ -24,7 +24,7 @@ export class PaymentController {
     status: 'success' | 'failed',
     orderId?: number | string,
   ) {
-    let url = `${process.env.APP_URL}/payment/result?status=${status}`;
+    let url = `${process.env.FRONT_URL}/checkout/payment/result?status=${status}`;
 
     if (orderId) {
       url += `&orderId=${orderId}`;
