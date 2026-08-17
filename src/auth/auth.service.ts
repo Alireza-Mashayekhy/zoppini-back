@@ -19,7 +19,6 @@ import { SendVerifyOtp } from './dto/verify-otp.dto';
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
-  c;
 
   constructor(
     private jwtService: JwtService,

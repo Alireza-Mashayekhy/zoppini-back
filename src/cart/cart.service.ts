@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { DiscountService } from 'src/discounts/discounts.service';
 import { Variant } from 'src/products/entities/variant.entity';
 import { Repository } from 'typeorm';
 
@@ -22,32 +23,41 @@ export class CartsService {
     private cartItemRepo: Repository<CartItem>,
     @InjectRepository(Variant)
     private variantRepo: Repository<Variant>,
+
+    private readonly discountService: DiscountService,
   ) {}
 
   // یافتن یا ایجاد سبد خرید (با userId یا guestId)
   async getOrCreateCart(userId?: number, guestId?: string): Promise<Cart> {
-    // لاگین شده
     if (userId) {
       let cart = await this.cartRepo.findOne({
-        where: { user: { id: userId } },
+        where: {
+          user: { id: userId },
+        },
         relations: {
           items: {
             variant: {
               color: true,
               size: true,
-              product: true,
+              product: {
+                categories: true,
+              },
             },
           },
         },
       });
+
       if (!cart) {
-        cart = this.cartRepo.create({ user: { id: userId } });
+        cart = this.cartRepo.create({
+          user: { id: userId },
+        });
+
         await this.cartRepo.save(cart);
       }
+
       return cart;
     }
 
-    // مهمان
     if (guestId) {
       let cart = await this.cartRepo.findOne({
         where: { guestId },
@@ -56,19 +66,22 @@ export class CartsService {
             variant: {
               color: true,
               size: true,
-              product: true,
+              product: {
+                categories: true,
+              },
             },
           },
         },
       });
+
       if (!cart) {
         cart = this.cartRepo.create({ guestId });
         await this.cartRepo.save(cart);
       }
+
       return cart;
     }
 
-    // اگر هیچکدام نباشد
     throw new BadRequestException('Either userId or guestId is required');
   }
 
@@ -82,17 +95,23 @@ export class CartsService {
             variant: {
               color: true,
               size: true,
-              product: true,
+              product: {
+                categories: true,
+              },
             },
           },
         },
       });
+
       if (!cart) {
-        // ایجاد سبد خرید جدید برای کاربر
-        cart = this.cartRepo.create({ user: { id: userId } });
+        cart = this.cartRepo.create({
+          user: { id: userId },
+        });
+
         await this.cartRepo.save(cart);
       }
-      return cart;
+
+      return this.applyDiscountsToCart(cart);
     }
 
     if (guestId) {
@@ -103,16 +122,20 @@ export class CartsService {
             variant: {
               color: true,
               size: true,
-              product: true,
+              product: {
+                categories: true,
+              },
             },
           },
         },
       });
+
       if (!cart) {
         cart = this.cartRepo.create({ guestId });
         await this.cartRepo.save(cart);
       }
-      return cart;
+
+      return this.applyDiscountsToCart(cart);
     }
 
     throw new BadRequestException('Either userId or guestId is required');
@@ -131,7 +154,9 @@ export class CartsService {
       relations: {
         color: true,
         size: true,
-        product: true,
+        product: {
+          categories: true,
+        },
       },
     });
 
@@ -258,5 +283,77 @@ export class CartsService {
 
     await this.cartRepo.save(userCart);
     await this.cartRepo.remove(guestCart);
+  }
+
+  private async applyDiscountsToCart(cart: Cart) {
+    let originalPrice = 0;
+    let discountPrice = 0;
+    let finalPrice = 0;
+
+    for (const item of cart.items ?? []) {
+      const variant = item.variant;
+
+      if (!variant?.product) {
+        continue;
+      }
+
+      const itemOriginalPrice = Number(variant.price);
+      const quantity = item.quantity;
+
+      const itemOriginalTotal = itemOriginalPrice * quantity;
+
+      const categoryIds =
+        variant.product.categories?.map(category => category.id) ?? [];
+
+      const result = await this.discountService.getBestDiscountForProduct(
+        variant.product.id,
+        categoryIds,
+        itemOriginalPrice,
+      );
+
+      let itemDiscountPrice = 0;
+      let itemFinalPrice = itemOriginalPrice;
+
+      if (result) {
+        itemDiscountPrice = Number(result.discountAmount);
+        itemFinalPrice = Number(result.finalPrice);
+
+        (variant as any).discount = {
+          id: result.discount.id,
+          code: result.discount.code,
+          type: result.discount.type,
+          value: Number(result.discount.value),
+          maxDiscountAmount:
+            result.discount.maxDiscountAmount != null
+              ? Number(result.discount.maxDiscountAmount)
+              : null,
+          discountAmount: itemDiscountPrice,
+        };
+      } else {
+        (variant as any).discount = null;
+      }
+
+      const itemFinalTotal = itemFinalPrice * quantity;
+      const itemDiscountTotal = itemDiscountPrice * quantity;
+
+      // برای نمایش قیمت هر محصول
+      (variant as any).originalPrice = itemOriginalPrice;
+      (variant as any).discountedPrice = itemFinalPrice;
+
+      // جمع کل سبد
+      originalPrice += itemOriginalTotal;
+      discountPrice += itemDiscountTotal;
+      finalPrice += itemFinalTotal;
+    }
+
+    return {
+      ...cart,
+
+      pricing: {
+        originalPrice,
+        discountPrice,
+        finalPrice,
+      },
+    };
   }
 }

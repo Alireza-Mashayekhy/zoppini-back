@@ -10,6 +10,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { CategoriesService } from 'src/categories/categories.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
+import { DiscountService } from 'src/discounts/discounts.service';
+import { Discount, DiscountType } from 'src/discounts/entities/discount.entity';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { DataSource, In, QueryRunner, Repository } from 'typeorm';
@@ -43,6 +45,11 @@ export class ProductsService {
     private sizeRepo: Repository<Size>,
     @InjectRepository(ProductColorImage)
     private colorImageRepo: Repository<ProductColorImage>,
+    @InjectRepository(Discount)
+    private discountRepo: Repository<Discount>,
+
+    @Inject(forwardRef(() => DiscountService))
+    private readonly discountsService: DiscountService,
 
     private dataSource: DataSource,
     private readonly categoriesService: CategoriesService,
@@ -409,11 +416,13 @@ export class ProductsService {
 
     const [data, total] = await qb.getManyAndCount();
 
+    await this.attachDiscounts(data);
+
     return {
       data,
       pagination: {
-        page: page,
-        limit: limit,
+        page,
+        limit,
         total,
         totalPages: Math.ceil(total / limit),
       },
@@ -491,54 +500,38 @@ export class ProductsService {
   }
 
   async findOne(slug: string) {
-    let product = await this.productRepo.findOne({
-      where: { slug },
-      relations: {
+    const relations = {
+      variants: {
+        color: true,
+        size: true,
+      },
+      categories: true,
+      colorImages: {
+        color: true,
+      },
+      suggestedProducts: true,
+      sameColorProducts: {
+        colorImages: {
+          color: true,
+        },
         variants: {
           color: true,
           size: true,
         },
-        categories: true,
-        colorImages: {
-          color: true,
-        },
-        suggestedProducts: true,
-        sameColorProducts: {
-          colorImages: {
-            color: true,
-          },
-          variants: {
-            color: true,
-            size: true,
-          },
-        },
       },
+    };
+
+    let product = await this.productRepo.findOne({
+      where: { slug },
+      relations,
     });
 
     if (!product) {
       const encodedSlug = encodeURIComponent(slug);
+
       product = await this.productRepo.findOne({
         where: { slug: encodedSlug },
-        relations: {
-          variants: {
-            color: true,
-            size: true,
-          },
-          categories: true,
-          colorImages: {
-            color: true,
-          },
-          suggestedProducts: true,
-          sameColorProducts: {
-            colorImages: {
-              color: true,
-            },
-            variants: {
-              color: true,
-              size: true,
-            },
-          },
-        },
+        relations,
       });
     }
 
@@ -546,15 +539,59 @@ export class ProductsService {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
     }
 
-    // ========== مرتب‌سازی عکس‌های خود محصول ==========
-    if (product.colorImages && product.colorImages.length > 0) {
+    // =====================================================
+    // DISCOUNT
+    // =====================================================
+
+    const categoryIds = product.categories?.map(category => category.id) ?? [];
+
+    for (const variant of product.variants ?? []) {
+      const originalPrice = Number(variant.price);
+
+      const discountResult =
+        await this.discountsService.getBestDiscountForProduct(
+          product.id,
+          categoryIds,
+          originalPrice,
+        );
+
+      if (discountResult) {
+        const { discount, discountAmount, finalPrice } = discountResult;
+
+        (variant as any).originalPrice = originalPrice;
+
+        (variant as any).discountedPrice = finalPrice;
+
+        (variant as any).discountAmount = discountAmount;
+
+        (variant as any).discount = {
+          id: discount.id,
+          code: discount.code,
+          type: discount.type,
+          value: Number(discount.value),
+          maxDiscountAmount:
+            discount.maxDiscountAmount != null
+              ? Number(discount.maxDiscountAmount)
+              : null,
+        };
+      }
+    }
+
+    // =====================================================
+    // SORT PRODUCT IMAGES
+    // =====================================================
+
+    if (product.colorImages?.length) {
       product.colorImages.sort((a, b) => (a.order || 0) - (b.order || 0));
     }
 
-    // ========== مرتب‌سازی عکس‌های محصولات هم‌رنگ ==========
-    if (product.sameColorProducts && product.sameColorProducts.length > 0) {
+    // =====================================================
+    // SORT SAME COLOR PRODUCT IMAGES
+    // =====================================================
+
+    if (product.sameColorProducts?.length) {
       for (const sameProduct of product.sameColorProducts) {
-        if (sameProduct.colorImages && sameProduct.colorImages.length > 0) {
+        if (sameProduct.colorImages?.length) {
           sameProduct.colorImages.sort(
             (a, b) => (a.order || 0) - (b.order || 0),
           );
@@ -562,8 +599,13 @@ export class ProductsService {
       }
     }
 
+    // =====================================================
+    // RAHKARAN SYNC
+    // =====================================================
+
     try {
       await this.rahkaranService.updateProductStockAndPrice(product.id);
+
       this.logger.log(`✅ محصول ${product.id} با راهکاران همگام‌سازی شد.`);
     } catch (error) {
       this.logger.error(
@@ -572,17 +614,24 @@ export class ProductsService {
       );
     }
 
-    // دریافت محصولات مرتبط (هم‌دسته)
+    // =====================================================
+    // RELATED PRODUCTS
+    // =====================================================
+
     let relatedProducts: Product[] = [];
-    if (product.categories && product.categories.length > 0) {
-      const categoryIds = product.categories.map(cat => cat.id);
+
+    if (product.categories?.length) {
+      const categoryIds = product.categories.map(category => category.id);
+
       relatedProducts = await this.productRepo
         .createQueryBuilder('p')
         .leftJoin('p.categories', 'cat')
         .leftJoinAndSelect('p.variants', 'variant')
         .leftJoinAndSelect('variant.color', 'color')
         .leftJoinAndSelect('variant.size', 'size')
-        .where('cat.id IN (:...categoryIds)', { categoryIds })
+        .where('cat.id IN (:...categoryIds)', {
+          categoryIds,
+        })
         .andWhere('p.id != :productId', {
           productId: product.id,
         })
@@ -1053,5 +1102,264 @@ export class ProductsService {
       throw new NotFoundException(`سایز با شناسه ${id} یافت نشد`);
     }
     return this.sizeRepo.delete(id);
+  }
+
+  async getDiscountedProducts(query: QueryDto) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    const now = new Date();
+
+    const qb = this.productRepo
+      .createQueryBuilder('products')
+
+      .leftJoinAndSelect('products.variants', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('products.categories', 'category')
+      .leftJoinAndSelect('products.colorImages', 'colorImages')
+      .leftJoinAndSelect('colorImages.color', 'imageColor')
+
+      .where(
+        `
+        EXISTS (
+          SELECT 1
+          FROM discount_products dp
+          INNER JOIN discounts d
+            ON d.id = dp.discount_id
+          WHERE dp.product_id = products.id
+            AND d.isActive = :isActive
+            AND d.startsAt <= :now
+            AND d.expiresAt >= :now
+            AND NOT EXISTS (
+              SELECT 1
+              FROM discount_users du
+              WHERE du.discount_id = d.id
+            )
+        )
+  
+        OR
+  
+        EXISTS (
+          SELECT 1
+          FROM product_categories pc
+          INNER JOIN discount_categories dc
+            ON dc.category_id = pc.category_id
+          INNER JOIN discounts d2
+            ON d2.id = dc.discount_id
+          WHERE pc.product_id = products.id
+            AND d2.isActive = :isActive
+            AND d2.startsAt <= :now
+            AND d2.expiresAt >= :now
+            AND NOT EXISTS (
+              SELECT 1
+              FROM discount_users du2
+              WHERE du2.discount_id = d2.id
+            )
+        )
+  
+        OR
+  
+        EXISTS (
+          SELECT 1
+          FROM discounts d3
+          WHERE d3.isActive = :isActive
+            AND d3.startsAt <= :now
+            AND d3.expiresAt >= :now
+  
+            AND NOT EXISTS (
+              SELECT 1
+              FROM discount_products dp3
+              WHERE dp3.discount_id = d3.id
+            )
+  
+            AND NOT EXISTS (
+              SELECT 1
+              FROM discount_categories dc3
+              WHERE dc3.discount_id = d3.id
+            )
+  
+            AND NOT EXISTS (
+              SELECT 1
+              FROM discount_users du3
+              WHERE du3.discount_id = d3.id
+            )
+        )
+        `,
+        {
+          isActive: true,
+          now,
+        },
+      );
+
+    applySearch(qb, query.search, [
+      'products.title',
+      'products.slug',
+      'products.productCode',
+    ]);
+
+    const { skip, take } = getPagination(page, limit);
+
+    qb.skip(skip).take(take);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    await this.attachDiscounts(data);
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  private calculateDiscountedPrice(price: number, discount: Discount) {
+    let discountAmount = 0;
+
+    if (discount.type === DiscountType.PERCENTAGE) {
+      discountAmount = (price * Number(discount.value)) / 100;
+    }
+
+    if (discount.type === DiscountType.FIXED) {
+      discountAmount = Number(discount.value);
+    }
+
+    if (discount.maxDiscountAmount != null) {
+      discountAmount = Math.min(
+        discountAmount,
+        Number(discount.maxDiscountAmount),
+      );
+    }
+
+    discountAmount = Math.min(discountAmount, price);
+
+    return Math.max(0, price - discountAmount);
+  }
+
+  private async attachDiscounts(products: Product[]) {
+    if (!products.length) {
+      return products;
+    }
+
+    const now = new Date();
+
+    const discounts = await this.discountRepo
+      .createQueryBuilder('discount')
+      .leftJoinAndSelect('discount.products', 'discountProduct')
+      .leftJoinAndSelect('discount.categories', 'discountCategory')
+      .where('discount.isActive = :isActive', {
+        isActive: true,
+      })
+      .andWhere('discount.startsAt <= :now', { now })
+      .andWhere('discount.expiresAt >= :now', { now })
+
+      // تخفیف‌های user-specific
+      .andWhere(qb => {
+        const subQuery = qb
+          .subQuery()
+          .select('1')
+          .from('discount_users', 'du')
+          .where('du.discount_id = discount.id')
+          .getQuery();
+
+        return `NOT EXISTS ${subQuery}`;
+      })
+
+      .getMany();
+
+    for (const product of products) {
+      const categoryIds =
+        product.categories?.map(category => category.id) ?? [];
+
+      const variantPrices =
+        product.variants?.map(variant => Number(variant.price)) ?? [];
+
+      if (!variantPrices.length) {
+        (product as any).discount = null;
+        continue;
+      }
+
+      // کمترین قیمت variant را قیمت پایه محصول در نظر می‌گیریم
+      const originalPrice = Math.min(...variantPrices);
+
+      const applicableDiscounts = discounts.filter(discount => {
+        const discountProductIds = discount.products?.map(p => p.id) ?? [];
+
+        const discountCategoryIds = discount.categories?.map(c => c.id) ?? [];
+
+        // تخفیف عمومی
+        if (!discountProductIds.length && !discountCategoryIds.length) {
+          return true;
+        }
+
+        // مستقیم روی محصول
+        if (discountProductIds.includes(product.id)) {
+          return true;
+        }
+
+        // روی دسته‌بندی محصول
+        if (
+          discountCategoryIds.some(categoryId =>
+            categoryIds.includes(categoryId),
+          )
+        ) {
+          return true;
+        }
+
+        return false;
+      });
+
+      if (!applicableDiscounts.length) {
+        (product as any).discount = null;
+        continue;
+      }
+
+      let bestDiscount = applicableDiscounts[0];
+      let bestDiscountAmount = 0;
+
+      for (const discount of applicableDiscounts) {
+        let discountAmount = 0;
+
+        if (discount.type === DiscountType.PERCENTAGE) {
+          discountAmount = (originalPrice * Number(discount.value)) / 100;
+        } else {
+          discountAmount = Number(discount.value);
+        }
+
+        if (discount.maxDiscountAmount !== null) {
+          discountAmount = Math.min(
+            discountAmount,
+            Number(discount.maxDiscountAmount),
+          );
+        }
+
+        discountAmount = Math.min(discountAmount, originalPrice);
+
+        if (discountAmount > bestDiscountAmount) {
+          bestDiscountAmount = discountAmount;
+          bestDiscount = discount;
+        }
+      }
+
+      (product as any).discount = {
+        id: bestDiscount.id,
+        code: bestDiscount.code,
+        type: bestDiscount.type,
+        value: Number(bestDiscount.value),
+        maxDiscountAmount:
+          bestDiscount.maxDiscountAmount !== null
+            ? Number(bestDiscount.maxDiscountAmount)
+            : null,
+        discountAmount: bestDiscountAmount,
+        originalPrice,
+        finalPrice: originalPrice - bestDiscountAmount,
+      };
+    }
+
+    return products;
   }
 }

@@ -4,7 +4,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  Min,
 } from 'class-validator';
 
 export enum ShippingMethod {
@@ -23,9 +22,8 @@ export class CreateOrderDto {
   note?: string;
 
   @IsOptional()
-  @IsNumber()
-  @Min(0)
-  discount?: number;
+  @IsString()
+  discountCode?: string;
 
   @IsEnum(ShippingMethod)
   shippingMethod: ShippingMethod;

@@ -1,8 +1,6 @@
 // src/orders/orders.service.ts
 import {
   BadRequestException,
-  forwardRef,
-  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -10,16 +8,17 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
-import { getPagination, QueryDto } from 'src/common/query';
+import { applySearch, getPagination, QueryDto } from 'src/common/query';
+import { DiscountService } from 'src/discounts/discounts.service';
+import { Discount } from 'src/discounts/entities/discount.entity';
+import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
-import { SmsService } from 'src/sms/sms.service';
 import { User } from 'src/users/entities/user.entity';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
-import { OrderItem } from './entities/order-item';
 
 @Injectable()
 export class OrdersService {
@@ -27,15 +26,28 @@ export class OrdersService {
 
   constructor(
     @InjectRepository(Order)
-    private orderRepo: Repository<Order>,
-    @InjectRepository(OrderItem)
-    private orderItemRepo: Repository<OrderItem>,
+    private readonly orderRepo: Repository<Order>,
+
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+
+    @InjectRepository(Address)
+    private readonly addressRepo: Repository<Address>,
+
     @InjectRepository(Cart)
-    private cartRepo: Repository<Cart>,
-    private dataSource: DataSource,
-    private readonly smsService: SmsService,
-    @Inject(forwardRef(() => RahkaranService)) // ⬅️ این خط
+    private readonly cartRepo: Repository<Cart>,
+
+    @InjectRepository(Discount)
+    private readonly discountRepo: Repository<Discount>,
+
+    @InjectRepository(DiscountUsage)
+    private readonly discountUsageRepo: Repository<DiscountUsage>,
+
     private readonly rahkaranService: RahkaranService,
+
+    private readonly discountService: DiscountService,
+
+    private readonly dataSource: DataSource,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -48,17 +60,192 @@ export class OrdersService {
     return `${prefix}-${timestamp}-${random}`;
   }
 
-  // ایجاد سفارش از سبد خرید
-  async createOrder(userId: number, dto: CreateOrderDto): Promise<Order> {
+  async createOrder(userId: number, dto: CreateOrderDto) {
+    // =====================================================
+    // 1. User
+    // =====================================================
+
+    const user = await this.userRepo.findOne({
+      where: {
+        id: userId,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('کاربر یافت نشد.');
+    }
+
+    // =====================================================
+    // 2. Address
+    // =====================================================
+
+    const address = await this.addressRepo.findOne({
+      where: {
+        id: dto.addressId,
+        user: {
+          id: userId,
+        },
+      },
+    });
+
+    if (!address) {
+      throw new BadRequestException('آدرس انتخاب‌شده معتبر نیست.');
+    }
+
+    // =====================================================
+    // 3. Cart
+    // =====================================================
+
+    const cart = await this.cartRepo.findOne({
+      where: {
+        user: {
+          id: userId,
+        },
+      },
+      relations: {
+        items: {
+          variant: {
+            product: {
+              categories: true,
+            },
+          },
+        },
+      },
+    });
+
+    if (!cart || !cart.items?.length) {
+      throw new BadRequestException('سبد خرید خالی است.');
+    }
+
+    // =====================================================
+    // 4. محاسبه قیمت محصولات
+    // =====================================================
+
+    let totalPrice = 0;
+
+    const orderItems = cart.items.map(item => {
+      const price = Number(item.variant.price);
+
+      const itemTotal = price * item.quantity;
+
+      totalPrice += itemTotal;
+
+      return {
+        variant: item.variant,
+        quantity: item.quantity,
+        price,
+        totalPrice: itemTotal,
+      };
+    });
+
+    // =====================================================
+    // 5. هزینه ارسال
+    // =====================================================
+
+    const shippingCost = this.calculateShippingCost(dto.shippingMethod);
+
+    // =====================================================
+    // 6. تخفیف
+    // =====================================================
+
+    const discountItems = cart.items.map(item => ({
+      productId: item.variant.product.id,
+      quantity: item.quantity,
+      price: Number(item.variant.price),
+      categoryIds:
+        item.variant.product.categories?.map(category => category.id) ?? [],
+    }));
+
+    let discountAmount = 0;
+    let discountId: number | null = null;
+    let discountCode: string | null = null;
+
+    if (dto.discountCode?.trim()) {
+      const result = await this.discountService.validateDiscount(
+        dto.discountCode.trim(),
+        userId,
+        totalPrice,
+        discountItems,
+      );
+
+      discountAmount = Number(result.discountAmount);
+
+      discountId = result.discount.id;
+
+      discountCode = result.discount.code;
+    }
+
+    // =====================================================
+    // 7. مبلغ نهایی
+    // =====================================================
+
+    const finalPrice = Math.max(
+      0,
+      totalPrice + Number(shippingCost) - discountAmount,
+    );
+
+    // =====================================================
+    // 8. ساخت Order
+    // =====================================================
+
+    const order = this.orderRepo.create({
+      orderNumber: this.generateOrderNumber(),
+
+      user,
+
+      items: orderItems,
+
+      totalPrice,
+
+      shippingCost: Number(shippingCost),
+
+      discount: discountAmount,
+
+      finalPrice,
+
+      discountId,
+
+      discountCode,
+
+      addressId: address.id,
+
+      address,
+
+      note: dto.note ?? null,
+
+      shippingMethod: dto.shippingMethod,
+
+      status: OrderStatus.PENDING,
+    });
+
+    // =====================================================
+    // 9. ذخیره سفارش
+    // =====================================================
+
+    const savedOrder = await this.orderRepo.save(order);
+
+    // =====================================================
+    // 10. سبد خرید فعلاً پاک نمی‌شود
+    // =====================================================
+
+    // این کار باید بعد از پرداخت موفق انجام شود.
+    //
+    // await this.cartService.clearCart(userId);
+
+    return savedOrder;
+  }
+
+  async confirmOrderPayment(orderId: number): Promise<Order> {
     const queryRunner = this.dataSource.createQueryRunner();
+
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      // ۱. دریافت سبد خرید
-      const cart = await queryRunner.manager.findOne(Cart, {
-        where: { user: { id: userId } },
+      const order = await queryRunner.manager.findOne(Order, {
+        where: { id: orderId },
         relations: {
+          user: true,
           items: {
             variant: {
               product: true,
@@ -69,154 +256,132 @@ export class OrdersService {
         },
       });
 
-      const user = await queryRunner.manager.findOne(User, {
-        where: { id: userId },
-      });
-      if (!user) throw new NotFoundException('کاربر یافت نشد');
-      if (!cart) throw new NotFoundException('سبد خرید یافت نشد');
-      if (cart.items.length === 0)
-        throw new BadRequestException('سبد خرید خالی است');
-
-      // ۲. دریافت آدرس
-      const address = await queryRunner.manager.findOne(Address, {
-        where: { id: dto.addressId, userId },
-        relations: { city: true, province: true },
-      });
-      if (!address) throw new NotFoundException('آدرس یافت نشد');
-
-      // ۳. محاسبه قیمت‌ها و ایجاد آیتم‌های سفارش
-      let totalPrice = 0;
-      const orderItems: OrderItem[] = [];
-      for (const cartItem of cart.items) {
-        const itemTotal = cartItem.variant.price * cartItem.quantity;
-        totalPrice += itemTotal;
-        const orderItem = queryRunner.manager.create(OrderItem, {
-          variant: cartItem.variant,
-          quantity: cartItem.quantity,
-          price: cartItem.variant.price,
-          totalPrice: itemTotal,
-        });
-        orderItems.push(orderItem);
+      if (!order) {
+        throw new NotFoundException('سفارش یافت نشد');
       }
 
-      // ۴. محاسبه هزینه ارسال
-      const isTehran = address.city.name === 'تهران';
-      let shippingCost = 0;
-      switch (dto.shippingMethod) {
-        case ShippingMethod.POST:
-          shippingCost = 170000;
-          break;
-        case ShippingMethod.COURIER:
-          if (!isTehran)
-            throw new BadRequestException('پیک فقط در تهران قابل انتخاب است');
-          shippingCost = 0;
-          break;
-        case ShippingMethod.TIBAX:
-          if (!isTehran)
-            throw new BadRequestException(
-              'تیباکس فقط در تهران قابل انتخاب است',
-            );
-          shippingCost = 0;
-          break;
-        default:
-          throw new BadRequestException('روش ارسال نامعتبر');
+      // بسیار مهم برای callback تکراری
+      if (order.status !== OrderStatus.PENDING) {
+        throw new BadRequestException('فقط سفارشات در انتظار قابل تأیید هستند');
       }
 
-      const discount = dto.discount || 0;
-      const finalPrice = totalPrice + shippingCost - discount;
-      if (finalPrice < 0)
-        throw new BadRequestException('قیمت نهایی نمی‌تواند منفی باشد');
+      const userId = order.user.id;
 
-      // ۵. ایجاد سفارش (بدون تغییر موجودی و بدون خالی کردن سبد)
-      const order = queryRunner.manager.create(Order, {
-        orderNumber: this.generateOrderNumber(),
-        user: { id: userId },
-        addressId: dto.addressId,
-        shippingMethod: dto.shippingMethod,
-        totalPrice,
-        shippingCost,
-        discount,
-        finalPrice,
-        status: OrderStatus.PENDING, // همچنان در انتظار پرداخت
-        note: dto.note,
-        items: orderItems,
-      });
-      await queryRunner.manager.save(order);
+      // =========================================================
+      // 1. کاهش موجودی
+      // =========================================================
 
-      // (اختیاری) sync با راهکاران را می‌توانیم بعد از پرداخت موفق انجام دهیم
-      // فعلاً آن را کامنت می‌کنیم یا به متد confirmOrderPayment منتقل می‌کنیم
-
-      await queryRunner.commitTransaction();
-      return this.findOne(order.id, userId);
-    } catch (error) {
-      await queryRunner.rollbackTransaction();
-      throw error;
-    } finally {
-      await queryRunner.release();
-    }
-  }
-
-  async confirmOrderPayment(orderId: number): Promise<Order> {
-    const order = await this.orderRepo.findOne({
-      where: { id: orderId },
-      relations: {
-        user: true,
-        items: {
-          variant: {
-            product: true,
-            color: true,
-            size: true,
-          },
-        },
-      },
-    });
-    if (!order) throw new NotFoundException('سفارش یافت نشد');
-    if (order.status !== OrderStatus.PENDING) {
-      throw new BadRequestException('فقط سفارشات در انتظار قابل تأیید هستند');
-    }
-
-    const userId = order.user.id;
-
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      // کاهش موجودی
       for (const item of order.items) {
-        // استفاده از کلاس Variant به‌جای رشته
         const variant = await queryRunner.manager.findOne(Variant, {
-          where: { id: item.variant.id },
+          where: {
+            id: item.variant.id,
+          },
+          relations: {
+            product: true,
+          },
         });
+
         if (!variant) {
           throw new NotFoundException(`واریانت ${item.variant.id} یافت نشد`);
         }
+
         if (variant.stock < item.quantity) {
           throw new BadRequestException(
-            `موجودی کافی نیست برای ${item.variant.product?.title || 'محصول'}`,
+            `موجودی کافی نیست برای ${variant.product?.title || 'محصول'}`,
           );
         }
+
         await queryRunner.manager.update(
           Variant,
-          { id: item.variant.id },
-          { stock: () => `stock - ${item.quantity}` },
+          { id: variant.id },
+          {
+            stock: () => `stock - ${item.quantity}`,
+          },
         );
       }
 
-      // خالی کردن سبد خرید
+      // =========================================================
+      // 2. ثبت مصرف کد تخفیف
+      // =========================================================
+
+      if (order.discountCode) {
+        const discount = await queryRunner.manager.findOne(Discount, {
+          where: {
+            code: order.discountCode,
+          },
+        });
+
+        if (!discount) {
+          throw new BadRequestException('کد تخفیف سفارش یافت نشد');
+        }
+
+        // بررسی اینکه این کاربر قبلاً این کد را مصرف نکرده
+        const existingUsage = await queryRunner.manager.findOne(DiscountUsage, {
+          where: {
+            discount: {
+              id: discount.id,
+            },
+            user: {
+              id: userId,
+            },
+          },
+        });
+
+        if (existingUsage) {
+          throw new BadRequestException(
+            'این کد تخفیف قبلاً توسط کاربر استفاده شده است',
+          );
+        }
+
+        const usage = queryRunner.manager.create(DiscountUsage, {
+          discount,
+          user: order.user,
+          order,
+        });
+
+        await queryRunner.manager.save(DiscountUsage, usage);
+
+        await queryRunner.manager.save(Discount, discount);
+      }
+
+      // =========================================================
+      // 3. خالی کردن سبد خرید
+      // =========================================================
+
       const cart = await queryRunner.manager.findOne(Cart, {
-        where: { user: { id: userId } },
+        where: {
+          user: {
+            id: userId,
+          },
+        },
       });
+
       if (cart) {
         await queryRunner.manager.delete('cart_item', {
-          cart: { id: cart.id },
+          cart: {
+            id: cart.id,
+          },
         });
       }
 
-      order.status = OrderStatus.PAID;
-      await queryRunner.manager.save(order);
+      // =========================================================
+      // 4. تغییر وضعیت سفارش
+      // =========================================================
 
-      // (اختیاری) همگام‌سازی با راهکاران
+      order.status = OrderStatus.PAID;
+
+      await queryRunner.manager.save(Order, order);
+
+      // =========================================================
+      // 5. Commit
+      // =========================================================
+
+      await queryRunner.commitTransaction();
+
+      // =========================================================
+      // 6. Sync با راهکاران
+      // =========================================================
+
       this.rahkaranService
         .syncOrderToRahkaran(order.id)
         .then(rahkaranOrderId => {
@@ -231,7 +396,6 @@ export class OrdersService {
           );
         });
 
-      await queryRunner.commitTransaction();
       return this.findOne(order.id);
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -353,14 +517,6 @@ export class OrdersService {
     await queryRunner.startTransaction();
 
     try {
-      for (const item of order.items) {
-        await queryRunner.manager.update(
-          'variant',
-          { id: item.variant.id },
-          { stock: () => `stock + ${item.quantity}` },
-        );
-      }
-
       order.status = OrderStatus.CANCELLED;
       await queryRunner.manager.save(order);
 
@@ -406,9 +562,62 @@ export class OrdersService {
     });
   }
 
-  async findAllForAdmin(): Promise<Order[]> {
-    return this.orderRepo.find({
+  async findAllForAdmin(query: QueryDto): Promise<{
+    data: Order[];
+    pagination: any;
+  }> {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? 10;
+
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('items.variant', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('variant.product', 'product')
+      .leftJoinAndSelect('order.user', 'user')
+      .orderBy('order.createdAt', 'DESC');
+
+    applySearch(qb, query.search, [
+      'order.orderNumber',
+      'user.fullName',
+      'user.phone',
+      'order.status',
+    ]);
+
+    // =========================
+    // Pagination
+    // =========================
+
+    const { skip, take } = getPagination(page, limit);
+
+    qb.skip(skip).take(take);
+
+    const [data, total] = await qb.getManyAndCount();
+
+    return {
+      data,
+
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  // دریافت یک سفارش بدون فیلتر کاربر - برای ادمین
+  async findOneForAdmin(id: number): Promise<Order> {
+    const order = await this.orderRepo.findOne({
+      where: { id },
       relations: {
+        user: true,
+        address: {
+          city: true,
+          province: true,
+        },
         items: {
           variant: {
             color: true,
@@ -416,31 +625,14 @@ export class OrdersService {
             product: true,
           },
         },
-        user: true,
       },
-      order: { createdAt: 'DESC' },
     });
-  }
 
-  // دریافت یک سفارش بدون فیلتر کاربر - برای ادمین
-  async findOneForAdmin(id: number): Promise<Order> {
-    return this.orderRepo
-      .findOneOrFail({
-        where: { id },
-        relations: {
-          items: {
-            variant: {
-              color: true,
-              size: true,
-              product: true,
-            },
-          },
-          user: true,
-        },
-      })
-      .catch(() => {
-        throw new NotFoundException('سفارش یافت نشد');
-      });
+    if (!order) {
+      throw new NotFoundException('سفارش یافت نشد');
+    }
+
+    return order;
   }
 
   // لغو سفارش توسط ادمین (با ثبت دلیل)
@@ -457,14 +649,6 @@ export class OrdersService {
     await queryRunner.startTransaction();
 
     try {
-      for (const item of order.items) {
-        await queryRunner.manager.update(
-          'variant',
-          { id: item.variant.id },
-          { stock: () => `stock + ${item.quantity}` },
-        );
-      }
-
       order.status = OrderStatus.CANCELLED;
       // می‌توانید دلیل لغو را در فیلدی مثل `note` ذخیره کنید
       if (reason) {
@@ -481,6 +665,22 @@ export class OrdersService {
       throw error;
     } finally {
       await queryRunner.release();
+    }
+  }
+
+  private calculateShippingCost(shippingMethod: ShippingMethod): number {
+    switch (shippingMethod) {
+      case ShippingMethod.POST:
+        return 170000;
+
+      case ShippingMethod.COURIER:
+        return 100000;
+
+      case ShippingMethod.TIBAX:
+        return 120000;
+
+      default:
+        return 0;
     }
   }
 }

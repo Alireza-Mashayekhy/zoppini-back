@@ -1,4 +1,5 @@
 // src/orders/entities/order.entity.ts
+import { Address } from 'src/address/entities/address.entity';
 import { User } from 'src/users/entities/user.entity';
 import {
   Column,
@@ -46,23 +47,38 @@ export class Order {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   discount: number;
 
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+  })
+  discountCode: string | null;
+
+  @Column({
+    type: 'int',
+    nullable: true,
+  })
+  discountId: number | null;
+
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   finalPrice: number;
 
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 
-  @Column({ nullable: true })
+  @Column({ name: 'address_id', nullable: true })
   addressId: number;
 
-  @Column({ nullable: true })
-  shippingAddress: string;
+  @ManyToOne(() => Address, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'address_id' })
+  address: Address;
 
-  @Column({ nullable: true })
-  phone: string;
-
-  @Column({ nullable: true })
-  note: string;
+  @Column({
+    type: 'varchar',
+    length: 500,
+    nullable: true,
+  })
+  note: string | null;
 
   @Column({ type: 'enum', enum: ShippingMethod, nullable: true })
   shippingMethod: ShippingMethod;

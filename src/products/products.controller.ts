@@ -33,6 +33,11 @@ export class ProductsController {
     return this.productsService.allSizes();
   }
 
+  @Get('/discounted')
+  findDiscounted(@Query() query: QueryDto) {
+    return this.productsService.getDiscountedProducts(query);
+  }
+
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findOne(slug);
