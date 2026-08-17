@@ -35,7 +35,7 @@ import { FeaturedService } from './featured.service';
 import { ProductsService } from './products.service';
 
 @UseGuards(AuthGuard, RolesGuard)
-@Roles(Role.Admin)
+@Roles(Role.Admin, Role.Seo)
 @Controller('admin/products')
 export class AdmiProductsController {
   constructor(

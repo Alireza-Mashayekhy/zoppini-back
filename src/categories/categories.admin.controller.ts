@@ -25,7 +25,7 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 
 @UseGuards(AuthGuard, RolesGuard)
-@Roles(Role.Admin)
+@Roles(Role.Admin, Role.Seo)
 @Controller('admin/categories')
 export class CategoriesAdminController {
   constructor(private readonly categoriesService: CategoriesService) {}

@@ -24,7 +24,7 @@ import { CreateBlogPostDto } from './dto/create-blog-post.dto';
 import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
 
 @UseGuards(AuthGuard, RolesGuard)
-@Roles(Role.Admin)
+@Roles(Role.Admin, Role.Seo)
 @Controller('admin/blog')
 export class BlogAdminController {
   constructor(private readonly blogService: BlogService) {}
