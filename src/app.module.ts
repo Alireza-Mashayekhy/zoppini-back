@@ -15,6 +15,8 @@ import { CartsModule } from './cart/cart.module';
 import { CategoriesModule } from './categories/categories.module';
 import { ClubModule } from './club/club.module';
 import { TypeOrmConfigService } from './common/config/typeorm.config';
+import { ContactModule } from './contact/contact.module';
+import { DiscountsModule } from './discounts/discounts.module';
 import { FilesModule } from './files/files.module';
 import { LocationsModule } from './locations/locations.module';
 import { OrdersModule } from './order/order.module';
@@ -27,7 +29,6 @@ import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
-import { DiscountsModule } from './discounts/discounts.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { DiscountsModule } from './discounts/discounts.module';
     RahkaranModule,
     PaymentModule,
     DiscountsModule,
+    ContactModule,
   ],
   controllers: [AppController],
   providers: [

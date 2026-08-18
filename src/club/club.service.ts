@@ -12,9 +12,8 @@ export class ClubService {
   constructor(private readonly httpService: HttpService) {}
 
   private async getAccessToken(): Promise<string> {
-    // اگر توکن معتبر است و منقضی نشده، آن را برگردان (با اطمینان از اینکه null نیست)
     if (this.accessToken && this.tokenExpiry && new Date() < this.tokenExpiry) {
-      return this.accessToken; // اینجا accessToken حتماً string است
+      return this.accessToken;
     }
 
     try {
@@ -42,7 +41,7 @@ export class ClubService {
       this.accessToken = token;
       this.tokenExpiry = new Date(Date.now() + 3600 * 1000);
       this.logger.log('✅ توکن باشگاه مشتریان دریافت شد');
-      return this.accessToken; // اینجا حتماً string است
+      return this.accessToken;
     } catch (error) {
       this.logger.error('❌ خطا در دریافت توکن باشگاه:', error.message);
       throw new Error('خطا در ارتباط با باشگاه مشتریان');
