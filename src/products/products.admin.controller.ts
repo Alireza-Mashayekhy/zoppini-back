@@ -5,6 +5,7 @@ import {
   Delete,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -20,18 +21,19 @@ import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { QueryDto } from 'src/common/query';
+import { RahkaranProductSyncService } from 'src/rahkaran/rahkaran-product-sync.service';
 
 import {
   AddColorDto,
   AddSizeDto,
   CreateProductDto,
 } from './dto/create-product.dto';
+import { RahkaranProductsQueryDto } from './dto/rahkaran-products-query.dto';
 import { UpdateColorDto } from './dto/update-color.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSameColorProductsDto } from './dto/update-same-color-products.dto';
 import { UpdateSizeDto } from './dto/update-size.dto';
 import { UpdateSuggestedProductsDto } from './dto/update-suggested-products.dto';
-import { FeaturedService } from './featured.service';
 import { ProductsService } from './products.service';
 
 @UseGuards(AuthGuard, RolesGuard)
@@ -40,7 +42,7 @@ import { ProductsService } from './products.service';
 export class AdmiProductsController {
   constructor(
     private readonly productsService: ProductsService,
-    private readonly featuredService: FeaturedService,
+    private readonly rahkaranProductSyncService: RahkaranProductSyncService,
   ) {}
 
   @Post()
@@ -176,5 +178,39 @@ export class AdmiProductsController {
   @Delete('/size/:id')
   deleteSize(@Param('id') id: number) {
     return this.productsService.deleteSize(id);
+  }
+
+  @Get('rahkaran/search')
+  async searchRahkaranProducts(@Query() query: RahkaranProductsQueryDto) {
+    return this.productsService.searchRahkaranProducts(
+      query.search ?? '',
+      query.page ?? 1,
+      query.count ?? 20,
+    );
+  }
+
+  @Get('rahkaran/barcode/:barcode')
+  async getRahkaranProductByBarcode(@Param('barcode') barcode: string) {
+    return this.productsService.getRahkaranProductByBarcode(barcode);
+  }
+
+  @Post('sync-rahkaran')
+  syncAllProductsWithRahkaran() {
+    // عمداً await نمی‌کنیم
+    void this.productsService.syncAllProductsWithRahkaran();
+
+    return {
+      message: 'همگام‌سازی تمام محصولات با راهکاران در پس‌زمینه شروع شد.',
+    };
+  }
+
+  @Post(':id/sync-rahkaran')
+  async syncProductWithRahkaran(@Param('id', ParseIntPipe) id: number) {
+    const variants = await this.productsService.syncProductWithRahkaran(id);
+
+    return {
+      message: 'محصول با موفقیت با راهکاران همگام شد.',
+      updatedVariants: variants,
+    };
   }
 }

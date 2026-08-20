@@ -1,519 +1,1146 @@
 // src/rahkaran/rahkaran.service.ts
+
 import { HttpService } from '@nestjs/axios';
 import {
   BadRequestException,
-  forwardRef,
-  Inject,
   Injectable,
   Logger,
-  NotFoundException,
+  OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import dayjs from 'dayjs';
+import { AxiosError, AxiosRequestConfig } from 'axios';
+import { constants, createPublicKey, publicEncrypt } from 'crypto';
 import { firstValueFrom } from 'rxjs';
-import { Repository } from 'typeorm';
+import { UsersService } from 'src/users/users.service';
 
-import { OrdersService } from '../order/order.service';
-import { Color } from '../products/entities/product-color.entity';
-import { Size } from '../products/entities/product-size.entity';
-import { ProductsService } from '../products/products.service';
-import { UsersService } from '../users/users.service';
+interface RahkaranSession {
+  id: string;
+  rsa: {
+    M: string;
+    E: string;
+  };
+}
+
+interface CashRegisterInfo {
+  cashierId: number;
+  userId: number;
+  cashRegisterId: number;
+  cashierTitle: string;
+  cashRegisterTitle: string;
+  retailSessionId: number;
+  sessionNumber: string;
+  retailInteriorSectionId: number | null;
+  retailInteriorSectionTitle: string;
+  retailInteriorSectionType: number;
+  hasSupervisor: boolean;
+  retailShopID: number;
+  kioskIP: string | null;
+}
+
+interface RahkaranLoginState {
+  sessionId: string;
+  cookie: string;
+  cashRegister: CashRegisterInfo;
+  authenticatedAt: Date;
+  lastTickAt: Date | null;
+}
+
+export interface RahkaranRetailProduct {
+  productId: number;
+  productNumber: string;
+  productName: string;
+  unitRef: number;
+  RetailUnitRef: number;
+  unitName: string;
+  retailUnitName: string;
+  fee: number;
+  partId: number;
+  hasToppings: boolean;
+}
+
+interface RahkaranResponse<T> {
+  result: T;
+  metadata: {
+    isSuccessfull: boolean;
+    errorMessage: string | null;
+  };
+}
+
+interface RahkaranRemainingQuantity {
+  StoreID: number;
+  StoreName: string;
+  RemainingQuantity: number | null;
+  RetailReserveQuantity: number | null;
+  InventoryReserveQuantity: number | null;
+  InventoryPhysicalQuantity: number | null;
+  AllowNegativeSales: boolean;
+  MaxNegativeSales: number | null;
+  AllowNegativeReserves: boolean;
+  MaxNegativeReserves: number | null;
+}
+
+export interface CreateRahkaranInvoiceItem {
+  productId: number;
+  unitId: number;
+  quantity: number;
+  fee: number;
+  price: number;
+}
+
+export interface CreateRahkaranInvoiceInput {
+  customerId: number;
+  items: CreateRahkaranInvoiceItem[];
+
+  /**
+   * در صورت نیاز بعداً از تنظیمات/DB قابل تغییر است.
+   */
+  inventoryId?: number;
+  settlementPolicyId?: number;
+  documentPatternId?: number;
+  salesAgentId?: number | null;
+
+  /**
+   * مبلغ دریافتی.
+   */
+  receiptAmount: number;
+
+  description?: string;
+}
+
+export interface RahkaranInvoiceResponse {
+  id?: number;
+  invoiceId?: number;
+  number?: string;
+  document?: any;
+  [key: string]: any;
+}
 
 @Injectable()
-export class RahkaranService implements OnModuleInit {
+export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RahkaranService.name);
+
   private readonly baseUrl: string;
-  private authCookie: string = '';
-  private isAuthenticated = false;
-  private readonly defaultStoreId = 1;
-  private readonly defaultShopId = 1;
-  private readonly loyaltyPatternId = 2; // شناسه طرح وفاداری در راهکاران
+  private readonly username: string;
+  private readonly password: string;
+  private readonly machineName: string;
+
+  private readonly autoLogin: boolean;
+  private readonly tickIntervalMs: number;
+
+  private state: RahkaranLoginState | null = null;
+
+  private tickTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * جلوگیری از اینکه همزمان چند login به راهکاران انجام شود.
+   */
+  private loginPromise: Promise<void> | null = null;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
     private readonly usersService: UsersService,
-    @Inject(forwardRef(() => ProductsService))
-    private readonly productsService: ProductsService,
-    @Inject(forwardRef(() => OrdersService))
-    private readonly ordersService: OrdersService,
-    @InjectRepository(Color)
-    private colorRepo: Repository<Color>,
-    @InjectRepository(Size)
-    private sizeRepo: Repository<Size>,
   ) {
     this.baseUrl =
-      this.configService.get('RAHKARAN_BASE_URL') || 'http://192.168.100.100';
+      this.configService.get<string>('RAHKARAN_BASE_URL')?.replace(/\/$/, '') ||
+      '';
+
+    this.username = this.configService.get<string>('RAHKARAN_USERNAME') || '';
+
+    this.password = this.configService.get<string>('RAHKARAN_PASSWORD') || '';
+
+    this.machineName =
+      this.configService.get<string>('RAHKARAN_MACHINE_NAME') || '';
+
+    this.autoLogin =
+      this.configService.get<string>('RAHKARAN_AUTO_LOGIN') !== 'false';
+
+    this.tickIntervalMs = Number(
+      this.configService.get<string>('RAHKARAN_TICK_INTERVAL_MS') || 300000,
+    );
+
+    if (!this.baseUrl) {
+      this.logger.warn('RAHKARAN_BASE_URL تنظیم نشده است.');
+    }
   }
 
-  // ============================
-  // 🔐 احراز هویت (اجرای خودکار در شروع)
-  // ============================
-  async onModuleInit() {
-    const username = this.configService.get('RAHKARAN_USERNAME');
-    const password = this.configService.get('RAHKARAN_PASSWORD');
-    const machineName = this.configService.get('RAHKARAN_MACHINE_NAME');
+  // ============================================================
+  // Lifecycle
+  // ============================================================
 
-    if (!username || !password || !machineName) {
-      this.logger.warn('⚠️ اطلاعات احراز هویت راهکاران تنظیم نشده است.');
+  async onModuleInit(): Promise<void> {
+    if (!this.autoLogin) {
+      this.logger.log('Rahkaran auto login غیرفعال است.');
+
+      return;
+    }
+
+    if (!this.username || !this.password || !this.machineName) {
+      this.logger.warn('اطلاعات Rahkaran کامل نیست. Auto login انجام نشد.');
+
       return;
     }
 
     try {
-      await this.authenticate(username, password);
-      await this.cashierLogin(machineName);
-      this.logger.log('✅ احراز هویت راهکاران با موفقیت انجام شد.');
+      await this.login();
+
+      this.startTickTimer();
+
+      this.logger.log('✅ اتصال به راهکاران با موفقیت برقرار شد.');
     } catch (error) {
-      this.logger.error('❌ خطا در احراز هویت راهکاران', error.message);
+      this.logger.error(
+        '❌ اتصال اولیه به راهکاران ناموفق بود.',
+        this.getErrorMessage(error),
+      );
+
+      /**
+       * عمداً اینجا throw نمی‌کنیم.
+       *
+       * چون نمی‌خواهیم به خاطر down بودن راهکاران،
+       * کل NestJS application بالا نیاید.
+       */
     }
   }
 
-  async authenticate(username: string, password: string): Promise<boolean> {
+  onModuleDestroy(): void {
+    this.stopTickTimer();
+  }
+
+  // ============================================================
+  // Public Authentication API
+  // ============================================================
+
+  /**
+   * ورود کامل:
+   *
+   * 1. دریافت session
+   * 2. login به Rahkaran
+   * 3. ورود به صندوق Retail
+   */
+  async login(): Promise<void> {
+    if (this.loginPromise) {
+      return this.loginPromise;
+    }
+
+    this.loginPromise = this.performLogin();
+
     try {
-      const url = `${this.baseUrl}/SG/Services/Retail/RetailAuthenticationService.svc/Authenticate`;
-      const response = await firstValueFrom(
-        this.httpService.post(url, { UserName: username, Password: password }),
-      );
-
-      if (response.data?.IsSuccessful) {
-        const setCookie = response.headers['set-cookie'];
-        if (setCookie) {
-          this.authCookie = Array.isArray(setCookie)
-            ? setCookie.join('; ')
-            : setCookie;
-        }
-        this.isAuthenticated = true;
-        this.logger.log('✅ احراز هویت موفق');
-        return true;
-      }
-      return false;
-    } catch (error) {
-      this.logger.error('❌ خطا در احراز هویت', error.message);
-      throw new BadRequestException('خطا در احراز هویت راهکاران');
+      await this.loginPromise;
+    } finally {
+      this.loginPromise = null;
     }
   }
 
-  async cashierLogin(machineName: string): Promise<boolean> {
-    try {
-      const url = `${this.baseUrl}/SG/Services/Retail/RetailAuthenticationService.svc/CashierLogin`;
-      const headers = { Cookie: this.authCookie };
-      const response = await firstValueFrom(
-        this.httpService.post(url, { MachineName: machineName }, { headers }),
-      );
+  /**
+   * احراز هویت کامل را از ابتدا انجام می‌دهد.
+   */
+  private async performLogin(): Promise<void> {
+    this.clearState();
 
-      if (response.data?.IsSuccessful) {
-        this.logger.log('✅ ورود به صندوق موفق');
-        return true;
-      }
-      return false;
-    } catch (error) {
-      this.logger.error('❌ خطا در ورود به صندوق', error.message);
-      throw new BadRequestException('خطا در ورود به صندوق راهکاران');
-    }
-  }
+    this.logger.log('🔐 دریافت Session از راهکاران...');
 
-  // ============================================================
-  // 🎯 هدف ۱: دریافت فاکتورهای مشتری از راهکاران
-  // ============================================================
-  async getCustomerInvoices(userId: number): Promise<any[]> {
-    const user = await this.usersService.findOne(userId);
-    if (!user) throw new NotFoundException('کاربر یافت نشد');
+    const session = await this.getSession();
 
-    if (!user.nationalCode) {
-      this.logger.warn(`کاربر ${userId} کد ملی ندارد.`);
-      return [];
-    }
+    this.logger.log(session);
 
-    const rahkaranId = await this.findCustomerByNationalId(user.nationalCode);
-    if (!rahkaranId) {
-      this.logger.warn(`کاربر ${userId} در راهکاران ثبت نشده است.`);
-      return [];
-    }
+    this.logger.log(`✅ Session دریافت شد: ${session.id}`);
 
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/invoices?customerId=${rahkaranId}&pageNumber=1&pageSize=100`;
-    const response = await this.getRequest(url);
-    return response?.result || [];
-  }
-
-  // ============================================================
-  // 🎯 هدف ۲: یکسان‌سازی محصولات (کد، قیمت، موجودی)
-  // ============================================================
-  async syncProducts(
-    shopId: number = this.defaultShopId,
-    storeId: number = this.defaultStoreId,
-  ) {
-    let from = 0;
-    const pageSize = 100;
-    let hasMore = true;
-    let totalSynced = 0;
-    let totalVariants = 0;
-
-    while (hasMore) {
-      const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/Products?shopId=${shopId}&storeId=${storeId}&from=${from}&numberOfRecords=${pageSize}`;
-      const response = await this.getRequest(url);
-      const products = response?.result || [];
-
-      if (products.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      for (const p of products) {
-        // ۲-۱: پیدا یا ایجاد محصول
-        let product = await this.productsService.findByCode(p.code);
-        if (!product) {
-          // ایجاد محصول با یک تصویر خالی
-          product = await this.productsService.create(
-            {
-              productCode: p.code,
-              title: p.name,
-              slug: p.code,
-              description: p.specification || '',
-              careInstructionsHtml: '',
-              categoryIds: [],
-              variants: [], // اضافه شد
-            },
-            undefined,
-          );
-          this.logger.log(`✅ محصول جدید ایجاد شد: ${p.name} (${p.code})`);
-        }
-
-        // ۲-۲: همگام‌سازی واریانت‌ها
-        const variants = await this.productsService.getVariantsByProductId(
-          product.id,
-        );
-        if (variants.length === 0) {
-          // ایجاد یک واریانت پیش‌فرض
-          const defaultColor = await this.getDefaultColor();
-          const defaultSize = await this.getDefaultSize();
-          await this.productsService.addVariant({
-            productId: product.id,
-            colorId: defaultColor.id,
-            sizeId: defaultSize.id,
-            price: 0,
-            stock: 0,
-            sku: p.code,
-          });
-        }
-
-        // ۲-۳: به‌روزرسانی قیمت و موجودی
-        const priceData = await this.getProductPrice(p.id, 0);
-        const remaining = await this.getRemaining(p.id, storeId);
-
-        const allVariants = await this.productsService.getVariantsByProductId(
-          product.id,
-        );
-        for (const variant of allVariants) {
-          await this.productsService.updateVariant(variant.id, {
-            price: priceData?.fee || 0,
-            stock: remaining || 0,
-          });
-          totalVariants++;
-        }
-
-        totalSynced++;
-      }
-
-      this.logger.log(
-        `${products.length} محصول در مرحله ${from} همگام‌سازی شد.`,
-      );
-      from += pageSize;
-    }
-
-    this.logger.log(
-      `✅ همگام‌سازی کامل: ${totalSynced} محصول و ${totalVariants} واریانت.`,
+    const encryptedPassword = this.encryptPassword(
+      session.id,
+      this.password,
+      session.rsa,
     );
-    return { totalProducts: totalSynced, totalVariants };
-  }
 
-  // ============================================================
-  // 🎯 هدف ۳: عضویت وفادار در زمان ثبت‌نام کاربر
-  // ============================================================
-  async createLoyaltyMemberForUser(
-    userId: number,
-    patternId: number = this.loyaltyPatternId,
-  ): Promise<number> {
-    const user = await this.usersService.findOne(userId);
-    if (!user) throw new NotFoundException('کاربر یافت نشد');
-    if (!user.nationalCode) {
-      throw new BadRequestException('کاربر کد ملی ندارد');
-    }
-
-    const rahkaranId = await this.syncCustomerToRahkaran(userId);
-    const loyaltyId = await this.createLoyaltyMember(rahkaranId, patternId);
-    this.logger.log(
-      `✅ عضو وفادار برای کاربر ${userId} با شناسه ${loyaltyId} ایجاد شد.`,
-    );
-    return loyaltyId;
-  }
-
-  // ============================================================
-  // 🎯 هدف ۴: به‌روزرسانی آنی موجودی و قیمت یک محصول خاص
-  // ============================================================
-  async updateProductStockAndPrice(
-    productId: number,
-    storeId: number = this.defaultStoreId,
-  ): Promise<void> {
-    const product = await this.productsService.findById(productId);
-    if (!product) throw new NotFoundException('محصول یافت نشد');
-
-    const remaining = await this.getRemaining(productId, storeId);
-    const priceData = await this.getProductPrice(productId, 0);
-
-    const variants =
-      await this.productsService.getVariantsByProductId(productId);
-    for (const variant of variants) {
-      await this.productsService.updateVariant(variant.id, {
-        price: priceData?.fee || 0,
-        stock: remaining || 0,
-      });
-    }
-
-    this.logger.log(
-      `✅ موجودی و قیمت محصول ${productId} به‌روز شد. موجودی: ${remaining}, قیمت: ${priceData?.fee}`,
-    );
-  }
-
-  // ============================================================
-  // 🧩 متدهای کمکی
-  // ============================================================
-
-  // --- مدیریت مشتری ---
-  async syncCustomerToRahkaran(userId: number): Promise<number> {
-    const user = await this.usersService.findOne(userId);
-    if (!user) throw new NotFoundException('کاربر یافت نشد');
-
-    if (!user.nationalCode) {
-      throw new BadRequestException('کاربر کد ملی ندارد');
-    }
-
-    let rahkaranId = await this.findCustomerByNationalId(user.nationalCode);
-    if (!rahkaranId && user.phone) {
-      rahkaranId = await this.findCustomerByMobile(user.phone);
-    }
-
-    if (!rahkaranId) {
-      rahkaranId = await this.createCustomer({
-        firstName: user.fullName?.split(' ')[0] || 'کاربر',
-        lastName: user.fullName?.split(' ').slice(1).join(' ') || '',
-        nationalCode: user.nationalCode,
-        mobile: user.phone,
-        gender: null,
-        birthdate: user.birthDate
-          ? dayjs(user.birthDate).format('YYYY-MM-DD')
-          : null,
-      });
-      this.logger.log(
-        `✅ مشتری جدید در راهکاران ایجاد شد. شناسه: ${rahkaranId}`,
-      );
-    }
-
-    // ذخیره شناسه راهکاران در کاربر
-    await this.usersService.update(userId, { rahkaranId });
-    return rahkaranId;
-  }
-
-  async findCustomerByNationalId(nationalId: string): Promise<number> {
-    if (!nationalId) return 0;
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/customers?nationalID=${nationalId}`;
-    const response = await this.getRequest(url);
-    return response?.result?.[0]?.id || 0;
-  }
-
-  async findCustomerByMobile(mobile: string): Promise<number> {
-    if (!mobile) return 0;
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/customers?mobile=${mobile}`;
-    const response = await this.getRequest(url);
-    return response?.result?.[0]?.id || 0;
-  }
-
-  async createCustomer(customerData: any): Promise<number> {
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/Customer`;
-    const payload = {
-      firstName: customerData.firstName,
-      lastName: customerData.lastName,
-      nationalCode: customerData.nationalCode,
-      mobile: customerData.mobile,
-      gender: customerData.gender,
-      birthdate: customerData.birthdate,
-    };
-    const response = await this.postRequest(url, payload);
-    return response?.result || 0;
-  }
-
-  async createLoyaltyMember(
-    customerId: number,
-    patternId: number,
-  ): Promise<number> {
-    const url = `${this.baseUrl}/SG/Services/Retail/LoyaltyESales.svc/loyaltyMember`;
-    const body = {
-      loyaltyMemberPatternId: patternId,
-      customerId,
-    };
-    const response = await this.postRequest(url, body);
-    return response?.result || 0;
-  }
-
-  async getProductPrice(
-    productId: number,
-    customerId: number = 0,
-  ): Promise<any> {
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/Price`;
-    const body = {
-      customerId,
-      currencyId: 1,
-      retailShopId: this.defaultShopId,
-      date: dayjs().format('YYYY/MM/DD'),
-      salesAreaId: 1,
-      items: [
-        {
-          itemId: 0,
-          productId,
-          trackingFactors: [],
-          unitId: 1,
-          quantity: 1,
+    const loginResponse = await this.request<any>(
+      `${this.baseUrl}/Services/Framework/AuthenticationService.svc/login`,
+      {
+        method: 'POST',
+        data: {
+          sessionId: session.id,
+          username: this.username,
+          password: encryptedPassword,
         },
-      ],
+      },
+    );
+
+    this.logger.log(`Login response: ${JSON.stringify(loginResponse)}`);
+
+    // Login موفق راهکاران با HTTP 200 + Cookie مشخص می‌شود.
+    // Body این endpoint ممکن است خالی باشد.
+    const loginCookie = this.extractCookieFromLastResponse();
+
+    if (!loginCookie) {
+      throw new BadRequestException(
+        this.getRahkaranError(loginResponse) ||
+          'Login راهکاران موفق نبود؛ Cookie احراز هویت دریافت نشد.',
+      );
+    }
+
+    this.logger.log('✅ Login راهکاران موفق بود.');
+    /**
+     * بعد از login، وارد صندوق Retail می‌شویم.
+     */
+    const cashierResponse = await this.request<any>(
+      `${this.baseUrl}/Retail/Api/CashRegisterManagement/RetailDesktopAuthenticationService.svc/DesktopCashierLogin`,
+      {
+        method: 'POST',
+        data: this.machineName,
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (!this.isSuccessful(cashierResponse)) {
+      throw new BadRequestException(
+        this.getRahkaranError(cashierResponse) ||
+          'ورود به صندوق Retail ناموفق بود.',
+      );
+    }
+
+    const cashRegister = cashierResponse?.result?.cashRegister;
+
+    if (!cashRegister) {
+      throw new BadRequestException('اطلاعات صندوق از راهکاران دریافت نشد.');
+    }
+
+    const cookie =
+      this.extractCookie(cashierResponse) ||
+      this.extractCookieFromLastResponse();
+
+    this.state = {
+      sessionId: session.id,
+      cookie,
+      cashRegister,
+      authenticatedAt: new Date(),
+      lastTickAt: null,
     };
-    const response = await this.postRequest(url, body);
-    return response?.result?.[0] || null;
+
+    this.logger.log(
+      `✅ ورود به صندوق موفق بود. ` +
+        `Shop: ${cashRegister.retailShopID}, ` +
+        `CashRegister: ${cashRegister.cashRegisterId}, ` +
+        `RetailSession: ${cashRegister.retailSessionId}`,
+    );
   }
 
-  async getRemaining(
+  // ============================================================
+  // Session
+  // ============================================================
+
+  /**
+   * طبق مستند:
+   *
+   * GET
+   * /Services/Framework/AuthenticationService.svc/session
+   */
+  private async getSession(): Promise<RahkaranSession> {
+    const response = await this.request<RahkaranSession>(
+      `${this.baseUrl}/Services/Framework/AuthenticationService.svc/session`,
+      {
+        method: 'GET',
+      },
+    );
+
+    if (!response?.id || !response?.rsa?.M || !response?.rsa?.E) {
+      throw new BadRequestException('پاسخ Session راهکاران معتبر نیست.');
+    }
+
+    return response;
+  }
+
+  // ============================================================
+  // Tick
+  // ============================================================
+
+  /**
+   * تمدید Session سمت راهکاران.
+   */
+  async tick(): Promise<boolean> {
+    if (!this.state) {
+      this.logger.warn('⚠️ Tick انجام نشد؛ Session فعالی وجود ندارد.');
+
+      return false;
+    }
+
+    try {
+      const response = await this.request<any>(
+        `${this.baseUrl}/Retail/Api/CashRegisterManagement/RetailMobileAuthenticationService.svc/Tick`,
+        {
+          method: 'GET',
+          headers: this.authHeaders(),
+        },
+      );
+
+      const success = response?.result === true;
+
+      if (success) {
+        this.state.lastTickAt = new Date();
+
+        this.logger.debug('🔄 Rahkaran Session با Tick تمدید شد.');
+
+        return true;
+      }
+
+      this.logger.warn(
+        `⚠️ Tick موفق نبود: ${
+          this.getRahkaranError(response) || 'Unknown error'
+        }`,
+      );
+
+      return false;
+    } catch (error) {
+      this.logger.error(
+        '❌ Tick راهکاران با خطا مواجه شد.',
+        this.getErrorMessage(error),
+      );
+
+      this.clearState();
+
+      /**
+       * در صورت خراب شدن Session،
+       * login مجدد انجام می‌دهیم.
+       */
+      try {
+        await this.login();
+
+        return true;
+      } catch (loginError) {
+        this.logger.error(
+          '❌ Login مجدد بعد از Tick ناموفق بود.',
+          this.getErrorMessage(loginError),
+        );
+
+        return false;
+      }
+    }
+  }
+
+  // ============================================================
+  // Tick Timer
+  // ============================================================
+
+  private startTickTimer(): void {
+    this.stopTickTimer();
+
+    if (!this.tickIntervalMs || this.tickIntervalMs <= 0) {
+      return;
+    }
+
+    this.tickTimer = setInterval(() => {
+      void this.tick();
+    }, this.tickIntervalMs);
+
+    this.logger.log(
+      `⏱️ Rahkaran Tick فعال شد. Interval: ${this.tickIntervalMs}ms`,
+    );
+  }
+
+  private stopTickTimer(): void {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
+  }
+
+  // ============================================================
+  // Authentication State
+  // ============================================================
+
+  /**
+   * هر سرویس Rahkaran در مراحل بعدی باید قبل از request
+   * این متد را صدا بزند.
+   */
+  async ensureAuthenticated(): Promise<void> {
+    if (!this.state) {
+      await this.login();
+    }
+  }
+
+  isAuthenticated(): boolean {
+    return !!this.state;
+  }
+
+  getAuthState() {
+    if (!this.state) {
+      return null;
+    }
+
+    return {
+      authenticated: true,
+      sessionId: this.state.sessionId,
+      retailSessionId: this.state.cashRegister.retailSessionId,
+      retailShopId: this.state.cashRegister.retailShopID,
+      cashRegisterId: this.state.cashRegister.cashRegisterId,
+      cashierId: this.state.cashRegister.cashierId,
+      authenticatedAt: this.state.authenticatedAt,
+      lastTickAt: this.state.lastTickAt,
+    };
+  }
+
+  getRetailShopId(): number {
+    this.requireState();
+
+    return this.state!.cashRegister.retailShopID;
+  }
+
+  getRetailSessionId(): number {
+    this.requireState();
+
+    return this.state!.cashRegister.retailSessionId;
+  }
+
+  getCashRegisterId(): number {
+    this.requireState();
+
+    return this.state!.cashRegister.cashRegisterId;
+  }
+
+  // ============================================================
+  // HTTP
+  // ============================================================
+
+  /**
+   * در مراحل بعد تمام APIهای Rahkaran
+   * از همین متد استفاده خواهند کرد.
+   */
+  private async request<T>(
+    url: string,
+    config: AxiosRequestConfig = {},
+  ): Promise<T> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.request<T>({
+          ...config,
+          url,
+          validateStatus: () => true,
+          headers: {
+            ...(config.headers || {}),
+          },
+        }),
+      );
+
+      this.captureCookies(response.headers);
+
+      if (response.status < 200 || response.status >= 300) {
+        throw new BadRequestException(
+          `Rahkaran HTTP ${response.status}: ${JSON.stringify(response.data)}`,
+        );
+      }
+
+      return response.data;
+    } catch (error) {
+      const axiosError = error as AxiosError;
+
+      const status = axiosError.response?.status;
+
+      this.logger.error(
+        `❌ Rahkaran HTTP Error ${status || ''}: ${url}`,
+        this.getErrorMessage(error),
+      );
+
+      if (status === 401 || status === 403) {
+        this.clearState();
+
+        throw new BadRequestException(
+          'Session راهکاران معتبر نیست یا منقضی شده است.',
+        );
+      }
+
+      throw error;
+    }
+  }
+
+  private authHeaders(): Record<string, string> {
+    const cookie = this.state?.cookie || this.latestCookies.join('; ');
+
+    if (!cookie) {
+      return {};
+    }
+
+    return {
+      Cookie: cookie,
+    };
+  }
+
+  // ============================================================
+  // RSA Password Encryption
+  // ============================================================
+
+  private encryptPassword(
+    sessionId: string,
+    password: string,
+    rsa: {
+      M: string;
+      E: string;
+    },
+  ): string {
+    const publicKey = this.createRsaPublicKey(rsa.M, rsa.E);
+
+    const plainText = `${sessionId}**${password}`;
+
+    this.logger.debug(`RSA plainText length: ${plainText.length}`);
+    this.logger.debug(`RSA plainText: ${plainText}`);
+
+    const encrypted = publicEncrypt(
+      {
+        key: publicKey,
+        padding: constants.RSA_PKCS1_PADDING,
+      },
+      Buffer.from(plainText, 'utf8'),
+    );
+
+    return encrypted.toString('hex');
+  }
+
+  private createRsaPublicKey(modulusHex: string, exponentHex: string): string {
+    const modulusBase64Url = Buffer.from(modulusHex, 'hex')
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+
+    const exponentBase64Url = Buffer.from(exponentHex, 'hex')
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+
+    const key = createPublicKey({
+      key: {
+        kty: 'RSA',
+        n: modulusBase64Url,
+        e: exponentBase64Url,
+      },
+      format: 'jwk',
+    });
+
+    return key.export({
+      type: 'spki',
+      format: 'pem',
+    }) as string;
+  }
+
+  // ============================================================
+  // Cookie
+  // ============================================================
+
+  private latestCookies: string[] = [];
+
+  private captureCookies(headers: any): void {
+    const setCookie = headers?.['set-cookie'];
+
+    if (!setCookie) {
+      return;
+    }
+
+    const cookies = Array.isArray(setCookie) ? setCookie : [setCookie];
+
+    this.latestCookies = cookies.map((cookie: string) => cookie.split(';')[0]);
+
+    if (this.state && this.latestCookies.length > 0) {
+      this.state.cookie = this.latestCookies.join('; ');
+    }
+  }
+
+  private extractCookie(response: any): string {
+    /**
+     * اگر خود response کوکی را expose کرده باشد.
+     */
+    if (response?.headers?.['set-cookie']) {
+      const cookies = response.headers['set-cookie'];
+
+      return (Array.isArray(cookies) ? cookies : [cookies])
+        .map((cookie: string) => cookie.split(';')[0])
+        .join('; ');
+    }
+
+    return '';
+  }
+
+  private extractCookieFromLastResponse(): string {
+    return this.latestCookies.join('; ');
+  }
+
+  // ============================================================
+  // Helpers
+  // ============================================================
+
+  private clearState(): void {
+    this.state = null;
+    this.latestCookies = [];
+  }
+
+  private requireState(): void {
+    if (!this.state) {
+      throw new BadRequestException('اتصال به راهکاران برقرار نیست.');
+    }
+  }
+
+  private isSuccessful(response: any): boolean {
+    return (
+      response?.metadata?.isSuccessfull === true ||
+      response?.metadata?.isSuccessful === true ||
+      response?.result?.isSuccessfull === true ||
+      response?.result?.isSuccessful === true ||
+      response?.result === true
+    );
+  }
+
+  private getRahkaranError(response: any): string | null {
+    return (
+      response?.metadata?.errorMessage ||
+      response?.result?.errorMessage ||
+      response?.errorMessage ||
+      null
+    );
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error);
+  }
+
+  // ============================================================
+  // Retail Products
+  // ============================================================
+
+  async getRetailProducts(
+    input = '',
+    page = 1,
+    count = 20,
+  ): Promise<RahkaranRetailProduct[]> {
+    await this.ensureAuthenticated();
+
+    const params = new URLSearchParams({
+      input,
+      page: String(page),
+      count: String(count),
+    });
+
+    const response = await this.request<
+      RahkaranResponse<RahkaranRetailProduct[]>
+    >(
+      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/GetProducts?${params.toString()}`,
+      {
+        method: 'GET',
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (response?.metadata?.isSuccessfull !== true) {
+      throw new BadRequestException(
+        response?.metadata?.errorMessage ||
+          'دریافت محصولات راهکاران ناموفق بود.',
+      );
+    }
+
+    return response.result ?? [];
+  }
+
+  async getRetailProductByBarcode(
+    barcode: string,
+    page = 1,
+    count = 10,
+  ): Promise<any> {
+    await this.ensureAuthenticated();
+
+    const params = new URLSearchParams({
+      barcode,
+      page: String(page),
+      count: String(count),
+    });
+
+    const response = await this.request<any>(
+      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/getProductByBarcode?${params.toString()}`,
+      {
+        method: 'GET',
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (response?.metadata?.isSuccessfull !== true) {
+      throw new BadRequestException(
+        response?.metadata?.errorMessage || 'دریافت محصول راهکاران ناموفق بود.',
+      );
+    }
+
+    return response.result;
+  }
+
+  async getRetailProduct(productId: number): Promise<RahkaranRetailProduct> {
+    await this.ensureAuthenticated();
+
+    const response = await this.request<
+      RahkaranResponse<RahkaranRetailProduct>
+    >(
+      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/GetProduct?id=${productId}`,
+      {
+        method: 'GET',
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (response?.metadata?.isSuccessfull !== true) {
+      throw new BadRequestException(
+        response?.metadata?.errorMessage || 'دریافت محصول راهکاران ناموفق بود.',
+      );
+    }
+
+    return response.result;
+  }
+
+  async getRemainingQuantityInfo(
     productId: number,
-    storeId: number,
-    date?: string,
-  ): Promise<number> {
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/Remaining`;
-    const body = {
-      productId,
-      storeId,
-      dateTime: date || dayjs().format('YYYY/MM/DD'),
-    };
-    const response = await this.postRequest(url, body);
-    return response?.result || 0;
+  ): Promise<RahkaranRemainingQuantity[]> {
+    await this.ensureAuthenticated();
+
+    const response = await this.request<{
+      result: RahkaranRemainingQuantity[];
+      metadata?: {
+        isSuccessfull?: boolean;
+        errorMessage?: string | null;
+      };
+    }>(
+      `${this.baseUrl}/Retail/Api/DocumentStructure/StoreService.svc/GetRemainingQuantityInfo`,
+      {
+        method: 'GET',
+        params: {
+          productId,
+        },
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (response?.metadata?.isSuccessfull === false) {
+      throw new BadRequestException(
+        response.metadata.errorMessage ||
+          `دریافت موجودی محصول ${productId} از راهکاران ناموفق بود.`,
+      );
+    }
+
+    return response?.result ?? [];
   }
 
-  async createSalesOrder(orderData: any): Promise<number> {
-    const payload = {
-      document: {
-        customerId: orderData.customerId,
-        currencyId: orderData.currencyId || 1,
-        settlementPolicyId: orderData.settlementPolicyId || 1,
-        storeId: orderData.storeId || 1,
-        documentPatternId: orderData.documentPatternId || 2,
-        items: orderData.items.map(item => ({
-          productId: item.productId,
-          unitId: item.unitId || 1,
-          quantity: item.quantity,
-          storeId: item.storeId || orderData.storeId || 1,
-          fee: item.price,
-          price: item.price,
-          netPrice: item.price,
-        })),
-        payments: orderData.payments || [],
-        discountCardSerials: orderData.discountCardSerials || [],
+  async createLoyaltyMemberForUser(id: number) {
+    const user = await this.usersService.findOne(id);
+
+    if (!user) {
+      throw new BadRequestException('کاربر پیدا نشد');
+    }
+
+    const fullName = user.fullName?.trim() || '';
+
+    const parts = fullName.split(/\s+/);
+
+    const firstName = parts.shift() || '';
+    const lastName = parts.join(' ');
+
+    const response = await this.request(
+      `${this.baseUrl}/Retail/Api/Structure/CustomerService.svc/customer`,
+      {
+        method: 'POST',
+        data: {
+          partyType: 0,
+          Id: id,
+          firstName: firstName,
+          lastName: lastName,
+          nationalID: user?.nationalCode,
+          mobile: user?.phone,
+          tel: null,
+        },
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (!this.isSuccessful(response)) {
+      throw new BadRequestException(
+        this.getRahkaranError(response) || 'ثبت کاربر در راهکاران ناموفق بود',
+      );
+    }
+
+    this.logger.log(`✅ ثبت کاربر موفق بود `);
+
+    const loyalityResponse = await this.request(
+      `${this.baseUrl}/Retail/LoyaltyApi/RetailLoyaltyMemberService.svc/loyaltyMember`,
+      {
+        method: 'POST',
+        data: {
+          loyaltyMemberPatternId: 3,
+          customerId: id,
+        },
+        headers: this.authHeaders(),
+      },
+    );
+
+    if (!this.isSuccessful(loyalityResponse)) {
+      throw new BadRequestException(
+        this.getRahkaranError(loyalityResponse) ||
+          'ثبت کاربر در مشتریان وفادار ناموفق بود',
+      );
+    }
+
+    this.logger.log(`✅ ثبت کاربر در مشتریان وفادار موفق بود `);
+  }
+
+  async createSalesInvoice(
+    input: CreateRahkaranInvoiceInput,
+  ): Promise<RahkaranInvoiceResponse> {
+    await this.ensureAuthenticated();
+
+    if (!input.customerId) {
+      throw new BadRequestException(
+        'customerId برای ثبت فاکتور راهکاران مشخص نیست.',
+      );
+    }
+
+    if (!input.items?.length) {
+      throw new BadRequestException(
+        'فاکتور راهکاران حداقل باید یک آیتم داشته باشد.',
+      );
+    }
+
+    const inventoryId = 20;
+
+    const settlementPolicyId = 9;
+
+    const documentPatternId = 3;
+
+    const items = input.items.map(item => ({
+      Id: 0,
+
+      inventoryId,
+
+      settlementPolicyId,
+
+      productId: item.productId,
+
+      quantity: Number(item.quantity),
+
+      unitId: item.unitId,
+
+      policies: [],
+
+      toppings: [],
+
+      returnInvoicePermitItemId: null,
+
+      trackingFactor1: null,
+      trackingFactor2: null,
+      trackingFactor3: null,
+      trackingFactor4: null,
+      trackingFactor5: null,
+
+      partTrackingFactorRef1: null,
+      partTrackingFactorRef2: null,
+      partTrackingFactorRef3: null,
+      partTrackingFactorRef4: null,
+      partTrackingFactorRef5: null,
+
+      isTrackingFactorInputModeManual1: null,
+      isTrackingFactorInputModeManual2: null,
+      isTrackingFactorInputModeManual3: null,
+      isTrackingFactorInputModeManual4: null,
+      isTrackingFactorInputModeManual5: null,
+
+      trackingFactorHasQuantity1: false,
+      trackingFactorHasQuantity2: false,
+      TrackingFactorHasQuantity3: false,
+      TrackingFactorHasQuantity4: false,
+      TrackingFactorHasQuantity5: false,
+
+      referenceId: null,
+    }));
+
+    const document = {
+      inventoryId,
+
+      salesAreaId: 5,
+
+      documentPatternId,
+
+      customerId: input.customerId,
+
+      status: 1,
+
+      currencyId: 1,
+
+      items,
+
+      policies: [],
+
+      settlementPolicyId,
+
+      id: 0,
+
+      data: {
+        discountCards: [],
+        loyaltyProgramID: null,
       },
     };
 
-    const url = `${this.baseUrl}/SG/Services/Retail/ESales.svc/salesOrder`;
-    const response = await this.postRequest(url, payload);
-    return response?.result?.id || 0;
-  }
+    const payload = {
+      document,
 
-  // src/rahkaran/rahkaran.service.ts
+      receipts: [
+        {
+          key: 'Cash',
+          amount: Number(input.receiptAmount),
+          attr: {
+            DESCRIPTION: input.description || 'ثبت فاکتور فروش از سایت',
+          },
+        },
+      ],
 
-  // ============================================================
-  // 🎯 یکپارچه‌سازی سفارش: ثبت سفارش در راهکاران
-  // ============================================================
-  async syncOrderToRahkaran(orderId: number): Promise<number> {
-    const order = await this.ordersService.findOne(orderId);
-    if (!order) {
-      throw new BadRequestException('سفارش یافت نشد');
-    }
-
-    const user = order.user;
-    if (!user) throw new BadRequestException('کاربر سفارش یافت نشد');
-
-    const rahkaranId = await this.syncCustomerToRahkaran(user.id);
-
-    const orderData = {
-      customerId: rahkaranId,
-      currencyId: 1,
-      settlementPolicyId: 1,
-      storeId: 1,
-      documentPatternId: 2,
-      items: order.items.map(item => ({
-        productId: item.variant.productId,
-        unitId: 1,
-        quantity: item.quantity,
-        storeId: 1,
-        price: item.price,
-      })),
       payments: [],
-      discountCardSerials: [],
     };
 
-    return this.createSalesOrder(orderData);
-  }
+    this.logger.log(
+      `🧾 ثبت فاکتور فروش در راهکاران برای مشتری ${input.customerId}`,
+    );
 
-  // --- رنگ و سایز پیش‌فرض (برای محصولات ساده) ---
-  private async getDefaultColor(): Promise<Color> {
-    const color = await this.colorRepo.findOne({ where: { id: 1 } });
-    if (!color) throw new Error('رنگ پیش‌فرض (id=1) یافت نشد');
-    return color;
-  }
+    this.logger.debug(`Rahkaran invoice payload: ${JSON.stringify(payload)}`);
 
-  private async getDefaultSize(): Promise<Size> {
-    const size = await this.sizeRepo.findOne({ where: { id: 1 } });
-    if (!size) throw new Error('سایز پیش‌فرض (id=1) یافت نشد');
-    return size;
-  }
+    const response = await this.request<any>(
+      `${this.baseUrl}/Retail/Api/RetailDocuments/InvoiceService.svc/SaveInvoice`,
+      {
+        method: 'POST',
 
-  // --- درخواست‌های HTTP با کوکی ---
-  private async getRequest(url: string) {
-    if (!this.isAuthenticated) {
-      throw new BadRequestException('احراز هویت نشده است. ابتدا لاگین کنید.');
-    }
-    const headers = { Cookie: this.authCookie };
-    try {
-      const response = await firstValueFrom(
-        this.httpService.get(url, { headers }),
+        headers: {
+          ...this.authHeaders(),
+          'Content-Type': 'application/json',
+        },
+
+        data: payload,
+      },
+    );
+
+    if (!this.isSuccessful(response)) {
+      throw new BadRequestException(
+        this.getRahkaranError(response) ||
+          'ثبت فاکتور فروش در راهکاران ناموفق بود.',
       );
-      return response.data;
-    } catch (error) {
-      this.logger.error(`❌ خطا در GET: ${url}`, error.message);
-      if (error.response?.status === 401) {
-        this.isAuthenticated = false;
+    }
+
+    const result = response?.result ?? response;
+
+    this.logger.log(
+      `✅ فاکتور راهکاران با موفقیت ثبت شد. ` +
+        `ID: ${result?.id ?? result?.invoiceId ?? 'unknown'} ` +
+        `Number: ${result?.number ?? 'unknown'}`,
+    );
+
+    return result;
+  }
+
+  async syncOrderToRahkaran(order: {
+    id: number;
+    orderNumber: string;
+    finalPrice: number;
+    user: {
+      id: number;
+    };
+    items: Array<{
+      quantity: number;
+      price: number;
+      variant: {
+        sku: string | null;
+      };
+    }>;
+  }) {
+    await this.ensureAuthenticated();
+
+    if (!order.items?.length) {
+      throw new BadRequestException(
+        `سفارش ${order.id} آیتمی برای ثبت در راهکاران ندارد.`,
+      );
+    }
+
+    const invoiceItems: CreateRahkaranInvoiceItem[] = [];
+
+    for (const item of order.items) {
+      const sku = item.variant?.sku?.trim();
+
+      if (!sku) {
         throw new BadRequestException(
-          'نشست منقضی شده است. لطفاً مجدداً احراز هویت کنید.',
+          `برای آیتم سفارش ${order.id}، SKU/Barcode وجود ندارد.`,
         );
       }
-      throw error;
-    }
-  }
 
-  private async postRequest(url: string, data: any) {
-    if (!this.isAuthenticated) {
-      throw new BadRequestException('احراز هویت نشده است. ابتدا لاگین کنید.');
-    }
-    const headers = { Cookie: this.authCookie };
-    try {
-      const response = await firstValueFrom(
-        this.httpService.post(url, data, { headers }),
-      );
-      return response.data;
-    } catch (error) {
-      this.logger.error(`❌ خطا در POST: ${url}`, error.message);
-      if (error.response?.status === 401) {
-        this.isAuthenticated = false;
+      // =====================================================
+      // دریافت اطلاعات محصول مستقیماً از راهکاران
+      // =====================================================
+
+      const productResponse = await this.getRetailProductByBarcode(sku);
+
+      const rahkaranProduct = productResponse?.product ?? productResponse;
+
+      if (!rahkaranProduct?.productId) {
         throw new BadRequestException(
-          'نشست منقضی شده است. لطفاً مجدداً احراز هویت کنید.',
+          `محصول با بارکد ${sku} در راهکاران پیدا نشد.`,
         );
       }
-      throw error;
+
+      const unitId = rahkaranProduct.RetailUnitRef ?? rahkaranProduct.unitRef;
+
+      if (!unitId) {
+        throw new BadRequestException(
+          `واحد فروش محصول ${rahkaranProduct.productId} در راهکاران مشخص نیست.`,
+        );
+      }
+
+      const rahkaranFee = Number(rahkaranProduct.fee);
+
+      if (!Number.isFinite(rahkaranFee)) {
+        throw new BadRequestException(
+          `قیمت محصول ${rahkaranProduct.productId} در راهکاران معتبر نیست.`,
+        );
+      }
+
+      invoiceItems.push({
+        productId: Number(rahkaranProduct.productId),
+
+        unitId: Number(unitId),
+
+        quantity: Number(item.quantity),
+
+        // قیمت پایه خود Rahkaran
+        fee: rahkaranFee,
+
+        // قیمت فروش ثبت‌شده در Order
+        price: Number(item.price),
+      });
+
+      this.logger.log(
+        `🛒 Order ${order.id} -> ` +
+          `SKU ${sku} -> Rahkaran Product ${rahkaranProduct.productId}`,
+      );
     }
+
+    // =====================================================
+    // ثبت فاکتور
+    // =====================================================
+
+    const invoice = await this.createSalesInvoice({
+      customerId: Number(order.user.id),
+
+      items: invoiceItems,
+
+      inventoryId: 3,
+
+      settlementPolicyId: 61,
+
+      documentPatternId: 1,
+
+      salesAgentId: 4,
+
+      receiptAmount: Number(order.finalPrice),
+
+      description: `Order ${order.orderNumber}`,
+    });
+
+    return invoice;
   }
 }

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -39,6 +40,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     TypeOrmModule.forRootAsync({
       useClass: TypeOrmConfigService,
     }),
+    ScheduleModule.forRoot(),
     // CacheModule.register({
     //   ttl: 5000,
     //   max: 10,

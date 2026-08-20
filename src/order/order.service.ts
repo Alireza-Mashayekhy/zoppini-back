@@ -379,22 +379,33 @@ export class OrdersService {
       await queryRunner.commitTransaction();
 
       // =========================================================
-      // 6. Sync با راهکاران
+      // 6. ثبت فاکتور فروش در راهکاران
       // =========================================================
 
-      this.rahkaranService
-        .syncOrderToRahkaran(order.id)
-        .then(rahkaranOrderId => {
-          this.logger.log(
-            `✅ سفارش ${order.id} در راهکاران با شناسه ${rahkaranOrderId} ثبت شد.`,
-          );
-        })
-        .catch(err => {
-          this.logger.error(
-            `❌ خطا در ثبت سفارش ${order.id} در راهکاران`,
-            err.message,
-          );
-        });
+      try {
+        const rahkaranInvoice = await this.rahkaranService.syncOrderToRahkaran(
+          await this.findOne(order.id),
+        );
+
+        this.logger.log(
+          `✅ سفارش ${order.id} در راهکاران ثبت شد. ` +
+            `Invoice ID: ${
+              rahkaranInvoice?.id ?? rahkaranInvoice?.invoiceId ?? 'unknown'
+            }`,
+        );
+      } catch (error) {
+        this.logger.error(
+          `❌ ثبت فاکتور سفارش ${order.id} در راهکاران ناموفق بود.`,
+          error instanceof Error ? error.stack : String(error),
+        );
+
+        // فعلاً سفارش سایت PAID باقی می‌ماند.
+        //
+        // چون تراکنش دیتابیس سایت قبلاً commit شده،
+        // نمی‌توانیم rollback کنیم.
+        //
+        // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
+      }
 
       return this.findOne(order.id);
     } catch (error) {

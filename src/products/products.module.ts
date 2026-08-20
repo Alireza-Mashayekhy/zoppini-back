@@ -17,6 +17,7 @@ import { Variant } from './entities/variant.entity';
 import { AdminFeaturedController } from './featured.admin.controller';
 import { FeaturedController } from './featured.controller';
 import { FeaturedService } from './featured.service';
+import { ProductsScheduler } from './producs.scheduler';
 import { AdmiProductsController } from './products.admin.controller';
 import { ProductsController } from './products.controller';
 import { ProductsService } from './products.service';
@@ -50,7 +51,12 @@ import { StyleService } from './style.service';
     StyleController,
     AdminStyleController,
   ],
-  providers: [ProductsService, FeaturedService, StyleService],
+  providers: [
+    ProductsService,
+    FeaturedService,
+    StyleService,
+    ProductsScheduler,
+  ],
   exports: [ProductsService],
 })
 export class ProductsModule {}
