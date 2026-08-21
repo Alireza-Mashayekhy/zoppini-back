@@ -278,7 +278,7 @@ export class RahkaranProductSyncService {
         continue;
       }
 
-      const newPrice = Number(rahkaranProduct.fee ?? 0);
+      const newPrice = Number(rahkaranProduct.fee ?? 0) / 10;
 
       const newStock = this.extractStock(stockResult);
 
