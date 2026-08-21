@@ -17,7 +17,7 @@ import { DiscountService } from './discounts.service';
 import { CreateDiscountDto } from './dto/create-discount.dto';
 import { UpdateDiscountDto } from './dto/update-discount.dto';
 
-@Controller('discounts/admin')
+@Controller('admin/discounts')
 @UseGuards(AuthGuard, RolesGuard)
 @Roles(Role.Admin)
 export class AdminDiscountController {
