@@ -97,19 +97,7 @@ export class AuthService {
       password: hashedPassword,
     });
 
-    // this.rahkaranService
-    //   .createLoyaltyMemberForUser(newUser.id)
-    //   .then(loyaltyId => {
-    //     this.logger.log(
-    //       `✅ عضو وفادار برای کاربر ${newUser.id} با شناسه ${loyaltyId} ایجاد شد.`,
-    //     );
-    //   })
-    //   .catch(err => {
-    //     this.logger.error(
-    //       `❌ خطا در ایجاد عضو وفادار برای کاربر ${newUser.id}`,
-    //       err.message,
-    //     );
-    //   });
+    await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
 
     const [firstName, ...lastNameParts] = createUserDto.fullName
       .trim()
@@ -117,17 +105,13 @@ export class AuthService {
     const lastName = lastNameParts.join(' ') || '';
 
     // ثبت غیرهمزمان (اجرا در پس‌زمینه) برای عدم تأخیر در پاسخ
-    this.clubService
-      .registerCustomer({
-        firstName: firstName,
-        lastName: lastName,
-        customerCode: createUserDto.phone,
-        email: createUserDto.email,
-        birthDate: createUserDto.birthDate || undefined,
-      })
-      .catch(err => {
-        return err;
-      });
+    await this.clubService.registerCustomer({
+      firstName: firstName,
+      lastName: lastName,
+      customerCode: createUserDto.phone,
+      email: createUserDto.email,
+      birthDate: createUserDto.birthDate || undefined,
+    });
 
     // ادغام سبد خرید مهمان
     if (guestId) {

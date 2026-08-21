@@ -3,6 +3,7 @@ import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
+import { ClubModule } from 'src/club/club.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
@@ -32,6 +33,7 @@ import { OrdersService } from './order.service';
     SmsModule,
     forwardRef(() => RahkaranModule),
     DiscountsModule,
+    ClubModule,
   ],
   controllers: [OrdersController, AdminOrdersController],
   providers: [OrdersService],

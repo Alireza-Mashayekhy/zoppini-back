@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
 import { Cart } from 'src/cart/entities/cart.entity';
+import { ClubService } from 'src/club/club.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
 import { Discount } from 'src/discounts/entities/discount.entity';
@@ -45,6 +46,8 @@ export class OrdersService {
     private readonly discountUsageRepo: Repository<DiscountUsage>,
 
     private readonly rahkaranService: RahkaranService,
+
+    private readonly clubService: ClubService,
 
     private readonly discountService: DiscountService,
 
@@ -399,6 +402,27 @@ export class OrdersService {
       } catch (error) {
         this.logger.error(
           `❌ ثبت فاکتور سفارش ${order.id} در راهکاران ناموفق بود.`,
+          error instanceof Error ? error.stack : String(error),
+        );
+
+        // فعلاً سفارش سایت PAID باقی می‌ماند.
+        //
+        // چون تراکنش دیتابیس سایت قبلاً commit شده،
+        // نمی‌توانیم rollback کنیم.
+        //
+        // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
+      }
+
+      try {
+        await this.clubService.createInvoice({
+          customerCode: order.user.phone,
+          finalPrice: order.finalPrice,
+        });
+
+        this.logger.log(`✅ سفارش ${order.id} در دایاتک ثبت شد. `);
+      } catch (error) {
+        this.logger.error(
+          `❌ ثبت فاکتور سفارش ${order.id} در دایاتک ناموفق بود.`,
           error instanceof Error ? error.stack : String(error),
         );
 
