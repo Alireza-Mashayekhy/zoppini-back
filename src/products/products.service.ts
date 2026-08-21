@@ -1428,7 +1428,7 @@ export class ProductsService {
 
         this.logger.log(rahkaranProduct);
 
-        const newPrice = Number(rahkaranProduct.product?.fee);
+        const newPrice = Number(rahkaranProduct.product?.fee) / 10;
         const newStock = Number(rahkaranProduct.product?.unitRef);
 
         // جلوگیری از ورود NaN به دیتابیس
