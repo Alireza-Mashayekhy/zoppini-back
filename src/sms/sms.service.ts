@@ -14,8 +14,7 @@ export class SmsService {
     this.adminPhone = process.env.ADMIN_PHONE || '';
   }
 
-  // متد اصلی ارسال پیامک (دقیقاً مشابه تابع send_ghasedak_verify در PHP)
-  async sendGhasedakVerify(
+  async sendGhasedakOtp(
     receptor: string,
     template: string,
     param1: string,
@@ -24,24 +23,77 @@ export class SmsService {
       // نرمال‌سازی شماره (مشابه normalize_iran_phone)
       const normalizedPhone = this.normalizePhone(receptor);
 
-      // ساخت post_fields به فرمت x-www-form-urlencoded
-      const postFields = new URLSearchParams({
-        type: '1',
-        receptor: normalizedPhone,
-        template: template,
-        param1: param1,
-      });
-
+      this.logger.log(
+        normalizedPhone,
+        [...normalizedPhone],
+        receptor,
+        [receptor],
+        [...receptor],
+      );
       this.logger.log(`📤 ارسال پیامک به ${receptor} با قالب ${template}`);
 
       const response = await firstValueFrom(
         this.httpService.post(
-          'https://api.ghasedaksms.com/v2/send/verify',
-          postFields.toString(),
+          'https://gateway.ghasedak.me/rest/api/v1/WebService/SendOtpWithParams',
+          {
+            type: '1',
+            receptors: [
+              {
+                mobile: normalizedPhone,
+                clientReferenceId: '1',
+              },
+            ],
+            templateName: template,
+            param1: param1,
+          },
           {
             headers: {
               apikey: this.apiKey,
-              'content-type': 'application/x-www-form-urlencoded',
+              'content-type': 'application/json',
+            },
+            timeout: 30000,
+          },
+        ),
+      );
+
+      this.logger.log(`✅ پیامک به ${receptor} با موفقیت ارسال شد`);
+      return {
+        success: true,
+        message: response.data?.message || 'پیامک با موفقیت ارسال شد',
+      };
+    } catch (error) {
+      this.logger.error(`❌ خطا در ارسال پیامک به ${receptor}:`, error.message);
+      if (error.response) {
+        this.logger.error('📄 پاسخ سرور:', error.response.data);
+        this.logger.error('📊 وضعیت:', error.response.status);
+      }
+      return {
+        success: false,
+        message: error.message,
+      };
+    }
+  }
+
+  // متد اصلی ارسال پیامک (دقیقاً مشابه تابع send_ghasedak_verify در PHP)
+  async sendSms(
+    receptor: string,
+    message: string,
+  ): Promise<{ success: boolean; message: string }> {
+    try {
+      // نرمال‌سازی شماره (مشابه normalize_iran_phone)
+      const normalizedPhone = this.normalizePhone(receptor);
+
+      const response = await firstValueFrom(
+        this.httpService.post(
+          'https://gateway.ghasedak.me/rest/api/v1/WebService/SendSingleSMS',
+          {
+            receptor: normalizedPhone,
+            message: message,
+          },
+          {
+            headers: {
+              apikey: this.apiKey,
+              'content-type': 'application/json',
             },
             timeout: 30000,
           },
@@ -90,60 +142,46 @@ export class SmsService {
 
   // ۱. ارسال کد تایید (OTP)
   async sendOtp(phone: string, code: string): Promise<{ success: boolean }> {
-    const result = await this.sendGhasedakVerify(phone, 'OtpTemplate', code);
+    const result = await this.sendGhasedakOtp(phone, 'OtpTemplate', code);
     return { success: result.success };
   }
 
   // ۲. پیامک ثبت سفارش به مشتری (CustomerOrder)
   async sendOrderConfirmationToCustomer(
     phone: string,
-    orderNumber: string,
-    customerName: string,
   ): Promise<{ success: boolean }> {
-    const result = await this.sendGhasedakVerify(
-      phone,
-      'CustomerOrder',
-      customerName,
-    );
+    const result = await this.sendSms(phone, 'سفارش شما با موفقیت ثبت شد');
     return { success: result.success };
   }
 
   // ۳. پیامک ثبت سفارش به ادمین (AdminOrder)
   async sendOrderNotificationToAdmin(
     orderNumber: string,
-    customerName: string,
-    customerPhone: string,
-    totalPrice: number,
   ): Promise<{ success: boolean }> {
-    const result = await this.sendGhasedakVerify(
+    const result = await this.sendSms(
       this.adminPhone,
-      'AdminOrder',
-      orderNumber,
+      `سفارشی با شماره ${orderNumber} ثبت گردید`,
     );
     return { success: result.success };
   }
 
   // ۴. ارسال پیامک یادآوری سفارش پرداخت‌نشده (UnpaidOrder)
-  async sendUnpaidOrderReminder(
-    phone: string,
-    orderNumber: string,
-    customerName: string,
-  ): Promise<{ success: boolean }> {
-    const result = await this.sendGhasedakVerify(
-      phone,
-      'UnpaidOrder',
-      customerName,
-    );
-    return { success: result.success };
-  }
+  // async sendUnpaidOrderReminder(
+  //   phone: string,
+  //   orderNumber: string,
+  //   customerName: string,
+  // ): Promise<{ success: boolean }> {
+  //   const result = await this.sendSms(phone, 'UnpaidOrder', customerName);
+  //   return { success: result.success };
+  // }
 
   // ۵. ارسال پیامک با قالب دلخواه
-  async sendCustomVerify(
-    receptor: string,
-    template: string,
-    param1: string,
-  ): Promise<{ success: boolean }> {
-    const result = await this.sendGhasedakVerify(receptor, template, param1);
-    return { success: result.success };
-  }
+  // async sendCustomVerify(
+  //   receptor: string,
+  //   template: string,
+  //   param1: string,
+  // ): Promise<{ success: boolean }> {
+  //   const result = await this.sendGhasedakVerify(receptor, template, param1);
+  //   return { success: result.success };
+  // }
 }

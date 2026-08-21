@@ -14,6 +14,7 @@ import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
+import { SmsService } from 'src/sms/sms.service';
 import { User } from 'src/users/entities/user.entity';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
@@ -46,6 +47,8 @@ export class OrdersService {
     private readonly rahkaranService: RahkaranService,
 
     private readonly discountService: DiscountService,
+
+    private readonly smsService: SmsService,
 
     private readonly dataSource: DataSource,
   ) {}
@@ -406,6 +409,9 @@ export class OrdersService {
         //
         // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
       }
+
+      await this.smsService.sendOrderConfirmationToCustomer(order.user.phone);
+      await this.smsService.sendOrderNotificationToAdmin(order.id.toString());
 
       return this.findOne(order.id);
     } catch (error) {

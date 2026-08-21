@@ -34,7 +34,6 @@ export class AuthService {
     const response = await this.otpService.sendOtp(sendOtpDto.phone);
 
     await this.smsService.sendOtp(sendOtpDto.phone, response.otp);
-
     const { message } = response;
 
     return {
