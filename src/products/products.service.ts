@@ -1570,7 +1570,7 @@ export class ProductsService {
           // unitRef -> stock
           // --------------------------------------------------------
 
-          const newPrice = Number(rahkaranProduct.fee);
+          const newPrice = Number(rahkaranProduct.fee) / 10;
 
           const newStock = Number(rahkaranProduct.unitRef);
 
