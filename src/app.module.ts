@@ -30,6 +30,7 @@ import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
+import { CatalogModule } from './catalog/catalog.module';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     PaymentModule,
     DiscountsModule,
     ContactModule,
+    CatalogModule,
   ],
   controllers: [AppController],
   providers: [
