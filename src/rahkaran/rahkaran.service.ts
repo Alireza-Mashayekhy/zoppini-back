@@ -387,7 +387,23 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         }`,
       );
 
-      return false;
+      // Session را نامعتبر فرض کن
+      this.clearState();
+
+      try {
+        await this.login();
+
+        this.logger.log('🔄 Login مجدد بعد از Tick ناموفق با موفقیت انجام شد.');
+
+        return true;
+      } catch (loginError) {
+        this.logger.error(
+          '❌ Login مجدد بعد از Tick ناموفق بود.',
+          this.getErrorMessage(loginError),
+        );
+
+        return false;
+      }
     } catch (error) {
       this.logger.error(
         '❌ Tick راهکاران با خطا مواجه شد.',
@@ -635,7 +651,31 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     const cookies = Array.isArray(setCookie) ? setCookie : [setCookie];
 
-    this.latestCookies = cookies.map((cookie: string) => cookie.split(';')[0]);
+    const incomingCookies = cookies.map(
+      (cookie: string) => cookie.split(';')[0],
+    );
+
+    const cookieMap = new Map<string, string>();
+
+    // Cookieهای قبلی
+    for (const cookie of this.latestCookies) {
+      const [name] = cookie.split('=');
+
+      if (name) {
+        cookieMap.set(name, cookie);
+      }
+    }
+
+    // Cookieهای جدید
+    for (const cookie of incomingCookies) {
+      const [name] = cookie.split('=');
+
+      if (name) {
+        cookieMap.set(name, cookie);
+      }
+    }
+
+    this.latestCookies = Array.from(cookieMap.values());
 
     if (this.state && this.latestCookies.length > 0) {
       this.state.cookie = this.latestCookies.join('; ');
@@ -745,21 +785,35 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     page = 1,
     count = 10,
   ): Promise<any> {
-    await this.ensureAuthenticated();
-
     const params = new URLSearchParams({
       barcode,
       page: String(page),
       count: String(count),
     });
 
-    const response = await this.request<any>(
-      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/getProductByBarcode?${params.toString()}`,
-      {
+    const url =
+      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/` +
+      `getProductByBarcode?${params.toString()}`;
+
+    let response = await this.authenticatedRequest<any>(url, {
+      method: 'GET',
+    });
+
+    // اگر Session منقضی شده باشد ولی HTTP 200 برگشته باشد
+    if (this.isSessionExpiredResponse(response)) {
+      this.logger.warn(
+        `⚠️ Session هنگام دریافت SKU=${barcode} منقضی شده بود. Login مجدد...`,
+      );
+
+      this.clearState();
+
+      await this.login();
+
+      response = await this.request<any>(url, {
         method: 'GET',
         headers: this.authHeaders(),
-      },
-    );
+      });
+    }
 
     if (response?.metadata?.isSuccessfull !== true) {
       throw new BadRequestException(
@@ -1142,5 +1196,74 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     });
 
     return invoice;
+  }
+
+  private isSessionExpiredResponse(response: any): boolean {
+    const errorMessage = this.getRahkaranError(response);
+
+    if (!errorMessage) {
+      return false;
+    }
+
+    const message = errorMessage.toLowerCase();
+
+    return (
+      message.includes('دوباره وارد سیستم شوید') ||
+      message.includes('برای مدتی بدون استفاده') ||
+      message.includes('session') ||
+      message.includes('جلسه') ||
+      message.includes('منقضی') ||
+      message.includes('احراز هویت')
+    );
+  }
+
+  private async authenticatedRequest<T>(
+    url: string,
+    config: AxiosRequestConfig = {},
+  ): Promise<T> {
+    await this.ensureAuthenticated();
+
+    try {
+      return await this.request<T>(url, {
+        ...config,
+        headers: {
+          ...(config.headers || {}),
+          ...this.authHeaders(),
+        },
+      });
+    } catch (error) {
+      const message = this.getErrorMessage(error);
+
+      const isAuthError =
+        message.includes('Session راهکاران معتبر نیست') ||
+        message.includes('401') ||
+        message.includes('403') ||
+        message.includes('دوباره وارد سیستم شوید') ||
+        message.includes('برای مدتی بدون استفاده');
+
+      if (!isAuthError) {
+        throw error;
+      }
+
+      this.logger.warn(
+        `⚠️ Session راهکاران معتبر نیست. Login مجدد انجام می‌شود. Error: ${message}`,
+      );
+
+      this.clearState();
+
+      await this.login();
+
+      this.logger.log(
+        '🔄 Login مجدد موفق بود. درخواست Rahkaran دوباره ارسال می‌شود.',
+      );
+
+      return await this.request<T>(url, {
+        ...config,
+        headers: {
+          ...(config.headers || {}),
+          ...this.authHeaders(),
+        },
+      });
+    }
   }
 }

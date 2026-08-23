@@ -601,21 +601,6 @@ export class ProductsService {
     }
 
     // =====================================================
-    // RAHKARAN SYNC
-    // =====================================================
-
-    try {
-      // await this.rahkaranService.updateProductStockAndPrice(product.id);
-
-      this.logger.log(`✅ محصول ${product.id} با راهکاران همگام‌سازی شد.`);
-    } catch (error) {
-      this.logger.error(
-        `❌ خطا در همگام‌سازی محصول ${product.id}`,
-        error.message,
-      );
-    }
-
-    // =====================================================
     // RELATED PRODUCTS
     // =====================================================
 
