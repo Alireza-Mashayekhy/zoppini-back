@@ -1391,54 +1391,124 @@ export class ProductsService {
     const variantsToUpdate: Variant[] = [];
 
     for (const variant of variants) {
-      if (!variant.sku?.trim()) {
+      const sku = variant.sku?.trim();
+
+      if (!sku) {
         continue;
       }
 
       try {
+        // ==========================================================
+        // 1. دریافت محصول از راهکاران بر اساس SKU
+        // ==========================================================
+
         const rahkaranProduct =
-          await this.rahkaranService.getRetailProductByBarcode(
-            variant.sku.trim(),
-            1,
-            10,
-          );
+          await this.rahkaranService.getRetailProductByBarcode(sku, 1, 10);
 
         if (!rahkaranProduct) {
-          this.logger.warn(
-            `⚠️ محصول راهکاران برای SKU=${variant.sku} پیدا نشد.`,
-          );
+          this.logger.warn(`⚠️ محصول راهکاران برای SKU=${sku} پیدا نشد.`);
 
           continue;
         }
 
-        this.logger.log(rahkaranProduct);
+        const rahkaranProductData = rahkaranProduct?.product ?? rahkaranProduct;
 
-        const newPrice = Number(rahkaranProduct.product?.fee) / 10;
-        const newStock = Number(rahkaranProduct.product?.unitRef);
+        const productIdRahkaran = Number(rahkaranProductData?.productId);
 
-        // جلوگیری از ورود NaN به دیتابیس
-        if (!Number.isFinite(newPrice) || !Number.isFinite(newStock)) {
+        if (!Number.isFinite(productIdRahkaran)) {
+          this.logger.error(`❌ productId راهکاران نامعتبر است | SKU=${sku}`);
+
+          continue;
+        }
+
+        // ==========================================================
+        // 2. قیمت
+        // ==========================================================
+
+        const newPrice = Number(rahkaranProductData?.fee) / 10;
+
+        if (!Number.isFinite(newPrice)) {
           this.logger.error(
-            `❌ مقدار نامعتبر از راهکاران برای SKU=${variant.sku} | ` +
-              `fee=${JSON.stringify(rahkaranProduct.fee)} | ` +
-              `unitRef=${JSON.stringify(rahkaranProduct.unitRef)} | ` +
-              `response=${JSON.stringify(rahkaranProduct)}`,
+            `❌ قیمت نامعتبر | SKU=${sku} | ` +
+              `fee=${JSON.stringify(rahkaranProductData?.fee)}`,
           );
 
           continue;
         }
+
+        // ==========================================================
+        // 3. دریافت موجودی از StoreService
+        // ==========================================================
+
+        const remainingQuantity =
+          await this.rahkaranService.getRemainingQuantityInfo(
+            productIdRahkaran,
+          );
+
+        const store = remainingQuantity.find(
+          item => Number(item.StoreID) === 20,
+        );
+
+        if (!store) {
+          this.logger.warn(
+            `⚠️ انبار StoreID=20 برای SKU=${sku} ` +
+              `و RahkaranProductID=${productIdRahkaran} پیدا نشد.`,
+          );
+
+          continue;
+        }
+
+        const newStock = Number(store.RemainingQuantity);
+
+        // ==========================================================
+        // 4. اعتبارسنجی موجودی
+        // ==========================================================
+
+        if (!Number.isFinite(newStock)) {
+          this.logger.error(
+            `❌ موجودی نامعتبر | SKU=${sku} | ` +
+              `RemainingQuantity=${JSON.stringify(store.RemainingQuantity)}`,
+          );
+
+          continue;
+        }
+
+        if (!Number.isSafeInteger(newStock)) {
+          this.logger.error(
+            `❌ موجودی خارج از محدوده امن Number | ` +
+              `SKU=${sku} | stock=${newStock}`,
+          );
+
+          continue;
+        }
+
+        // ==========================================================
+        // 5. Update
+        // ==========================================================
 
         variant.price = newPrice;
         variant.stock = newStock;
 
         variantsToUpdate.push(variant);
+
+        this.logger.log(
+          `✅ Sync Variant | ` +
+            `SKU=${sku} | ` +
+            `RahkaranProductID=${productIdRahkaran} | ` +
+            `Price=${newPrice} | ` +
+            `Stock=${newStock}`,
+        );
       } catch (error) {
         this.logger.error(
-          `❌ Sync Variant با SKU=${variant.sku} ناموفق بود.`,
+          `❌ Sync Variant با SKU=${sku} ناموفق بود.`,
           error instanceof Error ? error.message : String(error),
         );
       }
     }
+
+    // ============================================================
+    // Save
+    // ============================================================
 
     if (variantsToUpdate.length) {
       await this.variantRepo.save(variantsToUpdate);
@@ -1450,35 +1520,109 @@ export class ProductsService {
   async syncAllProductsWithRahkaran(): Promise<void> {
     this.logger.log('🚀 شروع Sync تمام محصولات با راهکاران...');
 
-    const count = 100;
+    // ============================================================
+    // تنظیمات
+    // ============================================================
+
+    const PAGE_SIZE = 100;
+
+    /**
+     * حداکثر تعداد درخواست همزمان
+     *
+     * بیشتر از این مقدار فعلاً پیشنهاد نمی‌کنم.
+     */
+    const QUANTITY_CONCURRENCY = 5;
+
+    /**
+     * تعداد Variantهایی که در هر save ذخیره می‌شوند.
+     */
+    const SAVE_CHUNK_SIZE = 100;
+
+    /**
+     * انبار فروشگاه
+     */
+    const STORE_ID = 20;
+
     let page = 1;
 
+    // ============================================================
+    // Statistics
+    // ============================================================
+
     let totalRahkaranProducts = 0;
+
     let totalMatched = 0;
+
     let totalUpdated = 0;
+
     let totalUnchanged = 0;
+
     let totalSkipped = 0;
+
     let totalFailed = 0;
 
-    try {
-      while (true) {
-        this.logger.log(`📦 دریافت محصولات راهکاران - page=${page}`);
+    let totalQuantityRequests = 0;
 
-        const rahkaranProducts = await this.rahkaranService.getRetailProducts(
-          '',
-          page,
-          count,
+    const startedAt = Date.now();
+
+    try {
+      // ==========================================================
+      // Authentication
+      // ==========================================================
+
+      await this.rahkaranService.ensureAuthenticated();
+
+      this.logger.log('🔐 اتصال به راهکاران برقرار است.');
+
+      // ==========================================================
+      // Pagination
+      // ==========================================================
+
+      while (true) {
+        this.logger.log(
+          `📦 دریافت محصولات راهکاران | page=${page} | count=${PAGE_SIZE}`,
         );
 
+        let rahkaranProducts: RahkaranProduct[];
+
+        // ========================================================
+        // دریافت Page
+        // ========================================================
+
+        try {
+          rahkaranProducts = await this.rahkaranService.getRetailProducts(
+            '',
+            page,
+            PAGE_SIZE,
+          );
+        } catch (error) {
+          this.logger.error(
+            `❌ دریافت Page=${page} از راهکاران ناموفق بود.`,
+            error instanceof Error ? error.stack : String(error),
+          );
+
+          /**
+           * اگر خود Page مشکل داشت، کل Sync را متوقف نمی‌کنیم.
+           *
+           * اما ادامه دادن به page بعدی ممکن است باعث از دست رفتن
+           * اطلاعات شود.
+           *
+           * بنابراین اینجا فعلاً Sync را خاتمه می‌دهیم.
+           */
+          break;
+        }
+
         if (!rahkaranProducts.length) {
+          this.logger.log(`📭 Page=${page} خالی بود. پایان دریافت محصولات.`);
+
           break;
         }
 
         totalRahkaranProducts += rahkaranProducts.length;
 
-        // ----------------------------------------------------------
-        // Map راهکاران بر اساس productNumber
-        // ----------------------------------------------------------
+        // ==========================================================
+        // Map Rahkaran Products
+        // ==========================================================
 
         const rahkaranMap = new Map<string, RahkaranProduct>();
 
@@ -1487,6 +1631,7 @@ export class ProductsService {
 
           if (!sku) {
             totalSkipped++;
+
             continue;
           }
 
@@ -1496,175 +1641,338 @@ export class ProductsService {
         const skus = [...rahkaranMap.keys()];
 
         if (!skus.length) {
-          if (rahkaranProducts.length < count) {
+          this.logger.warn(`⚠️ Page=${page} هیچ SKU معتبری نداشت.`);
+
+          if (rahkaranProducts.length < PAGE_SIZE) {
             break;
           }
 
           page++;
+
           continue;
         }
 
-        // ----------------------------------------------------------
-        // فقط Variantهای موجود در سایت
-        // ----------------------------------------------------------
-        //
-        // مهم:
-        // این Query هیچ Variant جدیدی ایجاد نمی‌کند.
-        // بنابراین محصولی که فقط در راهکاران وجود دارد
-        // وارد سایت نمی‌شود.
-        // ----------------------------------------------------------
+        // ==========================================================
+        // دریافت Variantهای موجود در سایت
+        // ==========================================================
 
-        const variants = await this.variantRepo
-          .createQueryBuilder('variant')
-          .where('variant.sku IN (:...skus)', {
-            skus,
-          })
-          .getMany();
+        let variants: Variant[] = [];
+
+        try {
+          variants = await this.variantRepo
+            .createQueryBuilder('variant')
+            .where('variant.sku IN (:...skus)', {
+              skus,
+            })
+            .getMany();
+        } catch (error) {
+          this.logger.error(
+            `❌ دریافت Variantهای Page=${page} ناموفق بود.`,
+            error instanceof Error ? error.stack : String(error),
+          );
+
+          /**
+           * این Page را رد می‌کنیم
+           * و به Page بعد می‌رویم.
+           */
+
+          if (rahkaranProducts.length < PAGE_SIZE) {
+            break;
+          }
+
+          page++;
+
+          continue;
+        }
 
         this.logger.log(
-          `🔎 page=${page} | ` +
+          `🔎 Page=${page} | ` +
             `Rahkaran=${rahkaranProducts.length} | ` +
             `SiteVariants=${variants.length}`,
         );
 
-        const variantsToUpdate: Variant[] = [];
+        // ==========================================================
+        // اگر Variantای در سایت نبود
+        // ==========================================================
 
-        // ----------------------------------------------------------
-        // Match و آماده‌سازی Update
-        // ----------------------------------------------------------
+        if (!variants.length) {
+          if (rahkaranProducts.length < PAGE_SIZE) {
+            break;
+          }
+
+          page++;
+
+          continue;
+        }
+
+        // ==========================================================
+        // آماده‌سازی Map برای Variantها
+        // ==========================================================
+
+        const variantMap = new Map<string, Variant>();
 
         for (const variant of variants) {
           const sku = this.normalizeSku(variant.sku);
 
           if (!sku) {
             totalSkipped++;
+
             continue;
           }
 
+          variantMap.set(sku, variant);
+        }
+
+        // ==========================================================
+        // فقط Variantهایی که Match شده‌اند
+        // ==========================================================
+
+        const matchedVariants: Array<{
+          variant: Variant;
+          rahkaranProduct: RahkaranProduct;
+          sku: string;
+        }> = [];
+
+        for (const [sku, variant] of variantMap) {
           const rahkaranProduct = rahkaranMap.get(sku);
 
           if (!rahkaranProduct) {
             totalSkipped++;
+
             continue;
           }
 
           totalMatched++;
 
-          // --------------------------------------------------------
-          // fee -> price
-          // unitRef -> stock
-          // --------------------------------------------------------
-
-          const newPrice = Number(rahkaranProduct.fee) / 10;
-
-          const newStock = Number(rahkaranProduct.unitRef);
-
-          // --------------------------------------------------------
-          // جلوگیری از NaN / Infinity
-          // --------------------------------------------------------
-
-          if (!Number.isFinite(newPrice)) {
-            totalFailed++;
-
-            this.logger.error(
-              `❌ قیمت نامعتبر | ` +
-                `VariantID=${variant.id} | ` +
-                `SKU=${sku} | ` +
-                `fee=${JSON.stringify(rahkaranProduct.fee)}`,
-            );
-
-            continue;
-          }
-
-          if (!Number.isFinite(newStock)) {
-            totalFailed++;
-
-            this.logger.error(
-              `❌ موجودی نامعتبر | ` +
-                `VariantID=${variant.id} | ` +
-                `SKU=${sku} | ` +
-                `unitRef=${JSON.stringify(rahkaranProduct.unitRef)}`,
-            );
-
-            continue;
-          }
-
-          // --------------------------------------------------------
-          // جلوگیری از مقدار خارج از محدوده Number
-          // --------------------------------------------------------
-
-          if (!Number.isSafeInteger(newStock)) {
-            totalFailed++;
-
-            this.logger.error(
-              `❌ stock خارج از محدوده امن Number | ` +
-                `VariantID=${variant.id} | ` +
-                `SKU=${sku} | ` +
-                `stock=${newStock}`,
-            );
-
-            continue;
-          }
-
-          // --------------------------------------------------------
-          // بررسی تغییر
-          // --------------------------------------------------------
-
-          const oldPrice = Number(variant.price);
-          const oldStock = Number(variant.stock);
-
-          const priceChanged = oldPrice !== newPrice;
-
-          const stockChanged = oldStock !== newStock;
-
-          if (!priceChanged && !stockChanged) {
-            totalUnchanged++;
-            continue;
-          }
-
-          variant.price = newPrice;
-          variant.stock = newStock;
-
-          variantsToUpdate.push(variant);
+          matchedVariants.push({
+            variant,
+            rahkaranProduct,
+            sku,
+          });
         }
 
-        // ----------------------------------------------------------
-        // Save با Chunk
-        // ----------------------------------------------------------
+        this.logger.log(`🎯 Page=${page} | Matched=${matchedVariants.length}`);
+
+        // ==========================================================
+        // گرفتن موجودی با Concurrency = 5
+        // ==========================================================
+
+        const variantsToUpdate: Variant[] = [];
+
+        await this.runWithConcurrency(
+          matchedVariants,
+          QUANTITY_CONCURRENCY,
+          async ({ variant, rahkaranProduct, sku }) => {
+            try {
+              // ====================================================
+              // Rahkaran Product ID
+              // ====================================================
+
+              const rahkaranProductId = Number(rahkaranProduct.productId);
+
+              if (!Number.isFinite(rahkaranProductId)) {
+                totalFailed++;
+
+                this.logger.error(
+                  `❌ productId نامعتبر | ` +
+                    `SKU=${sku} | ` +
+                    `productId=${JSON.stringify(rahkaranProduct.productId)}`,
+                );
+
+                return;
+              }
+
+              // ====================================================
+              // Price
+              // ====================================================
+
+              const newPrice = Number(rahkaranProduct.fee) / 10;
+
+              if (!Number.isFinite(newPrice)) {
+                totalFailed++;
+
+                this.logger.error(
+                  `❌ قیمت نامعتبر | ` +
+                    `SKU=${sku} | ` +
+                    `fee=${JSON.stringify(rahkaranProduct.fee)}`,
+                );
+
+                return;
+              }
+
+              // ====================================================
+              // دریافت موجودی
+              //
+              // فقط StoreID = 20
+              // ====================================================
+
+              totalQuantityRequests++;
+
+              const quantityInfo =
+                await this.rahkaranService.getRemainingQuantityInfo(
+                  rahkaranProductId,
+                );
+
+              const storeInfo = quantityInfo.find(
+                item => Number(item.StoreID) === STORE_ID,
+              );
+
+              // ====================================================
+              // انبار پیدا نشد
+              // ====================================================
+
+              if (!storeInfo) {
+                totalSkipped++;
+
+                this.logger.warn(
+                  `⚠️ انبار StoreID=${STORE_ID} ` +
+                    `برای SKU=${sku} پیدا نشد. ` +
+                    `RahkaranProductID=${rahkaranProductId}`,
+                );
+
+                return;
+              }
+
+              // ====================================================
+              // Stock
+              // ====================================================
+
+              const newStock = Number(storeInfo.RemainingQuantity);
+
+              if (!Number.isFinite(newStock)) {
+                totalFailed++;
+
+                this.logger.error(
+                  `❌ موجودی نامعتبر | ` +
+                    `SKU=${sku} | ` +
+                    `RemainingQuantity=${JSON.stringify(
+                      storeInfo.RemainingQuantity,
+                    )}`,
+                );
+
+                return;
+              }
+
+              // ====================================================
+              // Safe Integer
+              // ====================================================
+
+              if (!Number.isSafeInteger(newStock)) {
+                totalFailed++;
+
+                this.logger.error(
+                  `❌ موجودی خارج از محدوده امن Number | ` +
+                    `SKU=${sku} | ` +
+                    `stock=${newStock}`,
+                );
+
+                return;
+              }
+
+              // ====================================================
+              // مقادیر قبلی
+              // ====================================================
+
+              const oldPrice = Number(variant.price);
+
+              const oldStock = Number(variant.stock);
+
+              const priceChanged = oldPrice !== newPrice;
+
+              const stockChanged = oldStock !== newStock;
+
+              // ====================================================
+              // هیچ تغییری ندارد
+              // ====================================================
+
+              if (!priceChanged && !stockChanged) {
+                totalUnchanged++;
+
+                return;
+              }
+
+              // ====================================================
+              // Update Object
+              // ====================================================
+
+              variant.price = newPrice;
+
+              variant.stock = newStock;
+
+              variantsToUpdate.push(variant);
+
+              this.logger.debug(
+                `🔄 تغییر Variant | ` +
+                  `SKU=${sku} | ` +
+                  `Price=${oldPrice}->${newPrice} | ` +
+                  `Stock=${oldStock}->${newStock}`,
+              );
+            } catch (error) {
+              // ====================================================
+              // خطای یک محصول
+              //
+              // کل Sync متوقف نمی‌شود
+              // ====================================================
+
+              totalFailed++;
+
+              this.logger.error(
+                `❌ Sync موجودی ناموفق | ` +
+                  `SKU=${sku} | ` +
+                  `RahkaranProductID=${rahkaranProduct.productId}`,
+                error instanceof Error ? error.stack : String(error),
+              );
+            }
+          },
+        );
+
+        // ==========================================================
+        // Save Updates
+        // ==========================================================
 
         if (variantsToUpdate.length) {
-          const chunkSize = 100;
+          this.logger.log(
+            `💾 Page=${page} | ` + `VariantsToSave=${variantsToUpdate.length}`,
+          );
 
-          for (let i = 0; i < variantsToUpdate.length; i += chunkSize) {
-            const chunk = variantsToUpdate.slice(i, i + chunkSize);
+          for (let i = 0; i < variantsToUpdate.length; i += SAVE_CHUNK_SIZE) {
+            const chunk = variantsToUpdate.slice(i, i + SAVE_CHUNK_SIZE);
+
+            // ======================================================
+            // Save Chunk
+            // ======================================================
 
             try {
               await this.variantRepo.save(chunk, {
-                chunk: chunkSize,
+                chunk: SAVE_CHUNK_SIZE,
                 transaction: true,
               });
 
               totalUpdated += chunk.length;
 
-              this.logger.log(`💾 page=${page} | ` + `Saved=${chunk.length}`);
+              this.logger.log(
+                `💾 Page=${page} | ` +
+                  `Chunk=${Math.floor(i / SAVE_CHUNK_SIZE) + 1} | ` +
+                  `Saved=${chunk.length}`,
+              );
             } catch (chunkError) {
-              // ----------------------------------------------------
-              // اگر یک Chunk مشکل داشت،
-              // کل Sync متوقف نشود.
-              // ----------------------------------------------------
+              // ====================================================
+              // Chunk شکست خورد
+              // ====================================================
 
               this.logger.error(
                 `❌ خطا در ذخیره Chunk | ` +
-                  `page=${page} | ` +
-                  `size=${chunk.length}`,
+                  `Page=${page} | ` +
+                  `Size=${chunk.length}`,
                 chunkError instanceof Error
                   ? chunkError.stack
                   : String(chunkError),
               );
 
-              // ----------------------------------------------------
-              // ذخیره یکی‌یکی برای پیدا کردن Variant مشکل‌دار
-              // ----------------------------------------------------
+              // ====================================================
+              // Fallback:
+              // ذخیره تک‌تک
+              // ====================================================
 
               for (const variant of chunk) {
                 try {
@@ -1675,13 +1983,13 @@ export class ProductsService {
                   totalFailed++;
 
                   this.logger.error(
-                    `❌ خطا در ذخیره Variant | ` +
+                    `❌ ذخیره Variant ناموفق | ` +
                       `ID=${variant.id} | ` +
                       `SKU=${variant.sku} | ` +
                       `price=${variant.price} | ` +
                       `stock=${variant.stock}`,
                     variantError instanceof Error
-                      ? variantError.message
+                      ? variantError.stack
                       : String(variantError),
                   );
                 }
@@ -1690,32 +1998,64 @@ export class ProductsService {
           }
         }
 
-        // ----------------------------------------------------------
-        // صفحه آخر
-        // ----------------------------------------------------------
+        // ==========================================================
+        // Page Summary
+        // ==========================================================
 
-        if (rahkaranProducts.length < count) {
+        this.logger.log(
+          `📊 پایان Page=${page} | ` +
+            `Matched=${totalMatched} | ` +
+            `Updated=${totalUpdated} | ` +
+            `Unchanged=${totalUnchanged} | ` +
+            `Skipped=${totalSkipped} | ` +
+            `Failed=${totalFailed}`,
+        );
+
+        // ==========================================================
+        // آخرین Page
+        // ==========================================================
+
+        if (rahkaranProducts.length < PAGE_SIZE) {
           break;
         }
 
         page++;
       }
 
-      // ------------------------------------------------------------
-      // Final Log
-      // ------------------------------------------------------------
+      // ============================================================
+      // Final Summary
+      // ============================================================
 
-      this.logger.log(
-        `✅ Sync تمام محصولات با راهکاران تمام شد | ` +
-          `Pages=${page} | ` +
-          `RahkaranProducts=${totalRahkaranProducts} | ` +
-          `Matched=${totalMatched} | ` +
-          `Updated=${totalUpdated} | ` +
-          `Unchanged=${totalUnchanged} | ` +
-          `Skipped=${totalSkipped} | ` +
-          `Failed=${totalFailed}`,
-      );
+      const durationSeconds = Math.round((Date.now() - startedAt) / 1000);
+
+      this.logger.log(`==================================================`);
+
+      this.logger.log(`✅ Sync تمام محصولات با راهکاران تمام شد`);
+
+      this.logger.log(`📄 Pages=${page}`);
+
+      this.logger.log(`📦 RahkaranProducts=${totalRahkaranProducts}`);
+
+      this.logger.log(`🎯 Matched=${totalMatched}`);
+
+      this.logger.log(`🔄 Updated=${totalUpdated}`);
+
+      this.logger.log(`⏭️ Unchanged=${totalUnchanged}`);
+
+      this.logger.log(`⚠️ Skipped=${totalSkipped}`);
+
+      this.logger.log(`❌ Failed=${totalFailed}`);
+
+      this.logger.log(`📡 QuantityRequests=${totalQuantityRequests}`);
+
+      this.logger.log(`⏱️ Duration=${durationSeconds}s`);
+
+      this.logger.log(`==================================================`);
     } catch (error) {
+      // ==========================================================
+      // خطای کلی
+      // ==========================================================
+
       this.logger.error(
         '❌ خطای کلی در Sync تمام محصولات با راهکاران',
         error instanceof Error ? error.stack : String(error),
@@ -1734,5 +2074,37 @@ export class ProductsService {
       .trim()
       .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
       .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+  }
+
+  private async runWithConcurrency<T>(
+    items: T[],
+    concurrency: number,
+    handler: (item: T) => Promise<void>,
+  ): Promise<void> {
+    let index = 0;
+
+    const worker = async () => {
+      while (true) {
+        const currentIndex = index++;
+
+        if (currentIndex >= items.length) {
+          return;
+        }
+
+        try {
+          await handler(items[currentIndex]);
+        } catch (error) {
+          // خطای هر آیتم نباید Worker را متوقف کند
+          this.logger.error(
+            `❌ خطا در پردازش آیتم ${currentIndex}`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    };
+
+    const workerCount = Math.min(concurrency, items.length);
+
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
   }
 }

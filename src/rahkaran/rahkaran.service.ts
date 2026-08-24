@@ -851,31 +851,74 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   ): Promise<RahkaranRemainingQuantity[]> {
     await this.ensureAuthenticated();
 
-    const response = await this.request<{
+    const url =
+      `${this.baseUrl}/Retail/Api/DocumentStructure/StoreService.svc/` +
+      `GetRemainingQuantityInfo?productId=${productId}`;
+
+    let response = await this.authenticatedRequest<{
       result: RahkaranRemainingQuantity[];
       metadata?: {
         isSuccessfull?: boolean;
+        isSuccessful?: boolean;
         errorMessage?: string | null;
       };
-    }>(
-      `${this.baseUrl}/Retail/Api/DocumentStructure/StoreService.svc/GetRemainingQuantityInfo`,
-      {
-        method: 'GET',
-        params: {
-          productId,
-        },
-        headers: this.authHeaders(),
-      },
-    );
+    }>(url, {
+      method: 'GET',
+    });
 
-    if (response?.metadata?.isSuccessfull === false) {
+    // ==========================================================
+    // Session Expired
+    // ==========================================================
+
+    if (this.isSessionExpiredResponse(response)) {
+      this.logger.warn(
+        `⚠️ Session هنگام دریافت موجودی ` +
+          `ProductID=${productId} منقضی شده بود. Login مجدد...`,
+      );
+
+      this.clearState();
+
+      await this.login();
+
+      // Retry فقط همان درخواست
+      response = await this.request(url, {
+        method: 'GET',
+        headers: this.authHeaders(),
+      });
+    }
+
+    // ==========================================================
+    // بررسی Response
+    // ==========================================================
+
+    if (
+      response?.metadata?.isSuccessfull === false ||
+      response?.metadata?.isSuccessful === false
+    ) {
       throw new BadRequestException(
-        response.metadata.errorMessage ||
+        response?.metadata?.errorMessage ||
           `دریافت موجودی محصول ${productId} از راهکاران ناموفق بود.`,
       );
     }
 
     return response?.result ?? [];
+  }
+
+  async getRemainingQuantityForStore(
+    productId: number,
+    storeId = 20,
+  ): Promise<number | null> {
+    const result = await this.getRemainingQuantityInfo(productId);
+
+    const store = result.find(item => Number(item.StoreID) === Number(storeId));
+
+    if (!store) {
+      return null;
+    }
+
+    const quantity = Number(store.RemainingQuantity);
+
+    return Number.isFinite(quantity) ? quantity : null;
   }
 
   async createLoyaltyMemberForUser(id: number) {
