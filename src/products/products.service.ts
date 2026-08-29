@@ -353,9 +353,15 @@ export class ProductsService {
       colorIds?: number[];
       sizeIds?: number[];
     },
+    options?: {
+      onlyInStock?: boolean;
+    },
   ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+
+    const onlyInStock = options?.onlyInStock ?? false;
+
     const qb = this.productRepo.createQueryBuilder('products');
 
     qb.leftJoinAndSelect('products.variants', 'variant')
@@ -366,6 +372,11 @@ export class ProductsService {
       .leftJoinAndSelect('colorImages.color', 'imageColor')
       .leftJoinAndSelect('products.sameColorProducts', 'sameColorProducts')
       .leftJoinAndSelect('products.suggestedProducts', 'suggestedProducts');
+
+    // فقط محصولاتی که حداقل یک variant موجود دارند
+    if (onlyInStock) {
+      qb.andWhere('variant.stock > 0');
+    }
 
     if (filters?.categoryIds?.length) {
       qb.andWhere('category.id IN (:...categoryIds)', {
@@ -385,34 +396,36 @@ export class ProductsService {
       });
     }
 
-    // search
     applySearch(qb, query.search, [
       'products.title',
       'products.slug',
       'products.productCode',
     ]);
 
-    // sort
     if (query.sort) {
       const [field, order] = query.sort.split(':');
       const direction = (order?.toUpperCase() as any) || 'ASC';
+
       switch (field) {
         case 'title':
           qb.orderBy('products.title', direction);
           break;
+
         case 'price':
           qb.orderBy('variant.price', direction);
           break;
+
         case 'createdAt':
           qb.orderBy('products.createdAt', direction);
           break;
+
         default:
           qb.orderBy('products.id', direction);
       }
     }
 
-    // pagination
     const { skip, take } = getPagination(page, limit);
+
     qb.skip(skip).take(take);
 
     const [data, total] = await qb.getManyAndCount();

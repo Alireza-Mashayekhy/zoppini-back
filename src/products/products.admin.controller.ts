@@ -108,7 +108,9 @@ export class AdmiProductsController {
       sizeIds: sizeIds ? sizeIds.split(',').map(Number) : undefined,
     };
 
-    return this.productsService.findAll(query, filters);
+    return this.productsService.findAll(query, filters, {
+      onlyInStock: false,
+    });
   }
 
   @Get('/color')

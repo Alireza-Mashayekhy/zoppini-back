@@ -20,7 +20,9 @@ export class ProductsController {
       sizeIds: sizeIds ? sizeIds.split(',').map(Number) : undefined,
     };
 
-    return this.productsService.findAll(query, filters);
+    return this.productsService.findAll(query, filters, {
+      onlyInStock: true,
+    });
   }
 
   @Get('/color')
