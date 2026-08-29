@@ -261,7 +261,9 @@ export class CartsService {
     let userCart = await this.cartRepo.findOne({
       where: { user: { id: userId } },
       relations: {
-        items: true,
+        items: {
+          variant: true,
+        },
       },
     });
     if (!userCart) {
