@@ -231,8 +231,8 @@ export class AuthService {
 
   private readonly accessCookieOptions = {
     httpOnly: true,
-    // secure: process.env.NODE_ENV === 'production',
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
+    // secure: false,
     sameSite: 'lax' as const,
     maxAge: 15 * 60 * 1000,
     path: '/',
@@ -240,8 +240,8 @@ export class AuthService {
 
   private readonly refreshCookieOptions = {
     httpOnly: true,
-    // secure: process.env.NODE_ENV === 'production',
-    secure: false,
+    secure: process.env.NODE_ENV === 'production',
+    // secure: false,
     sameSite: 'lax' as const,
     maxAge: 30 * 24 * 60 * 60 * 1000,
     path: '/',
