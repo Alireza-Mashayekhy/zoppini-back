@@ -17,6 +17,7 @@ import { Roles } from 'src/common/decorators/roles.decorator';
 import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
+import { FileSizeValidationPipe } from 'src/files/validation/fileSize.validator';
 
 import { CatalogService } from './catalog.service';
 import { CreateCatalogDto } from './dto/create-catalog.dto';
@@ -30,7 +31,7 @@ export class CatalogAdminController {
   @Post('pages')
   @UseInterceptors(FileInterceptor('image'))
   async createPage(
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file: Express.Multer.File,
     @Body() dto: CreateCatalogDto,
   ) {
     if (!file) {

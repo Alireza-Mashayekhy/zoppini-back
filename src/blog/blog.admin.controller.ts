@@ -11,6 +11,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { FileSizeValidationPipe } from 'src/files/validation/fileSize.validator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -33,7 +34,7 @@ export class BlogAdminController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   create(
     @Body() createBlogPostDto: CreateBlogPostDto,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file: Express.Multer.File,
   ) {
     return this.blogService.create(createBlogPostDto, file);
   }
@@ -53,7 +54,7 @@ export class BlogAdminController {
   update(
     @Param('id') id: string,
     @Body() updateBlogPostDto: UpdateBlogPostDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
   ) {
     return this.blogService.update(+id, updateBlogPostDto, file);
   }

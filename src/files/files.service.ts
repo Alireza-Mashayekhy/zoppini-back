@@ -1,5 +1,5 @@
 // src/files/files.service.ts
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -13,6 +13,11 @@ export class FilesService {
 
     // ۱. تولید نام یکتا برای فایل
     const ext = path.extname(file.originalname || '');
+
+    const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
+    if (!allowedExts.includes(ext))
+      throw new BadRequestException('فرمت فایل مجاز نیست');
+
     const filename = `${uuidv4()}${ext}`;
 
     // ۲. مسیر کامل دایرکتوری uploads (در ریشه پروژه)

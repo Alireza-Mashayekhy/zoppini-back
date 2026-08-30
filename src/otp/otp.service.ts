@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
-import { SmsService } from '../sms/sms.service';
 import { RedisService } from '../redis/redis.service';
+import { SmsService } from '../sms/sms.service';
 
 @Injectable()
 export class OtpService {
