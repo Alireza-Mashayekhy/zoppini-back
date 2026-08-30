@@ -11,23 +11,38 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
   app.setGlobalPrefix('api');
 
   setupSwagger(app);
 
   app.use(compression());
   app.use(cookieParser());
-  app.useGlobalPipes(new ValidationPipe({ transform: true }));
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      transform: true,
+    }),
+  );
+
   app.useGlobalInterceptors(new ResponseInterceptor());
 
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads',
   });
 
+  const isDev = process.env.NODE_ENV !== 'production';
+
   app.enableCors({
-    origin: true,
+    origin: isDev
+      ? 'http://localhost:3000'
+      : ['https://zoppinico.com', 'https://www.zoppinico.com'],
+
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Guest-ID'],
   });
 
   await app.listen(process.env.PORT ?? 3000);
