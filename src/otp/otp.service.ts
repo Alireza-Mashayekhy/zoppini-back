@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  HttpException,
+  HttpStatus,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import { randomInt } from 'crypto';
 
 import { RedisService } from '../redis/redis.service';
 import { SmsService } from '../sms/sms.service';
@@ -6,6 +13,10 @@ import { SmsService } from '../sms/sms.service';
 @Injectable()
 export class OtpService {
   private readonly logger = new Logger(OtpService.name);
+
+  private readonly OTP_TTL = 120; // 2 minutes
+  private readonly MAX_VERIFY_ATTEMPTS = 5;
+  private readonly SEND_COOLDOWN = 60; // 60 seconds
 
   constructor(
     private readonly redisService: RedisService,
@@ -15,28 +26,63 @@ export class OtpService {
   async sendOtp(phone: string) {
     const redis = this.redisService.getClient();
 
-    // بررسی وجود OTP قبلی
-    const existingOtp = await redis.get(`otp:${phone}`);
-    if (existingOtp) {
-      // محاسبه زمان باقی‌مانده برای نمایش به کاربر
-      throw new BadRequestException('کد قبلا برای شما ارسال شده است');
+    const otpKey = `otp:${phone}`;
+    const attemptsKey = `otp:attempts:${phone}`;
+    const cooldownKey = `otp:cooldown:${phone}`;
+
+    // جلوگیری از ارسال مجدد در 60 ثانیه
+    const cooldownExists = await redis.exists(cooldownKey);
+
+    if (cooldownExists) {
+      throw new HttpException(
+        'لطفاً قبل از درخواست مجدد کمی صبر کنید',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    // تولید کد جدید
-    const code = Math.floor(10000 + Math.random() * 90000).toString();
+    // اگر OTP قبلی هنوز معتبر است
+    const existingOtp = await redis.exists(otpKey);
 
-    // ذخیره در Redis با انقضای ۱۲۰ ثانیه
-    await redis.set(`otp:${phone}`, code, {
-      EX: 120,
+    if (existingOtp) {
+      throw new HttpException(
+        'کد قبلی هنوز معتبر است',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    // تولید OTP امن
+    const code = randomInt(10000, 100000).toString();
+
+    // ذخیره OTP
+    await redis.set(otpKey, code, {
+      EX: this.OTP_TTL,
     });
 
-    // لاگ کد در محیط غیر生产 برای دیباگ
+    // reset attempts
+    await redis.set(attemptsKey, '0', {
+      EX: this.OTP_TTL,
+    });
+
+    // cooldown
+    await redis.set(cooldownKey, '1', {
+      EX: this.SEND_COOLDOWN,
+    });
+
+    // فقط development
     if (process.env.NODE_ENV !== 'production') {
       this.logger.log(`OTP for ${phone}: ${code}`);
     }
 
-    // ارسال پیامک
-    await this.smsService.sendOtp(phone, code);
+    try {
+      await this.smsService.sendOtp(phone, code);
+    } catch (error) {
+      // rollback state اگر SMS ارسال نشد
+      await redis.del(otpKey);
+      await redis.del(attemptsKey);
+      await redis.del(cooldownKey);
+
+      throw error;
+    }
 
     return {
       message: 'کد تایید ارسال شد',
@@ -46,17 +92,50 @@ export class OtpService {
   async verifyOtp(phone: string, code: string) {
     const redis = this.redisService.getClient();
 
-    const storedCode = await redis.get(`otp:${phone}`);
+    const otpKey = `otp:${phone}`;
+    const attemptsKey = `otp:attempts:${phone}`;
+
+    const storedCode = await redis.get(otpKey);
 
     if (!storedCode) {
       throw new BadRequestException('کد منقضی شده است');
     }
 
-    if (storedCode !== code) {
-      throw new BadRequestException('کد وار شده اشتباه است');
+    const attempts = Number((await redis.get(attemptsKey)) ?? '0');
+
+    if (attempts >= this.MAX_VERIFY_ATTEMPTS) {
+      await redis.del(otpKey);
+      await redis.del(attemptsKey);
+
+      throw new HttpException(
+        'تعداد تلاش‌های مجاز تمام شده است',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
-    await redis.del(`otp:${phone}`);
+    if (storedCode !== code) {
+      const newAttempts = await redis.incr(attemptsKey);
+
+      if (newAttempts === 1) {
+        await redis.expire(attemptsKey, this.OTP_TTL);
+      }
+
+      if (newAttempts >= this.MAX_VERIFY_ATTEMPTS) {
+        await redis.del(otpKey);
+        await redis.del(attemptsKey);
+
+        throw new HttpException(
+          'تعداد تلاش‌های مجاز تمام شده است',
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+
+      throw new BadRequestException('کد وارد شده اشتباه است');
+    }
+
+    // موفق
+    await redis.del(otpKey);
+    await redis.del(attemptsKey);
 
     return true;
   }
