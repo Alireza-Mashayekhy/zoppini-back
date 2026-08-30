@@ -46,6 +46,7 @@
     "eslint-plugin-unused-imports": "^4.4.1",
     "graphql": "^16.11.0",
     "graphql-request": "^7.4.0",
+    "helmet": "^8.3.0",
     "moment-jalaali": "^0.10.4",
     "mysql2": "^3.22.3",
     "persian-date": "^1.1.0",

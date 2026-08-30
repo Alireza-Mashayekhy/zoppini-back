@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
+import helmet from 'helmet';
 import { join } from 'path';
 
 import { AppModule } from './app.module';
@@ -15,6 +16,32 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   setupSwagger(app);
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+
+      crossOriginResourcePolicy: {
+        policy: 'cross-origin',
+      },
+
+      referrerPolicy: {
+        policy: 'strict-origin-when-cross-origin',
+      },
+
+      frameguard: {
+        action: 'sameorigin',
+      },
+
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? {
+              maxAge: 31536000,
+              includeSubDomains: true,
+            }
+          : false,
+    }),
+  );
 
   app.use(compression());
   app.use(cookieParser());
