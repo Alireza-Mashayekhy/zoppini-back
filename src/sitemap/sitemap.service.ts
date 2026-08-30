@@ -25,18 +25,16 @@ export class SitemapService {
     blogPosts: SitemapItemDto[];
   }> {
     const categories = await this.categoryRepo.find({
-      select: { name: true, slug: true },
+      select: { name: true, slug: true, updatedAt: true },
       where: { isActive: true },
     });
 
     const products = await this.productRepo.find({
-      select: { title: true, slug: true },
-      // فرض بر این است که محصولات فعال را می‌خواهیم
-      // می‌توانید شرط اضافه کنید: where: { isActive: true }
+      select: { title: true, slug: true, updatedAt: true },
     });
 
     const blogPosts = await this.blogRepo.find({
-      select: { title: true, slug: true },
+      select: { title: true, slug: true, updatedAt: true },
       where: { isPublished: true },
     });
 
