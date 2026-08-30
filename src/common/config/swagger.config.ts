@@ -3,7 +3,7 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 export function setupSwagger(app: INestApplication) {
   const swaggerOptions = new DocumentBuilder()
-    .setTitle('mehrzad-backend')
+    .setTitle('zoppini-backend')
     .setDescription('door online shop')
     .setVersion('1.0.0')
     .build();

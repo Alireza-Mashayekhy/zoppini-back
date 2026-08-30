@@ -17,7 +17,9 @@ export class OptionalAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync(token);
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: process.env.JWT_ACCESS_SECRET,
+      });
       request['user'] = payload;
     } catch {
       // اگر توکن نامعتبر بود، باز هم ادامه بده (مهمان)
