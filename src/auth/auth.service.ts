@@ -31,14 +31,7 @@ export class AuthService {
   ) {}
 
   async sendCode(sendOtpDto: SendOtpDto) {
-    const response = await this.otpService.sendOtp(sendOtpDto.phone);
-
-    await this.smsService.sendOtp(sendOtpDto.phone, response.otp);
-    const { message } = response;
-
-    return {
-      message,
-    };
+    return this.otpService.sendOtp(sendOtpDto.phone);
   }
 
   async login(

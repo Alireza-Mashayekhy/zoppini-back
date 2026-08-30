@@ -1,10 +1,16 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 
+import { SmsService } from '../sms/sms.service';
 import { RedisService } from '../redis/redis.service';
 
 @Injectable()
 export class OtpService {
-  constructor(private readonly redisService: RedisService) {}
+  private readonly logger = new Logger(OtpService.name);
+
+  constructor(
+    private readonly redisService: RedisService,
+    private readonly smsService: SmsService,
+  ) {}
 
   async sendOtp(phone: string) {
     const redis = this.redisService.getClient();
@@ -24,14 +30,16 @@ export class OtpService {
       EX: 120,
     });
 
-    console.log(code);
+    // لاگ کد در محیط غیر生产 برای دیباگ
+    if (process.env.NODE_ENV !== 'production') {
+      this.logger.log(`OTP for ${phone}: ${code}`);
+    }
 
-    // ارسال پیامک (در صورت وجود)
-    // await this.smsService.send(phone, `کد تایید شما: ${code}`);
+    // ارسال پیامک
+    await this.smsService.sendOtp(phone, code);
 
     return {
       message: 'کد تایید ارسال شد',
-      otp: code, // فقط برای تست (در production حذف شود)
     };
   }
 
