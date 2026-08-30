@@ -194,17 +194,4 @@ export class PaymentController {
       verify.orderId,
     );
   }
-
-  //==============================================================
-
-  @Get('result')
-  paymentResult(
-    @Query('status') status: string,
-    @Query('orderId') orderId: string,
-  ) {
-    return {
-      status,
-      orderId,
-    };
-  }
 }

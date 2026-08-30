@@ -226,9 +226,6 @@ export class CategoriesService {
       // به‌روزرسانی سایر فیلدها
       Object.assign(category, rest);
 
-      console.log(updateCategoryDto);
-      console.log(typeof updateCategoryDto.isActive);
-
       const updated = await queryRunner.manager.save(category);
       await queryRunner.commitTransaction();
       return updated;
