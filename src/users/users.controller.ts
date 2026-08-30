@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
   Param,
   Patch,
   Req,
@@ -18,8 +19,12 @@ export class UsersController {
 
   @UseGuards(AuthGuard)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(+id);
+  findOne(@Req() req, @Param('id') id: string) {
+    if (req.user.id === id) {
+      return this.usersService.findOne(+id);
+    } else {
+      throw new NotFoundException('کاربر یافت نشد');
+    }
   }
 
   @UseGuards(AuthGuard)
