@@ -18,6 +18,7 @@ import { Roles } from 'src/common/decorators/roles.decorator';
 import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
+import { FileSizeValidationPipe } from 'src/files/validation/fileSize.validator';
 import { QueryDto } from 'src/common/query';
 
 import { CategoriesService } from './categories.service';
@@ -34,7 +35,7 @@ export class CategoriesAdminController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   create(
     @Body() createCategoryDto: CreateCategoryDto,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file: Express.Multer.File,
   ) {
     return this.categoriesService.create(createCategoryDto, file);
   }
@@ -57,7 +58,7 @@ export class CategoriesAdminController {
   update(
     @Param('id') id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
   ) {
     return this.categoriesService.update(+id, updateCategoryDto, file);
   }

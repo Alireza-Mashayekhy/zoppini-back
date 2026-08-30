@@ -50,7 +50,7 @@ export class CatalogAdminController {
   @UseInterceptors(FileInterceptor('image'))
   async updatePage(
     @Param('id', ParseUUIDPipe) id: string,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
   ) {
     if (!file) {
       throw new BadRequestException('تصویر الزامی است');

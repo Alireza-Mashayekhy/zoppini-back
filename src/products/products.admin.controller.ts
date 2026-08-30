@@ -21,6 +21,8 @@ import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { QueryDto } from 'src/common/query';
+import { FileSizeValidationPipe } from 'src/files/validation/fileSize.validator';
+import { FileSizeArrayValidationPipe } from 'src/files/validation/fileSizeArray.validator';
 import { RahkaranProductSyncService } from 'src/rahkaran/rahkaran-product-sync.service';
 
 import {
@@ -49,7 +51,7 @@ export class AdmiProductsController {
   @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
   async create(
     @Body() createProductDto: CreateProductDto,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file: Express.Multer.File,
   ) {
     return this.productsService.create(createProductDto, file);
   }
@@ -58,7 +60,8 @@ export class AdmiProductsController {
   @UseInterceptors(FilesInterceptor('files', 20))
   async uploadColorImages(
     @Param('productId') productId: number,
-    @UploadedFiles() files: Express.Multer.File[],
+    @UploadedFiles(new FileSizeArrayValidationPipe())
+    files: Express.Multer.File[],
     @Body() body: { colorIds?: string },
   ) {
     const colorIds = body.colorIds ? JSON.parse(body.colorIds) : [];
@@ -133,7 +136,7 @@ export class AdmiProductsController {
   update(
     @Param('id') id: number,
     @Body() updateProductDto: UpdateProductDto,
-    @UploadedFile() file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
   ) {
     return this.productsService.update(+id, updateProductDto, file);
   }
