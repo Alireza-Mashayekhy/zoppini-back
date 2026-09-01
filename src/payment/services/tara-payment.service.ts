@@ -30,8 +30,9 @@ export class TaraPaymentService {
 
   async requestPayment(
     orderId: number,
+    userId: number,
   ): Promise<{ refId: string; payUrl: string }> {
-    const order = await this.ordersService.findOneForAdmin(orderId);
+    const order = await this.ordersService.findOneForPayment(orderId, userId);
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
     }

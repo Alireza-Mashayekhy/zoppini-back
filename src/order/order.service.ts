@@ -649,6 +649,39 @@ export class OrdersService {
     };
   }
 
+  // دریافت یک سفارش برای شروع پرداخت - با بررسی مالکیت کاربر
+  // (اگر سفارش متعلق به کاربر نباشد، همان «یافت نشد» برمی‌گردد تا وجود سفارش افشا نشود)
+  async findOneForPayment(id: number, userId: number): Promise<Order> {
+    const order = await this.orderRepo.findOne({
+      where: {
+        id,
+        user: {
+          id: userId,
+        },
+      },
+      relations: {
+        user: true,
+        address: {
+          city: true,
+          province: true,
+        },
+        items: {
+          variant: {
+            color: true,
+            size: true,
+            product: true,
+          },
+        },
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException('سفارش یافت نشد');
+    }
+
+    return order;
+  }
+
   // دریافت یک سفارش بدون فیلتر کاربر - برای ادمین
   async findOneForAdmin(id: number): Promise<Order> {
     const order = await this.orderRepo.findOne({

@@ -1,5 +1,15 @@
-import { Body, Controller, Get, Post, Query, Req, Res } from '@nestjs/common';
-import { Request, Response } from 'express';
+import {
+  Body,
+  Controller,
+  Get,
+  Post,
+  Query,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { AuthGuard } from 'src/common/guards/auth.guard';
 import { OrdersService } from 'src/order/order.service';
 
 import { RequestPaymentDto } from './dto/request-payment.dto';
@@ -8,6 +18,9 @@ import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
 import { TaraPaymentService } from './services/tara-payment.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
+
+/** درخواست همراه با اطلاعات کاربر — AuthGuard تضمین می‌کند که user ست شده است */
+type AuthenticatedRequest = Request & { user: { id: number } };
 
 @Controller('payment')
 export class PaymentController {
@@ -38,19 +51,26 @@ export class PaymentController {
   //==============================================================
 
   @Post('start')
-  async startPayment(@Body() dto: RequestPaymentDto) {
+  @UseGuards(AuthGuard)
+  async startPayment(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: RequestPaymentDto,
+  ) {
+    // فقط مالک سفارش می‌تواند برای آن درخواست پرداخت بدهد
+    const { id: userId } = req.user;
+
     switch (dto.gateway) {
       case PaymentGateway.MELLAT:
-        return this.mellatService.requestPayment(dto.orderId);
+        return this.mellatService.requestPayment(dto.orderId, userId);
 
       case PaymentGateway.ZARINPAL:
-        return this.zarinpalService.requestPayment(dto.orderId);
+        return this.zarinpalService.requestPayment(dto.orderId, userId);
 
       case PaymentGateway.DIGIPAY:
-        return this.digipayService.requestPayment(dto.orderId);
+        return this.digipayService.requestPayment(dto.orderId, userId);
 
       case PaymentGateway.TARA:
-        return this.taraService.requestPayment(dto.orderId);
+        return this.taraService.requestPayment(dto.orderId, userId);
 
       default:
         throw new Error('درگاه پشتیبانی نمی‌شود');
@@ -63,7 +83,12 @@ export class PaymentController {
 
   @Post('callback/mellat')
   async callbackMellat(@Req() req, @Res() res) {
+    // بانک ملت این مقادیر را در بدنه callback می‌فرستد
+    // (نام فیلدها در مستندات/نسخه‌های مختلف با حروف بزرگ/کوچک آمده؛ هر دو را می‌خوانیم)
     const { RefId, ResCode } = req.body;
+    const saleOrderId = req.body.saleOrderId ?? req.body.SaleOrderId;
+    const saleReferenceId =
+      req.body.saleReferenceId ?? req.body.SaleReferenceId;
 
     if (!RefId) {
       return this.redirect(res, 'failed');
@@ -82,7 +107,10 @@ export class PaymentController {
       return this.redirect(res, 'failed');
     }
 
-    const result = await this.mellatService.verifyPayment(RefId);
+    const result = await this.mellatService.verifyPayment(RefId, {
+      saleOrderId,
+      saleReferenceId,
+    });
 
     return this.redirect(
       res,

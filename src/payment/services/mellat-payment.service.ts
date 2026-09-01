@@ -36,36 +36,57 @@ export class MellatPaymentService {
 
   async requestPayment(
     orderId: number,
+    userId: number,
   ): Promise<{ refId: string; payUrl: string }> {
-    const order = await this.ordersService.findOneForAdmin(orderId);
+    const order = await this.ordersService.findOneForPayment(orderId, userId);
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
     const existingPayment = await this.paymentRepo.findOne({
       where: { orderId, gateway: PaymentGateway.MELLAT },
+      order: { id: 'DESC' },
     });
     if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
       throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
     }
 
-    // استفاده از ! برای اطمینان از وجود مقدار
     const terminalId = this.configService.get<string>('MELLAT_TERMINAL_ID')!;
     const userName = this.configService.get<string>('MELLAT_USERNAME')!;
     const userPassword = this.configService.get<string>('MELLAT_PASSWORD')!;
-    const callbackUrl =
-      this.configService.get<string>('APP_URL') + '/payment/callback/mellat';
+
+    // مسیر واقعی callback — سرور prefix سراسری «api» دارد
+    const appUrl = this.configService.get<string>('APP_URL');
+    const callbackUrl = `${appUrl}/api/payment/callback/mellat`;
     const payUrl = this.configService.get<string>('MELLAT_PAY_URL')!;
 
     const amount = Math.round(order.finalPrice * 10); // تبدیل تومان به ریال
-    const localDate = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-    const localTime = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+
+    /*
+     * طبق پروتکل ملت، orderId ارسالی در bpPayRequest باید در
+     * bpVerifyRequest و bpSettleRequest عیناً تکرار شود؛
+     * پس آن را تولید و در رکورد پرداخت ذخیره می‌کنیم (ستون saleOrderId).
+     * (به‌ازای هر تلاش پرداخت یک مقدار یکتا لازم است)
+     */
+    const gatewayOrderId = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+
+    // تاریخ/ساعت باید به وقت تهران باشد نه وقت سرور
+    const now = new Date();
+    const localDate = now
+      .toLocaleDateString('en-CA', { timeZone: 'Asia/Tehran' })
+      .replace(/-/g, '');
+    const localTime = now
+      .toLocaleTimeString('en-GB', {
+        timeZone: 'Asia/Tehran',
+        hour12: false,
+      })
+      .replace(/:/g, '');
 
     const payload = {
       terminalId: Number(terminalId),
       userName,
       userPassword,
-      orderId: Date.now(),
+      orderId: gatewayOrderId,
       amount,
       localDate,
       localTime,
@@ -94,6 +115,7 @@ export class MellatPaymentService {
         gateway: PaymentGateway.MELLAT,
         status: PaymentStatus.PENDING,
         resCode: code,
+        saleOrderId: gatewayOrderId, // لازم برای verify/settle
         gatewayResponse: response,
       });
       await this.paymentRepo.save(payment);
@@ -109,6 +131,10 @@ export class MellatPaymentService {
 
   async verifyPayment(
     refId: string,
+    callbackData?: {
+      saleOrderId?: number | string;
+      saleReferenceId?: number | string;
+    },
   ): Promise<{ success: boolean; message: string; orderId?: number }> {
     const payment = await this.paymentRepo.findOne({
       where: { refId, gateway: PaymentGateway.MELLAT },
@@ -127,20 +153,62 @@ export class MellatPaymentService {
     const userName = this.configService.get<string>('MELLAT_USERNAME')!;
     const userPassword = this.configService.get<string>('MELLAT_PASSWORD')!;
 
-    const verifyPayload = {
+    /*
+     * مقادیر لازم برای verify/settle:
+     *
+     * - orderId / saleOrderId: همان orderId که در bpPayRequest فرستادیم
+     *   (در ستون saleOrderId ذخیره شده؛ برای رکوردهای قدیمی از callback می‌خوانیم)
+     *
+     * - saleReferenceId: کد مرجع تراکنشی که بانک در callback برمی‌گرداند
+     */
+    const gatewayOrderId = Number(
+      payment.saleOrderId ?? callbackData?.saleOrderId,
+    );
+    const saleReferenceId = Number(
+      payment.saleReferenceId ?? callbackData?.saleReferenceId,
+    );
+
+    if (!gatewayOrderId) {
+      this.logger.error(
+        `payment ${payment.id}: saleOrderId (شناسه سفارش نزد درگاه) موجود نیست`,
+      );
+      return {
+        success: false,
+        message: 'اطلاعات تراکنش ناقص است؛ با پشتیبانی تماس بگیرید',
+        orderId: payment.orderId,
+      };
+    }
+
+    if (!saleReferenceId) {
+      this.logger.error(
+        `payment ${payment.id}: saleReferenceId (کد مرجع بانک) موجود نیست`,
+      );
+      return {
+        success: false,
+        message: 'اطلاعات تراکنش ناقص است؛ با پشتیبانی تماس بگیرید',
+        orderId: payment.orderId,
+      };
+    }
+
+    // ذخیره برای ردگیری و استفاده در تلاش‌های بعدی verify
+    payment.saleOrderId = gatewayOrderId;
+    payment.saleReferenceId = saleReferenceId;
+    await this.paymentRepo.save(payment);
+
+    const bpPayload = {
       terminalId: Number(terminalId),
       userName,
       userPassword,
-      orderId: payment.orderId,
-      saleOrderId: payment.orderId,
-      saleReferenceId: 0,
+      orderId: gatewayOrderId,
+      saleOrderId: gatewayOrderId,
+      saleReferenceId,
     };
 
     try {
       const client = await this.getClient();
 
-      // ۱. تأیید
-      const verifyResult = await client.bpVerifyRequestAsync(verifyPayload);
+      // ۱. تأیید (کد 43 یعنی قبلاً تأیید شده)
+      const verifyResult = await client.bpVerifyRequestAsync(bpPayload);
       const verifyResCode = verifyResult[0].return;
 
       if (verifyResCode !== '0' && verifyResCode !== '43') {
@@ -151,16 +219,8 @@ export class MellatPaymentService {
         return { success: false, message: `تأیید ناموفق: کد ${verifyResCode}` };
       }
 
-      // ۲. واریز
-      const settlePayload = {
-        terminalId: Number(terminalId),
-        userName,
-        userPassword,
-        orderId: payment.orderId,
-        saleOrderId: payment.orderId,
-        saleReferenceId: 0,
-      };
-      const settleResult = await client.bpSettleRequestAsync(settlePayload);
+      // ۲. واریز (کد 45 یعنی قبلاً واریز شده)
+      const settleResult = await client.bpSettleRequestAsync(bpPayload);
       const settleResCode = settleResult[0].return;
 
       if (settleResCode !== '0' && settleResCode !== '45') {
@@ -171,14 +231,29 @@ export class MellatPaymentService {
         return { success: false, message: `واریز ناموفق: کد ${settleResCode}` };
       }
 
-      // ۳. موفق
+      // ۳. موفق — پول دریافت شده است
       payment.status = PaymentStatus.SUCCESS;
       payment.resCode = '0';
       await this.paymentRepo.save(payment);
-      // ۴. تأیید نهایی سفارش و کاهش موجودی + خالی کردن سبد
-      await this.ordersService.confirmOrderPayment(payment.orderId); // userId رو از کجا بیاریم؟ باید در Payment ذخیره کنیم یا از order بگیریم
-      // در اینجا userId رو باید از order.user.id بگیریم، ولی چون order را داریم، می‌توانیم از آن استفاده کنیم
-      // بهتر است در متد confirmOrderPayment فقط orderId بدهیم و userId را خودمان از order استخراج کنیم
+
+      // ۴. تأیید نهایی سفارش (کاهش موجودی + خالی کردن سبد)
+      // اگر این مرحله خطا بدهد، پول گرفته شده؛ پس پرداخت را SUCCESS نگه می‌داریم
+      // و سفارش را لغو نمی‌کنیم تا manually بررسی/اصلاح شود.
+      try {
+        await this.ordersService.confirmOrderPayment(payment.orderId);
+      } catch (error) {
+        this.logger.error(
+          `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
+            'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
+          error instanceof Error ? error.stack : String(error),
+        );
+
+        return {
+          success: true,
+          message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
+          orderId: payment.orderId,
+        };
+      }
 
       return {
         success: true,
@@ -186,11 +261,22 @@ export class MellatPaymentService {
         orderId: payment.orderId,
       };
     } catch (error) {
-      this.logger.error(error.message, error.stack);
-      payment.status = PaymentStatus.FAILED;
-      await this.paymentRepo.save(payment);
-      await this.ordersService.failOrderPayment(payment.orderId);
-      return { success: false, message: 'خطا در تأیید پرداخت' };
+      /*
+       * خطای شبکه/SOAP: وضعیت واقعی تراکنش نامشخص است.
+       * پرداخت را FAILED نمی‌کنیم و سفارش را لغو نمی‌کنیم
+       * تا امکان verify مجدد/بررسی دستی وجود داشته باشد.
+       */
+      this.logger.error(
+        `❌ خطا در ارتباط با درگاه ملت برای پرداخت ${payment.id} (order ${payment.orderId}). ` +
+          'وضعیت روی PENDING می‌ماند.',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return {
+        success: false,
+        message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
+        orderId: payment.orderId,
+      };
     }
   }
 
