@@ -8,6 +8,7 @@ import { PaymentController } from './payment.controller';
 import { DigipayAuthService } from './services/digipay-auth.service';
 import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
+import { PaymentGuardService } from './services/payment-guard.service';
 import { TaraAuthService } from './services/tara-auth.service';
 import { TaraPaymentService } from './services/tara-payment.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
@@ -16,8 +17,8 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
   imports: [TypeOrmModule.forFeature([Payment]), HttpModule, OrdersModule],
   controllers: [PaymentController],
   providers: [
+    PaymentGuardService,
     MellatPaymentService,
-    ZarinpalPaymentService,
     ZarinpalPaymentService,
     DigipayAuthService,
     DigipayPaymentService,

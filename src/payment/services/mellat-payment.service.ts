@@ -10,6 +10,7 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from '../entities/payment.entity';
+import { PaymentGuardService } from './payment-guard.service';
 
 @Injectable()
 export class MellatPaymentService {
@@ -21,6 +22,8 @@ export class MellatPaymentService {
     @InjectRepository(Payment)
     private paymentRepo: Repository<Payment>,
     private ordersService: OrdersService,
+
+    private readonly paymentGuard: PaymentGuardService,
   ) {}
 
   // === اصلاح متد getClient ===
@@ -43,13 +46,8 @@ export class MellatPaymentService {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
-    const existingPayment = await this.paymentRepo.findOne({
-      where: { orderId, gateway: PaymentGateway.MELLAT },
-      order: { id: 'DESC' },
-    });
-    if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
-      throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
-    }
+    // سفارش باید PENDING باشد و درخواست پرداخت بازی (هر درگاهی) نباشد
+    await this.paymentGuard.ensureOrderPayable(order);
 
     const terminalId = this.configService.get<string>('MELLAT_TERMINAL_ID')!;
     const userName = this.configService.get<string>('MELLAT_USERNAME')!;

@@ -32,7 +32,7 @@ export class Payment {
   @Column({ unique: true })
   refId: string; // RefId دریافتی از درگاه
 
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
+  @Column({ type: 'decimal', precision: 15, scale: 2 })
   amount: number;
 
   @Column({ nullable: true })

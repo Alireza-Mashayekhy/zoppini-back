@@ -3,6 +3,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { firstValueFrom } from 'rxjs';
+import { OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
 import { Repository } from 'typeorm';
 
@@ -11,6 +12,7 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from '../entities/payment.entity';
+import { PaymentGuardService } from './payment-guard.service';
 
 @Injectable()
 export class ZarinpalPaymentService {
@@ -24,6 +26,8 @@ export class ZarinpalPaymentService {
     private readonly paymentRepo: Repository<Payment>,
 
     private readonly ordersService: OrdersService,
+
+    private readonly paymentGuard: PaymentGuardService,
   ) {}
 
   private getMerchantId(): string {
@@ -70,19 +74,8 @@ export class ZarinpalPaymentService {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
-    const existingPayment = await this.paymentRepo.findOne({
-      where: {
-        orderId,
-        gateway: PaymentGateway.ZARINPAL,
-      },
-      order: {
-        id: 'DESC',
-      },
-    });
-
-    if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
-      throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
-    }
+    // سفارش باید PENDING باشد و درخواست پرداخت بازی (هر درگاهی) نباشد
+    await this.paymentGuard.ensureOrderPayable(order);
 
     /*
      * طبق مستندات زرین پال:
@@ -318,12 +311,34 @@ export class ZarinpalPaymentService {
       await this.paymentRepo.save(payment);
 
       /*
-       * فقط در بار اول موجودی و سفارش را نهایی کن.
+       * نهایی‌کردن سفارش (کاهش موجودی + خالی کردن سبد)
        *
-       * چون 101 یعنی قبلاً verify شده.
+       * - کد 100: اولین verify موفق
+       * - کد 101: قبلاً verify شده؛ اگر سفارش هنوز PENDING است
+       *   (مثلاً بار اول بعد از verify خطا خورده بود) همین‌جا نهایی‌اش می‌کنیم
        */
-      if (code === 100) {
-        await this.ordersService.confirmOrderPayment(payment.orderId);
+      try {
+        const order = await this.ordersService.findOneForAdmin(payment.orderId);
+
+        if (order.status === OrderStatus.PENDING) {
+          await this.ordersService.confirmOrderPayment(payment.orderId);
+        }
+      } catch (error) {
+        /*
+         * پول گرفته شده است؛ پرداخت را SUCCESS نگه می‌داریم
+         * و سفارش را لغو نمی‌کنیم تا دستی بررسی/اصلاح شود.
+         */
+        this.logger.error(
+          `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
+            'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
+          error instanceof Error ? error.stack : String(error),
+        );
+
+        return {
+          success: true,
+          message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
+          orderId: payment.orderId,
+        };
       }
 
       return {
@@ -335,21 +350,21 @@ export class ZarinpalPaymentService {
         orderId: payment.orderId,
       };
     } catch (error) {
-      this.logger.error('خطا در verify زرین پال', error?.stack || error);
-
       /*
-       * اینجا با احتیاط وضعیت payment را failed می‌کنیم.
+       * خطای شبکه/نامشخص: وضعیت واقعی تراکنش معلوم نیست.
+       * پرداخت را FAILED نمی‌کنیم و سفارش را لغو نمی‌کنیم
+       * تا verify مجدد یا بررسی دستی ممکن باشد.
+       * (کدهای قطعی خطای درگاه در بدنه try با return مدیریت شده‌اند)
        */
-      payment.status = PaymentStatus.FAILED;
-      payment.resCode = 'VERIFY_ERROR';
-
-      await this.paymentRepo.save(payment);
-
-      await this.ordersService.failOrderPayment(payment.orderId);
+      this.logger.error(
+        `❌ خطا در ارتباط با زرین پال برای پرداخت ${payment.id} (order ${payment.orderId}). ` +
+          'وضعیت روی PENDING می‌ماند.',
+        error instanceof Error ? error.stack : String(error),
+      );
 
       return {
         success: false,
-        message: 'خطا در تأیید پرداخت',
+        message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
         orderId: payment.orderId,
       };
     }

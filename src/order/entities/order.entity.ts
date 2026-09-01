@@ -38,13 +38,13 @@ export class Order {
   @OneToMany(() => OrderItem, item => item.order, { cascade: true })
   items: OrderItem[];
 
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
+  @Column({ type: 'decimal', precision: 15, scale: 2 })
   totalPrice: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   shippingCost: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   discount: number;
 
   @Column({
@@ -60,7 +60,7 @@ export class Order {
   })
   discountId: number | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2 })
+  @Column({ type: 'decimal', precision: 15, scale: 2 })
   finalPrice: number;
 
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })

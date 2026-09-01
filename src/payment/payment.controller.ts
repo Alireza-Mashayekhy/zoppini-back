@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -73,7 +74,7 @@ export class PaymentController {
         return this.taraService.requestPayment(dto.orderId, userId);
 
       default:
-        throw new Error('درگاه پشتیبانی نمی‌شود');
+        throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
     }
   }
 

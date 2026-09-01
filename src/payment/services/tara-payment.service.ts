@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
 import { Repository } from 'typeorm';
 
@@ -14,6 +15,7 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from '../entities/payment.entity';
+import { PaymentGuardService } from './payment-guard.service';
 import { TaraAuthService } from './tara-auth.service';
 
 @Injectable()
@@ -26,6 +28,8 @@ export class TaraPaymentService {
     private paymentRepo: Repository<Payment>,
     private ordersService: OrdersService,
     private authService: TaraAuthService,
+
+    private readonly paymentGuard: PaymentGuardService,
   ) {}
 
   async requestPayment(
@@ -37,12 +41,8 @@ export class TaraPaymentService {
       throw new BadRequestException('سفارش یافت نشد');
     }
 
-    const existingPayment = await this.paymentRepo.findOne({
-      where: { orderId, gateway: PaymentGateway.TARA },
-    });
-    if (existingPayment && existingPayment.status === PaymentStatus.PENDING) {
-      throw new BadRequestException('درخواست پرداخت قبلاً ثبت شده است');
-    }
+    // سفارش باید PENDING باشد و درخواست پرداخت بازی (هر درگاهی) نباشد
+    await this.paymentGuard.ensureOrderPayable(order);
 
     const accessToken = await this.authService.getAccessToken();
     const apiUrl = this.configService.get<string>('TARA_API_URL')!;
@@ -181,8 +181,30 @@ export class TaraPaymentService {
       payment.saleReferenceId = data.rrn || null;
       await this.paymentRepo.save(payment);
 
-      // ۳. تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد)
-      await this.ordersService.confirmOrderPayment(payment.orderId);
+      /*
+       * ۳. تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد)
+       * اگر خطا بدهد، پول گرفته شده؛ پس پرداخت را SUCCESS نگه می‌داریم
+       * و سفارش را لغو نمی‌کنیم تا دستی بررسی/اصلاح شود.
+       */
+      try {
+        const order = await this.ordersService.findOneForAdmin(payment.orderId);
+
+        if (order.status === OrderStatus.PENDING) {
+          await this.ordersService.confirmOrderPayment(payment.orderId);
+        }
+      } catch (error) {
+        this.logger.error(
+          `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
+            'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
+          error instanceof Error ? error.stack : String(error),
+        );
+
+        return {
+          success: true,
+          message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
+          orderId: payment.orderId,
+        };
+      }
 
       return {
         success: true,
@@ -190,13 +212,21 @@ export class TaraPaymentService {
         orderId: payment.orderId,
       };
     } catch (error) {
-      this.logger.error('خطا در تأیید پرداخت تارا', error.message);
-      payment.status = PaymentStatus.FAILED;
-      await this.paymentRepo.save(payment);
-      await this.ordersService.failOrderPayment(payment.orderId);
+      /*
+       * خطای شبکه/نامشخص: وضعیت واقعی تراکنش معلوم نیست.
+       * پرداخت را FAILED نمی‌کنیم و سفارش را لغو نمی‌کنیم
+       * تا بررسی مجدد یا دستی ممکن باشد.
+       */
+      this.logger.error(
+        `❌ خطا در تأیید پرداخت تارا برای پرداخت ${payment.id} (order ${payment.orderId}). ` +
+          'وضعیت روی PENDING می‌ماند.',
+        error instanceof Error ? error.stack : String(error),
+      );
+
       return {
         success: false,
-        message: 'خطا در تأیید پرداخت',
+        message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
+        orderId: payment.orderId,
       };
     }
   }
