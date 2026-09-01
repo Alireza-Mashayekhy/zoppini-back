@@ -760,15 +760,33 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       count: String(count),
     });
 
-    const response = await this.request<
+    const url = `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/GetProducts?${params.toString()}`;
+
+    // authenticatedRequest در صورت خطای 401/403 خودش login مجدد و retry می‌کند
+    let response = await this.authenticatedRequest<
       RahkaranResponse<RahkaranRetailProduct[]>
-    >(
-      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/GetProducts?${params.toString()}`,
-      {
-        method: 'GET',
-        headers: this.authHeaders(),
-      },
-    );
+    >(url, {
+      method: 'GET',
+    });
+
+    // اگر Session منقضی شده باشد ولی HTTP 200 برگشته باشد
+    if (this.isSessionExpiredResponse(response)) {
+      this.logger.warn(
+        `⚠️ Session هنگام جستجوی محصولات راهکاران (input=${input}) منقضی شده بود. Login مجدد...`,
+      );
+
+      this.clearState();
+
+      await this.login();
+
+      response = await this.request<RahkaranResponse<RahkaranRetailProduct[]>>(
+        url,
+        {
+          method: 'GET',
+          headers: this.authHeaders(),
+        },
+      );
+    }
 
     if (response?.metadata?.isSuccessfull !== true) {
       throw new BadRequestException(
@@ -827,15 +845,35 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   async getRetailProduct(productId: number): Promise<RahkaranRetailProduct> {
     await this.ensureAuthenticated();
 
-    const response = await this.request<
+    const url =
+      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/` +
+      `GetProduct?id=${productId}`;
+
+    // authenticatedRequest در صورت خطای 401/403 خودش login مجدد و retry می‌کند
+    let response = await this.authenticatedRequest<
       RahkaranResponse<RahkaranRetailProduct>
-    >(
-      `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/GetProduct?id=${productId}`,
-      {
-        method: 'GET',
-        headers: this.authHeaders(),
-      },
-    );
+    >(url, {
+      method: 'GET',
+    });
+
+    // اگر Session منقضی شده باشد ولی HTTP 200 برگشته باشد
+    if (this.isSessionExpiredResponse(response)) {
+      this.logger.warn(
+        `⚠️ Session هنگام دریافت محصول ${productId} منقضی شده بود. Login مجدد...`,
+      );
+
+      this.clearState();
+
+      await this.login();
+
+      response = await this.request<RahkaranResponse<RahkaranRetailProduct>>(
+        url,
+        {
+          method: 'GET',
+          headers: this.authHeaders(),
+        },
+      );
+    }
 
     if (response?.metadata?.isSuccessfull !== true) {
       throw new BadRequestException(
