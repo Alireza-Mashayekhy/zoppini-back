@@ -15,6 +15,7 @@ import { Discount, DiscountType } from 'src/discounts/entities/discount.entity';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranProduct } from 'src/rahkaran/rahkaran-product-sync.service';
+import { SmsService } from 'src/sms/sms.service';
 import { DataSource, In, QueryRunner, Repository } from 'typeorm';
 
 import {
@@ -57,6 +58,7 @@ export class ProductsService {
     private readonly filesService: FilesService,
     @Inject(forwardRef(() => RahkaranService))
     private readonly rahkaranService: RahkaranService,
+    private readonly smsService: SmsService,
   ) {}
 
   async create(
@@ -2064,6 +2066,20 @@ export class ProductsService {
       this.logger.log(`⏱️ Duration=${durationSeconds}s`);
 
       this.logger.log(`==================================================`);
+
+      // ============================================================
+      // اطلاع‌رسانی پایان سینک به ادمین (در پس‌زمینه — blocking نیست)
+      // ============================================================
+
+      this.notifyAdminOfRahkaranSync({
+        received: totalRahkaranProducts,
+        matched: totalMatched,
+        updated: totalUpdated,
+        unchanged: totalUnchanged,
+        skipped: totalSkipped,
+        failed: totalFailed,
+        durationSeconds,
+      });
     } catch (error) {
       // ==========================================================
       // خطای کلی
@@ -2074,8 +2090,53 @@ export class ProductsService {
         error instanceof Error ? error.stack : String(error),
       );
 
+      // اطلاع‌رسانی خطا به ادمین (در پس‌زمینه)
+      this.notifyAdminOfRahkaranSync(
+        {
+          received: totalRahkaranProducts,
+          matched: totalMatched,
+          updated: totalUpdated,
+          unchanged: totalUnchanged,
+          skipped: totalSkipped,
+          failed: totalFailed,
+          durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+        },
+        error,
+      );
+
       throw error;
     }
+  }
+
+  /**
+   * ارسال گزارش سینک راهکاران به ادمین به‌صورت fire-and-forget:
+   *
+   * - منتظر پاسخ SMS نمی‌مانیم (پس‌زمینه)
+   * - اگر ارسال پیامک خطا بخورد، روی خود سینک اثری ندارد
+   */
+  private notifyAdminOfRahkaranSync(
+    stats: {
+      received: number;
+      matched: number;
+      updated: number;
+      unchanged: number;
+      skipped: number;
+      failed: number;
+      durationSeconds: number;
+    },
+    error?: unknown,
+  ): void {
+    void this.smsService
+      .sendRahkaranSyncReportToAdmin({
+        ...stats,
+        errorMessage: error instanceof Error ? error.message : undefined,
+      })
+      .catch(smsError => {
+        this.logger.error(
+          '❌ ارسال پیامک گزارش همگام‌سازی راهکاران ناموفق بود.',
+          smsError instanceof Error ? smsError.stack : String(smsError),
+        );
+      });
   }
 
   private normalizeSku(value: string | null | undefined): string {

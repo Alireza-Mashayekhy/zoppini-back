@@ -165,6 +165,53 @@ export class SmsService {
     return { success: result.success };
   }
 
+  /**
+   * گزارش پایان همگام‌سازی محصولات با راهکاران برای ادمین
+   *
+   * اگر errorMessage پر باشد یعنی سینک با خطا متوقف شده است.
+   */
+  async sendRahkaranSyncReportToAdmin(stats: {
+    received: number;
+    matched: number;
+    updated: number;
+    unchanged: number;
+    skipped: number;
+    failed: number;
+    durationSeconds: number;
+    errorMessage?: string;
+  }): Promise<{ success: boolean }> {
+    if (!this.adminPhone) {
+      this.logger.warn(
+        'ADMIN_PHONE تنظیم نشده است؛ گزارش همگام‌سازی راهکاران ارسال نشد.',
+      );
+
+      return { success: false };
+    }
+
+    let message: string;
+
+    if (stats.errorMessage) {
+      // متن خطا را کوتاه می‌کنیم تا پیامک طولانی نشود
+      const shortError = stats.errorMessage.slice(0, 80);
+
+      message =
+        `گزارش همگام‌سازی راهکاران ❌\n` +
+        `سینک با خطا متوقف شد: ${shortError}\n` +
+        `تا آن لحظه — به‌روزرسانی: ${stats.updated} | خطا: ${stats.failed} | ` +
+        `مدت: ${stats.durationSeconds} ثانیه`;
+    } else {
+      message =
+        `گزارش همگام‌سازی راهکاران ✅\n` +
+        `دریافتی: ${stats.received} | مطابقت: ${stats.matched}\n` +
+        `به‌روزرسانی: ${stats.updated} | بدون تغییر: ${stats.unchanged}\n` +
+        `رد‌شده: ${stats.skipped} | خطا: ${stats.failed}\n` +
+        `مدت: ${stats.durationSeconds} ثانیه`;
+    }
+
+    const result = await this.sendSms(this.adminPhone, message);
+    return { success: result.success };
+  }
+
   // ۴. ارسال پیامک یادآوری سفارش پرداخت‌نشده (UnpaidOrder)
   // async sendUnpaidOrderReminder(
   //   phone: string,
