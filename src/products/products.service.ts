@@ -1180,8 +1180,11 @@ export class ProductsService {
       .leftJoinAndSelect('products.colorImages', 'colorImages')
       .leftJoinAndSelect('colorImages.color', 'imageColor')
 
+      // کل شرط تخفیف داخل پرانتز باشد تا با ANDهای بعدی
+      // (موجودی و جست‌وجو) درست ترکیب شود
       .where(
         `
+        (
         EXISTS (
           SELECT 1
           FROM discount_products dp
@@ -1244,6 +1247,7 @@ export class ProductsService {
               FROM discount_users du3
               WHERE du3.discount_id = d3.id
             )
+        )
         )
         `,
         {
