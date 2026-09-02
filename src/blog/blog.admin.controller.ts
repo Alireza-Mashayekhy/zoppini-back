@@ -54,7 +54,8 @@ export class BlogAdminController {
   update(
     @Param('id') id: string,
     @Body() updateBlogPostDto: UpdateBlogPostDto,
-    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe({ optional: true }))
+    file?: Express.Multer.File,
   ) {
     return this.blogService.update(+id, updateBlogPostDto, file);
   }

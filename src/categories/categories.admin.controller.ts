@@ -58,7 +58,8 @@ export class CategoriesAdminController {
   update(
     @Param('id') id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
-    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe({ optional: true }))
+    file?: Express.Multer.File,
   ) {
     return this.categoriesService.update(+id, updateCategoryDto, file);
   }

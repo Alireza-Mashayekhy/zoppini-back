@@ -138,7 +138,8 @@ export class AdmiProductsController {
   update(
     @Param('id') id: number,
     @Body() updateProductDto: UpdateProductDto,
-    @UploadedFile(new FileSizeValidationPipe()) file?: Express.Multer.File,
+    @UploadedFile(new FileSizeValidationPipe({ optional: true }))
+    file?: Express.Multer.File,
   ) {
     return this.productsService.update(+id, updateProductDto, file);
   }
