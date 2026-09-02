@@ -128,7 +128,9 @@ export class AdmiProductsController {
 
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
-    return this.productsService.findOne(slug);
+    return this.productsService.findOne(slug, {
+      onlyInStock: false,
+    });
   }
 
   @Patch(':id')

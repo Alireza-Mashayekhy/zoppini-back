@@ -1,5 +1,5 @@
 // src/featured/featured.controller.ts
-import { Body, Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 
 import { FeaturedService } from './featured.service';
 
@@ -9,11 +9,15 @@ export class FeaturedController {
 
   @Get()
   async getFeaturedProducts() {
-    return this.featuredService.getFeaturedProducts();
+    return this.featuredService.getFeaturedProducts({
+      onlyInStock: true,
+    });
   }
 
   @Get(':id')
   async getFeaturedProduct(@Param('id') id: number) {
-    return this.featuredService.getFeaturedProduct(id);
+    return this.featuredService.getFeaturedProduct(id, {
+      onlyInStock: true,
+    });
   }
 }

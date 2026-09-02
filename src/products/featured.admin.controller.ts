@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Param,
   Patch,
   Post,
@@ -23,6 +24,20 @@ import { FeaturedService } from './featured.service';
 @Controller('admin/featured')
 export class AdminFeaturedController {
   constructor(private readonly featuredService: FeaturedService) {}
+
+  @Get()
+  async getFeaturedProducts() {
+    return this.featuredService.getFeaturedProducts({
+      onlyInStock: false,
+    });
+  }
+
+  @Get(':id')
+  async getFeaturedProduct(@Param('id') id: number) {
+    return this.featuredService.getFeaturedProduct(id, {
+      onlyInStock: false,
+    });
+  }
 
   @Post()
   async createFeaturedProduct(@Body() dto: CreateFeaturedProductDto) {

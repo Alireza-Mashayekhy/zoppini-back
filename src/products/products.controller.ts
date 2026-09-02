@@ -37,11 +37,15 @@ export class ProductsController {
 
   @Get('/discounted')
   findDiscounted(@Query() query: QueryDto) {
-    return this.productsService.getDiscountedProducts(query);
+    return this.productsService.getDiscountedProducts(query, {
+      onlyInStock: true,
+    });
   }
 
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
-    return this.productsService.findOne(slug);
+    return this.productsService.findOne(slug, {
+      onlyInStock: true,
+    });
   }
 }

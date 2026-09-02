@@ -29,9 +29,20 @@ export class SitemapService {
       where: { isActive: true },
     });
 
-    const products = await this.productRepo.find({
-      select: { title: true, slug: true, updatedAt: true },
-    });
+    const products = await this.productRepo
+      .createQueryBuilder('product')
+      .select('product.title', 'title')
+      .addSelect('product.slug', 'slug')
+      // محصولاتی که در سایت قابل مشاهده‌اند (حداقل یک variant موجود)
+      .where(
+        `EXISTS (
+          SELECT 1
+          FROM variant v
+          WHERE v.product_id = product.id
+            AND v.stock > 0
+        )`,
+      )
+      .getRawMany<{ title: string; slug: string }>();
 
     const blogPosts = await this.blogRepo.find({
       select: { title: true, slug: true, updatedAt: true },

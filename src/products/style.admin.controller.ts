@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  Get,
   Param,
   Patch,
   Post,
@@ -20,6 +21,20 @@ import { StyleService } from './style.service';
 @Controller('admin/style')
 export class AdminStyleController {
   constructor(private readonly styleService: StyleService) {}
+
+  @Get()
+  async getStyleProducts() {
+    return this.styleService.getStyleProducts({
+      onlyInStock: false,
+    });
+  }
+
+  @Get(':id')
+  async getStyleProduct(@Param('id') id: number) {
+    return this.styleService.getStyleProduct(id, {
+      onlyInStock: false,
+    });
+  }
 
   @Post()
   async createStyleProduct(@Body() dto: CreateSuggestedProductDto) {

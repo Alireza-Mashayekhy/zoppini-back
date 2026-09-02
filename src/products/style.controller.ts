@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param } from '@nestjs/common';
+import { Controller, Get, Param } from '@nestjs/common';
 
 import { StyleService } from './style.service';
 
@@ -8,11 +8,15 @@ export class StyleController {
 
   @Get()
   async getStyleProducts() {
-    return this.styleService.getStyleProducts();
+    return this.styleService.getStyleProducts({
+      onlyInStock: true,
+    });
   }
 
   @Get(':id')
   async getStyleProduct(@Param('id') id: number) {
-    return this.styleService.getStyleProduct(id);
+    return this.styleService.getStyleProduct(id, {
+      onlyInStock: true,
+    });
   }
 }

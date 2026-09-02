@@ -31,6 +31,7 @@ import { Color } from './entities/product-color.entity';
 import { ProductColorImage } from './entities/product-color-image.entity';
 import { Size } from './entities/product-size.entity';
 import { Variant } from './entities/variant.entity';
+import { findInStockProductIds } from './utils/stock.util';
 
 @Injectable()
 export class ProductsService {
@@ -515,7 +516,9 @@ export class ProductsService {
     return this.sizeRepo.find();
   }
 
-  async findOne(slug: string) {
+  async findOne(slug: string, options?: { onlyInStock?: boolean }) {
+    const onlyInStock = options?.onlyInStock ?? false;
+
     const relations = {
       variants: {
         color: true,
@@ -552,6 +555,14 @@ export class ProductsService {
     }
 
     if (!product) {
+      throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
+    }
+
+    // =====================================================
+    // STOCK (برای یوزر محصول ناموجود برگردانده نمی‌شود)
+    // =====================================================
+
+    if (onlyInStock && !this.isProductInStock(product)) {
       throw new NotFoundException(`محصول با اسلاگ "${slug}" یافت نشد`);
     }
 
@@ -602,6 +613,20 @@ export class ProductsService {
     }
 
     // =====================================================
+    // FILTER OUT-OF-STOCK SUGGESTED / SAME-COLOR PRODUCTS
+    // =====================================================
+
+    if (onlyInStock) {
+      product.suggestedProducts = await this.filterInStockProducts(
+        product.suggestedProducts ?? [],
+      );
+
+      product.sameColorProducts = await this.filterInStockProducts(
+        product.sameColorProducts ?? [],
+      );
+    }
+
+    // =====================================================
     // SORT SAME COLOR PRODUCT IMAGES
     // =====================================================
 
@@ -624,7 +649,7 @@ export class ProductsService {
     if (product.categories?.length) {
       const categoryIds = product.categories.map(category => category.id);
 
-      relatedProducts = await this.productRepo
+      const relatedQb = this.productRepo
         .createQueryBuilder('p')
         .leftJoin('p.categories', 'cat')
         .leftJoinAndSelect('p.variants', 'variant')
@@ -636,15 +661,42 @@ export class ProductsService {
         .andWhere('p.id != :productId', {
           productId: product.id,
         })
-        .orderBy('p.createdAt', 'DESC')
-        .take(10)
-        .getMany();
+        .orderBy('p.createdAt', 'DESC');
+
+      // فقط محصولات مرتبطی که حداقل یک variant موجود دارند
+      if (onlyInStock) {
+        relatedQb.andWhere('variant.stock > 0');
+      }
+
+      relatedProducts = await relatedQb.take(10).getMany();
     }
 
     return {
       product,
       relatedProducts,
     };
+  }
+
+  /**
+   * بررسی موجود بودن محصول بر اساس variantهایی که روی خود آبجکت لود شده‌اند.
+   */
+  private isProductInStock(product: Product): boolean {
+    return (product.variants ?? []).some(variant => Number(variant.stock) > 0);
+  }
+
+  /**
+   * فیلتر کردن مجموعه‌ای از محصولات و نگه‌داشتن فقط محصولات دارای موجودی.
+   * (برای روابطی مثل suggestedProducts که variantها همراهشان لود نشده‌اند)
+   */
+  private async filterInStockProducts(products: Product[]): Promise<Product[]> {
+    const items = products ?? [];
+
+    const inStockIds = await findInStockProductIds(
+      this.variantRepo,
+      items.map(product => product?.id),
+    );
+
+    return items.filter(product => inStockIds.has(product?.id));
   }
 
   // ==================== متد update ====================
@@ -1105,9 +1157,16 @@ export class ProductsService {
     return this.sizeRepo.delete(id);
   }
 
-  async getDiscountedProducts(query: QueryDto) {
+  async getDiscountedProducts(
+    query: QueryDto,
+    options?: {
+      onlyInStock?: boolean;
+    },
+  ) {
     const page = query.page ?? 1;
     const limit = query.limit ?? 10;
+
+    const onlyInStock = options?.onlyInStock ?? false;
 
     const now = new Date();
 
@@ -1192,6 +1251,11 @@ export class ProductsService {
           now,
         },
       );
+
+    // فقط محصولاتی که حداقل یک variant موجود دارند
+    if (onlyInStock) {
+      qb.andWhere('variant.stock > 0');
+    }
 
     applySearch(qb, query.search, [
       'products.title',

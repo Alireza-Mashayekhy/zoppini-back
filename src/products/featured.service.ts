@@ -14,6 +14,8 @@ import {
   UpdateFeaturedProductDto,
 } from './dto/create-featured-product.dto';
 import { FeaturedProduct } from './entities/featured-product.entity';
+import { Variant } from './entities/variant.entity';
+import { findInStockProductColorPairs } from './utils/stock.util';
 
 @Injectable()
 export class FeaturedService {
@@ -24,10 +26,16 @@ export class FeaturedService {
     private productRepo: Repository<Product>,
     @InjectRepository(Color)
     private colorRepo: Repository<Color>,
+    @InjectRepository(Variant)
+    private variantRepo: Repository<Variant>,
   ) {}
 
-  async getFeaturedProducts(): Promise<FeaturedProduct[]> {
-    return this.featuredRepo.find({
+  async getFeaturedProducts(options?: {
+    onlyInStock?: boolean;
+  }): Promise<FeaturedProduct[]> {
+    const onlyInStock = options?.onlyInStock ?? false;
+
+    const featured = await this.featuredRepo.find({
       relations: {
         product: {
           variants: {
@@ -42,9 +50,31 @@ export class FeaturedService {
       },
       order: { order: 'ASC', createdAt: 'ASC' },
     });
+
+    if (!onlyInStock) {
+      return featured;
+    }
+
+    // فقط محصول‌رنگ‌هایی که حداقل یک variant موجود دارند
+    const inStockPairs = await findInStockProductColorPairs(
+      this.variantRepo,
+      featured.map(item => ({
+        productId: item.productId,
+        colorId: item.colorId,
+      })),
+    );
+
+    return featured.filter(item =>
+      inStockPairs.has(`${item.productId}-${item.colorId}`),
+    );
   }
 
-  async getFeaturedProduct(id: number): Promise<FeaturedProduct> {
+  async getFeaturedProduct(
+    id: number,
+    options?: { onlyInStock?: boolean },
+  ): Promise<FeaturedProduct> {
+    const onlyInStock = options?.onlyInStock ?? false;
+
     const item = await this.featuredRepo.findOne({
       where: { id },
       relations: {
@@ -61,6 +91,18 @@ export class FeaturedService {
     if (!item) {
       throw new NotFoundException('محصول ویژه یافت نشد');
     }
+
+    if (onlyInStock) {
+      const inStockPairs = await findInStockProductColorPairs(
+        this.variantRepo,
+        [{ productId: item.productId, colorId: item.colorId }],
+      );
+
+      if (!inStockPairs.has(`${item.productId}-${item.colorId}`)) {
+        throw new NotFoundException('محصول ویژه یافت نشد');
+      }
+    }
+
     return item;
   }
 
