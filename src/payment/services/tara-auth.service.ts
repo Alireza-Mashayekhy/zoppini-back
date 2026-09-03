@@ -72,17 +72,8 @@ export class TaraAuthService {
       password,
     };
 
-    this.logger.log('========== TARA AUTH ==========');
-    this.logger.log(`URL: ${url}`);
-    this.logger.log(`Username: ${username}`);
-    this.logger.log(`Password length: ${password.length}`);
-    this.logger.log(
-      `Payload: ${JSON.stringify({
-        username,
-        password: '***',
-      })}`,
-    );
-    this.logger.log('================================');
+    // نام کاربری/رمز/توکن لاگ نمی‌شوند (نشتی اطلاعات حساس)
+    this.logger.log(`درخواست توکن تارا: ${url}`);
 
     try {
       const response = await firstValueFrom(
@@ -98,10 +89,6 @@ export class TaraAuthService {
       );
 
       this.logger.log(`Tara auth status: ${response.status}`);
-
-      this.logger.log(
-        `Tara auth response: ${JSON.stringify(response.data, null, 2)}`,
-      );
 
       /*
        * هر پاسخ غیر 2xx را خطا در نظر بگیر
@@ -119,39 +106,35 @@ export class TaraAuthService {
 
       const data = response.data;
 
+      /*
+       * طبق مستند، خروجی سرویس لاگین شامل accessToken و همچنین
+       * result (کد پاسخ) و description است؛ مثلاً:
+       *   2 = نام کاربری یا رمز عبور نامعتبر است
+       *   3 = کاربر دسترسی ندارد
+       *   4 = پذیرنده یافت نشد
+       */
+      if (data?.result !== undefined && String(data.result) !== '0') {
+        const message =
+          data?.description || `احراز هویت تارا ناموفق (result=${data.result})`;
+
+        this.logger.error(`❌ ${message}`);
+
+        throw new Error(message);
+      }
+
       const newToken = data?.accessToken || data?.access_token || data?.token;
 
       if (!newToken) {
-        throw new Error('توکن در پاسخ تارا موجود نیست');
+        throw new Error(
+          `توکن در پاسخ تارا موجود نیست${
+            data?.description ? ` (${data.description})` : ''
+          }`,
+        );
       }
 
       this.accessToken = String(newToken);
 
-      /*
-       * پشتیبانی از چند نوع expireTime
-       */
-      const expireTime = data?.expireTime;
-
-      if (expireTime) {
-        const expireDate = new Date(expireTime);
-
-        if (!Number.isNaN(expireDate.getTime())) {
-          this.tokenExpiresAt = expireDate;
-        } else {
-          this.tokenExpiresAt = new Date(Date.now() + 3600 * 1000);
-        }
-      } else if (data?.expiresIn) {
-        this.tokenExpiresAt = new Date(
-          Date.now() + Number(data.expiresIn) * 1000,
-        );
-      } else if (data?.expires_in) {
-        this.tokenExpiresAt = new Date(
-          Date.now() + Number(data.expires_in) * 1000,
-        );
-      } else {
-        // پیش‌فرض 1 ساعت
-        this.tokenExpiresAt = new Date(Date.now() + 3600 * 1000);
-      }
+      this.tokenExpiresAt = this.resolveExpireTime(data);
 
       this.logger.log(
         `✅ توکن تارا دریافت شد - expires: ${this.tokenExpiresAt.toISOString()}`,
@@ -177,6 +160,57 @@ export class TaraAuthService {
 
       throw new BadRequestException('خطا در ارتباط با درگاه تارا');
     }
+  }
+
+  /**
+   * محاسبهٔ زمان انقضای توکن.
+   *
+   * در مستند، expireTime از نوع long است؛ ممکن است epoch-milliseconds یا
+   * epoch-seconds باشد. اگر مقدار قابل اتکا نبود (یا مربوط به گذشته بود)
+   * به یک ساعت پیش‌فرض برمی‌گردیم تا توکن منقضی‌شده کش نماند.
+   */
+  private resolveExpireTime(data: any): Date {
+    const fallback = () => new Date(Date.now() + 3600 * 1000);
+
+    const expireTime = data?.expireTime;
+
+    if (expireTime !== undefined && expireTime !== null && expireTime !== '') {
+      const numeric = Number(expireTime);
+
+      let candidate: Date | null = null;
+
+      if (Number.isFinite(numeric) && numeric > 0) {
+        // اعداد ۱۰ رقمی = ثانیه، ۱۳ رقمی به بالا = میلی‌ثانیه
+        candidate = new Date(numeric < 1e12 ? numeric * 1000 : numeric);
+      } else {
+        const parsed = new Date(expireTime);
+
+        if (!Number.isNaN(parsed.getTime())) {
+          candidate = parsed;
+        }
+      }
+
+      // تاریخ گذشته/نامعتبر → کش کردن توکن بی‌فایده است
+      if (candidate && candidate.getTime() > Date.now()) {
+        return candidate;
+      }
+
+      this.logger.warn(
+        `expireTime تارا قابل اتکا نبود (${String(expireTime)})؛ پیش‌فرض یک ساعت در نظر گرفته می‌شود.`,
+      );
+
+      return fallback();
+    }
+
+    if (data?.expiresIn) {
+      return new Date(Date.now() + Number(data.expiresIn) * 1000);
+    }
+
+    if (data?.expires_in) {
+      return new Date(Date.now() + Number(data.expires_in) * 1000);
+    }
+
+    return fallback();
   }
 
   clearToken(): void {

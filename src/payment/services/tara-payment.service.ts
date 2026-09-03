@@ -15,9 +15,22 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from '../entities/payment.entity';
+import {
+  describeTaraResult,
+  TARA_SUCCESS_RESULT,
+  TaraUnit,
+} from '../utils/tara.constants';
 import { PaymentGuardService } from './payment-guard.service';
 import { TaraAuthService } from './tara-auth.service';
 
+/**
+ * پیاده‌سازی درگاه تارا (IPG) بر پایهٔ
+ * «مستند سرویس‌های خرید اینترنتی تارا (بر پایه وب)»
+ *
+ * فرایند طبق بخش ۲ مستند:
+ *   1) getToken  2) هدایت کاربر به ipgPurchase  3) پرداخت
+ *   4) callback  5) purchaseVerify  6) purchaseInquiry (در صورت بی‌پاسخ بودن verify)
+ */
 @Injectable()
 export class TaraPaymentService {
   private readonly logger = new Logger(TaraPaymentService.name);
@@ -32,10 +45,92 @@ export class TaraPaymentService {
     private readonly paymentGuard: PaymentGuardService,
   ) {}
 
+  // =========================================================
+  // پیکربندی
+  // =========================================================
+
+  private getApiUrl(): string {
+    const apiUrl = this.configService.get<string>('TARA_API_URL');
+
+    if (!apiUrl) {
+      throw new BadRequestException('TARA_API_URL تنظیم نشده است');
+    }
+
+    return apiUrl.replace(/\/+$/, '');
+  }
+
+  private getUsername(): string {
+    const username = this.configService.get<string>('TARA_USERNAME');
+
+    if (!username) {
+      throw new BadRequestException('TARA_USERNAME تنظیم نشده است');
+    }
+
+    return username;
+  }
+
+  /**
+   * آدرس بازگشت از درگاه.
+   * اگر TARA_PAYMENT_CALLBACK_URL ست نشده باشد، از APP_URL ساخته می‌شود
+   * (وگرنه callBackUrl خالی می‌رفت و خطای «92 = فرمت آدرس برگشتی صحیح نمیباشد»
+   * یا «87/88» می‌گرفتیم).
+   */
+  private getCallbackUrl(): string {
+    const explicit = this.configService.get<string>(
+      'TARA_PAYMENT_CALLBACK_URL',
+    );
+
+    if (explicit?.trim()) {
+      return explicit.trim();
+    }
+
+    const appUrl = this.configService.get<string>('APP_URL');
+
+    if (!appUrl?.trim()) {
+      throw new BadRequestException(
+        'TARA_PAYMENT_CALLBACK_URL یا APP_URL تنظیم نشده است',
+      );
+    }
+
+    return `${appUrl.trim().replace(/\/+$/, '')}/api/payment/callback/tara`;
+  }
+
+  /**
+   * شماره سرویس (serviceId) — طبق مستند از نوع long و بخشی از مدل ServiceAmount.
+   * مقدار واقعی را تارا به پذیرنده می‌دهد؛ اگر ست نشود از ۱ استفاده می‌شود.
+   * (خطاهای «9 = شماره سرویس نامعتبر است» و «91 = شناسه سرویس نامعتبر»)
+   */
+  private getServiceId(): number {
+    const raw = this.configService.get<string>('TARA_SERVICE_ID');
+    const parsed = Number(raw);
+
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }
+
+  /**
+   * کد/عنوان گروه کالایی.
+   *
+   * طبق بخش ۲-۱ مستند، نگاشت گروه‌های کالایی تارا (سرویس /api/clubGroups)
+   * «ضروری» است. تا زمانی که جدول نگاشت دسته‌بندی ↔ گروه تارا ساخته شود،
+   * مقدار پیش‌فرض از env خوانده می‌شود.
+   */
+  private getMerchandiseGroup(): { group: string; groupTitle: string } {
+    return {
+      group: this.configService.get<string>('TARA_MERCHANDISE_GROUP') ?? '',
+      groupTitle:
+        this.configService.get<string>('TARA_MERCHANDISE_GROUP_TITLE') ?? '',
+    };
+  }
+
+  // =========================================================
+  // 1) دریافت شناسه یکتا — POST /api/getToken
+  // =========================================================
+
   async requestPayment(
     orderId: number,
     userId: number,
-  ): Promise<{ refId: string; payUrl: string }> {
+    clientIp?: string,
+  ): Promise<{ refId: string; payUrl: string; username: string }> {
     const order = await this.ordersService.findOneForPayment(orderId, userId);
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
@@ -45,33 +140,68 @@ export class TaraPaymentService {
     await this.paymentGuard.ensureOrderPayable(order);
 
     const accessToken = await this.authService.getAccessToken();
-    const apiUrl = this.configService.get<string>('TARA_API_URL')!;
-    const callbackUrl = this.configService.get<string>(
-      'TARA_PAYMENT_CALLBACK_URL',
-    )!;
-    const amount = Math.round(order.finalPrice * 10); // تبدیل به ریال
+    const apiUrl = this.getApiUrl();
+    const callbackUrl = this.getCallbackUrl();
+    const username = this.getUsername();
 
-    // ساخت آیتم‌های صورت‌حساب (برای تارا)
-    const invoiceItems = order.items.map(item => ({
-      name: item.variant.product?.title || 'محصول',
-      code: item.variant.product?.productCode || '',
-      count: item.quantity,
-      unit: 1,
-      fee: Math.round(item.variant.price * 10), // قیمت هر واحد به ریال
-      group: '',
-      groupTitle: '',
+    // مبلغ به ریال (ورودی amount در مستند از نوع string است)
+    const amount = Math.round(Number(order.finalPrice) * 10);
+
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('مبلغ سفارش نامعتبر است');
+    }
+
+    const { group, groupTitle } = this.getMerchandiseGroup();
+
+    /*
+     * ساخت آیتم‌های صورت‌حساب (مدل TaraInvoiceItem):
+     *
+     * - fee: قیمت «یک واحد» کالا از نوع long → قیمت فریزشدهٔ زمان خرید
+     *   (OrderItem.price) و نه قیمت لحظه‌ای واریانت؛ وگرنه مبلغ فاکتور
+     *   با مبلغ سفارش یکی نمی‌شود.
+     *
+     * - unit: طبق مستند ۵ = «عدد» (مقدار قبلی ۱ بود که یعنی کیلوگرم!)
+     */
+    const taraInvoiceItemList = order.items.map(item => ({
+      name: item.variant?.product?.title || 'محصول',
+      code: item.variant?.product?.productCode || '',
+      count: Number(item.quantity),
+      unit: TaraUnit.PIECE,
+      fee: Math.round(Number(item.price) * 10),
+      group,
+      groupTitle,
       data: '',
     }));
 
+    /*
+     * کنترل داخلی: جمع آیتم‌ها باید با مبلغ کل بخواند.
+     * هزینهٔ ارسال و تخفیف در آیتم‌ها نیستند، پس اگر اختلاف داشت
+     * لاگ می‌زنیم تا در صورت دریافت خطای «11 = مبالغ یکسان نیست»
+     * علتش معلوم باشد.
+     */
+    const itemsTotal = taraInvoiceItemList.reduce(
+      (sum, item) => sum + item.fee * item.count,
+      0,
+    );
+
+    if (itemsTotal !== amount) {
+      this.logger.warn(
+        `سفارش ${orderId}: جمع آیتم‌های فاکتور (${itemsTotal}) با مبلغ ارسالی به تارا (${amount}) برابر نیست ` +
+          `(shippingCost=${order.shippingCost}, discount=${order.discount}). ` +
+          'در صورت دریافت result=11 باید هزینهٔ ارسال/تخفیف هم در taraInvoiceItemList لحاظ شود.',
+      );
+    }
+
     const payload = {
-      ip: '127.0.0.1', // آدرس IP کاربر (می‌توانید از req دریافت کنید)
+      // فیلد اجباری؛ باید IP واقعی کاربر باشد (خطاهای 1 و 88)
+      ip: clientIp || '',
       serviceAmountList: [
         {
-          serviceId: 1, // شناسه سرویس (مقدار پیش‌فرض)
-          amount: amount,
+          serviceId: this.getServiceId(),
+          amount,
         },
       ],
-      taraInvoiceItemList: invoiceItems,
+      taraInvoiceItemList,
       additionalData: '',
       callBackUrl: callbackUrl,
       amount: String(amount),
@@ -79,6 +209,12 @@ export class TaraPaymentService {
       orderId: String(orderId),
       vat: 0,
     };
+
+    if (!payload.mobile) {
+      this.logger.warn(
+        `سفارش ${orderId}: شماره موبایل کاربر خالی است ولی فیلد mobile در getToken اجباری است.`,
+      );
+    }
 
     try {
       const response = await fetch(`${apiUrl}/api/getToken`, {
@@ -90,15 +226,24 @@ export class TaraPaymentService {
         body: JSON.stringify(payload),
       });
 
-      const data = await response.json();
+      const data = await this.parseJsonResponse(response, 'getToken');
 
-      if (data.result !== '0') {
+      if (String(data?.result) !== TARA_SUCCESS_RESULT) {
+        this.logger.error(
+          `❌ getToken ناموفق برای سفارش ${orderId}: ${describeTaraResult(data?.result)} ` +
+            `- ${data?.description || ''}`,
+        );
+
         throw new BadRequestException(
-          data.description || 'خطا در دریافت توکن تارا',
+          data?.description || 'خطا در دریافت توکن تارا',
         );
       }
 
-      const token = data.token;
+      const token = data?.token;
+
+      if (!token) {
+        throw new BadRequestException('توکنی از تارا دریافت نشد');
+      }
 
       // ذخیره پرداخت
       const payment = this.paymentRepo.create({
@@ -107,25 +252,41 @@ export class TaraPaymentService {
         amount,
         gateway: PaymentGateway.TARA,
         status: PaymentStatus.PENDING,
-        resCode: data.result,
+        resCode: String(data.result),
         gatewayResponse: data,
       });
       await this.paymentRepo.save(payment);
 
-      // آدرس هدایت کاربر به صفحه پرداخت
+      /*
+       * آدرس هدایت کاربر به صفحه پرداخت (بند ۲-۲ مستند):
+       * یک فرم HTML با Content-Type=form-data و دو فیلد username و token
+       * باید به این آدرس POST شود؛ به همین دلیل username هم برگردانده می‌شود
+       * تا فرانت مجبور به هاردکد کردن آن نباشد.
+       */
       const payUrl = `${apiUrl}/api/ipgPurchase`;
-      // برای هدایت کاربر، باید یک فرم POST به payUrl با پارامترهای username و token ارسال کنیم
-      // این کار را در فرانت‌اند انجام می‌دهیم
 
-      return { refId: token, payUrl };
+      return { refId: token, payUrl, username };
     } catch (error) {
-      this.logger.error(error.message, error.stack);
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `❌ خطا در ارتباط با تارا (getToken) برای سفارش ${orderId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+
       throw new BadRequestException('خطا در ارتباط با درگاه تارا');
     }
   }
 
+  // =========================================================
+  // 5) تایید خرید — POST /api/purchaseVerify
+  // =========================================================
+
   async verifyPayment(
     token: string,
+    clientIp?: string,
   ): Promise<{ success: boolean; message: string; orderId?: number }> {
     const payment = await this.paymentRepo.findOne({
       where: { refId: token, gateway: PaymentGateway.TARA },
@@ -143,114 +304,239 @@ export class TaraPaymentService {
     }
 
     const accessToken = await this.authService.getAccessToken();
-    const apiUrl = this.configService.get<string>('TARA_API_URL')!;
+    const apiUrl = this.getApiUrl();
+
+    let data: any;
 
     try {
-      // ۱. فراخوانی سرویس Verify
-      const verifyPayload = {
-        ip: '127.0.0.1',
-        token: token,
-      };
-
       const response = await fetch(`${apiUrl}/api/purchaseVerify`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${accessToken}`,
         },
-        body: JSON.stringify(verifyPayload),
+        body: JSON.stringify({
+          ip: clientIp || '',
+          token,
+        }),
       });
 
-      const data = await response.json();
-
-      if (data.result !== '0') {
-        // خطا در تأیید
-        payment.status = PaymentStatus.FAILED;
-        payment.resCode = data.result;
-        await this.paymentRepo.save(payment);
-        await this.ordersService.failOrderPayment(payment.orderId);
-        return {
-          success: false,
-          message: data.description || 'خطا در تأیید پرداخت',
-        };
-      }
-
-      // ۲. پرداخت موفق
-      payment.status = PaymentStatus.SUCCESS;
-      payment.resCode = '0';
-      payment.saleReferenceId = data.rrn || null;
-      await this.paymentRepo.save(payment);
-
-      /*
-       * ۳. تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد)
-       * اگر خطا بدهد، پول گرفته شده؛ پس پرداخت را SUCCESS نگه می‌داریم
-       * و سفارش را لغو نمی‌کنیم تا دستی بررسی/اصلاح شود.
-       */
-      try {
-        const order = await this.ordersService.findOneForAdmin(payment.orderId);
-
-        if (order.status === OrderStatus.PENDING) {
-          await this.ordersService.confirmOrderPayment(payment.orderId);
-        }
-      } catch (error) {
-        this.logger.error(
-          `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
-            'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
-          error instanceof Error ? error.stack : String(error),
-        );
-
-        return {
-          success: true,
-          message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
-          orderId: payment.orderId,
-        };
-      }
-
-      return {
-        success: true,
-        message: 'پرداخت با موفقیت انجام شد',
-        orderId: payment.orderId,
-      };
+      data = await this.parseJsonResponse(response, 'purchaseVerify');
     } catch (error) {
       /*
-       * خطای شبکه/نامشخص: وضعیت واقعی تراکنش معلوم نیست.
-       * پرداخت را FAILED نمی‌کنیم و سفارش را لغو نمی‌کنیم
-       * تا بررسی مجدد یا دستی ممکن باشد.
+       * بند ۴-۲ و مرحلهٔ ۶ فرایند در مستند:
+       * «در صورت عدم دریافت پاسخ از سرویس تایید خرید (verify)، پذیرنده می‌تواند
+       *  با فراخوانی سرویس استعلام، از آخرین وضعیت خرید مطلع شود.»
+       *
+       * پس قبل از هر تصمیمی، یک‌بار استعلام می‌گیریم.
        */
       this.logger.error(
-        `❌ خطا در تأیید پرداخت تارا برای پرداخت ${payment.id} (order ${payment.orderId}). ` +
-          'وضعیت روی PENDING می‌ماند.',
+        `❌ عدم دریافت پاسخ از purchaseVerify برای پرداخت ${payment.id}; تلاش برای استعلام (purchaseInquiry)`,
         error instanceof Error ? error.stack : String(error),
       );
 
+      const inquiryResult = await this.finalizeFromInquiry(payment, clientIp);
+
+      if (inquiryResult) {
+        return inquiryResult;
+      }
+
+      // وضعیت واقعی تراکنش هنوز معلوم نیست → PENDING می‌ماند
       return {
         success: false,
         message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
         orderId: payment.orderId,
       };
     }
+
+    if (String(data?.result) !== TARA_SUCCESS_RESULT) {
+      this.logger.warn(
+        `⚠️ purchaseVerify ناموفق برای پرداخت ${payment.id}: ${describeTaraResult(data?.result)} ` +
+          `- ${data?.description || ''}`,
+      );
+
+      payment.status = PaymentStatus.FAILED;
+      payment.resCode = String(data?.result ?? '');
+      payment.gatewayResponse = data;
+      await this.paymentRepo.save(payment);
+
+      await this.ordersService.failOrderPayment(payment.orderId);
+
+      return {
+        success: false,
+        message: data?.description || 'خطا در تأیید پرداخت',
+        orderId: payment.orderId,
+      };
+    }
+
+    /*
+     * کنترل مبلغ: خروجی purchaseVerify شامل amount (string) است.
+     * اگر تارا مبلغی برگرداند که با مبلغ ثبت‌شده یکی نبود، سفارش را تأیید
+     * نمی‌کنیم (جلوگیری از دستکاری مبلغ).
+     */
+    const verifiedAmount = Number(data?.amount);
+
+    if (Number.isFinite(verifiedAmount) && verifiedAmount > 0) {
+      if (verifiedAmount !== Number(payment.amount)) {
+        this.logger.error(
+          `❌ پرداخت ${payment.id}: مبلغ تأییدشده از تارا (${verifiedAmount}) ` +
+            `با مبلغ ثبت‌شده (${payment.amount}) یکی نیست. سفارش تأیید نمی‌شود.`,
+        );
+
+        payment.resCode = String(data?.result ?? '');
+        payment.gatewayResponse = data;
+        await this.paymentRepo.save(payment);
+
+        return {
+          success: false,
+          message: 'مبلغ تراکنش با مبلغ سفارش مطابقت ندارد',
+          orderId: payment.orderId,
+        };
+      }
+    }
+
+    return this.markPaymentSuccess(payment, data);
   }
 
-  // سرویس استعلام (در صورت نیاز)
-  async inquiryPayment(token: string): Promise<any> {
+  // =========================================================
+  // 6) استعلام خرید — POST /api/purchaseInquiry
+  // =========================================================
+
+  async inquiryPayment(token: string, clientIp?: string): Promise<any> {
     const accessToken = await this.authService.getAccessToken();
-    const apiUrl = this.configService.get<string>('TARA_API_URL')!;
+    const apiUrl = this.getApiUrl();
 
+    const response = await fetch(`${apiUrl}/api/purchaseInquiry`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        ip: clientIp || '',
+        token,
+      }),
+    });
+
+    return this.parseJsonResponse(response, 'purchaseInquiry');
+  }
+
+  /**
+   * استعلام وضعیت و در صورت موفق بودن، نهایی‌کردن پرداخت.
+   * خروجی: نتیجهٔ نهایی یا null اگر از استعلام هم نتیجه‌ای نگرفتیم.
+   */
+  private async finalizeFromInquiry(
+    payment: Payment,
+    clientIp?: string,
+  ): Promise<{ success: boolean; message: string; orderId?: number } | null> {
     try {
-      const response = await fetch(`${apiUrl}/api/purchaseInquiry`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ ip: '127.0.0.1', token }),
-      });
+      const inquiry = await this.inquiryPayment(payment.refId, clientIp);
 
-      return response.json();
+      // مدل TrackPurchase: آخرین وضعیت خرید در trackPurchaseList
+      const track = inquiry?.trackPurchaseList?.[0];
+      const result = String(track?.result ?? inquiry?.result ?? '');
+
+      this.logger.log(
+        `استعلام تارا برای پرداخت ${payment.id}: ${describeTaraResult(result)}`,
+      );
+
+      if (result !== TARA_SUCCESS_RESULT) {
+        return null;
+      }
+
+      return await this.markPaymentSuccess(payment, {
+        ...(track ?? {}),
+        inquiry,
+      });
     } catch (error) {
-      this.logger.error('خطا در استعلام پرداخت تارا', error.message);
-      throw new BadRequestException('خطا در استعلام پرداخت');
+      this.logger.error(
+        `❌ استعلام (purchaseInquiry) هم برای پرداخت ${payment.id} پاسخ نداد.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return null;
     }
+  }
+
+  // =========================================================
+  // مشترک: ثبت موفقیت پرداخت و نهایی‌کردن سفارش
+  // =========================================================
+
+  private async markPaymentSuccess(
+    payment: Payment,
+    data: any,
+  ): Promise<{ success: boolean; message: string; orderId?: number }> {
+    payment.status = PaymentStatus.SUCCESS;
+    payment.resCode = TARA_SUCCESS_RESULT;
+
+    // rrn در مستند از نوع string است (شماره مرجع پرداخت) — همان referenceNumber
+    // موردنیاز سرویس‌های «برگشت خرید» است.
+    if (data?.rrn != null && String(data.rrn).trim()) {
+      payment.saleReferenceId = String(data.rrn).trim();
+    }
+
+    payment.gatewayResponse = data ?? payment.gatewayResponse;
+    await this.paymentRepo.save(payment);
+
+    /*
+     * تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد).
+     * اگر خطا بدهد، پول گرفته شده؛ پس پرداخت SUCCESS می‌ماند
+     * و سفارش لغو نمی‌شود تا دستی بررسی/اصلاح شود.
+     */
+    try {
+      const order = await this.ordersService.findOneForAdmin(payment.orderId);
+
+      if (order.status === OrderStatus.PENDING) {
+        await this.ordersService.confirmOrderPayment(payment.orderId);
+      }
+    } catch (error) {
+      this.logger.error(
+        `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
+          'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return {
+        success: true,
+        message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
+        orderId: payment.orderId,
+      };
+    }
+
+    return {
+      success: true,
+      message: 'پرداخت با موفقیت انجام شد',
+      orderId: payment.orderId,
+    };
+  }
+
+  // =========================================================
+  // کمکی
+  // =========================================================
+
+  /**
+   * خواندن پاسخ به‌صورت JSON همراه با بررسی وضعیت HTTP.
+   * (بدون این کنترل، پاسخ خطای ۴۰۱/۵۰۰ به شکل خطای parse دیده می‌شد)
+   */
+  private async parseJsonResponse(response: Response, serviceName: string) {
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+
+      this.logger.error(
+        `❌ تارا (${serviceName}) پاسخ HTTP ${response.status} داد: ${text.slice(0, 500)}`,
+      );
+
+      // توکن منقضی/باطل → کش پاک شود تا درخواست بعدی دوباره لاگین کند
+      if (response.status === 401 || response.status === 403) {
+        this.authService.clearToken();
+      }
+
+      throw new BadRequestException(
+        `پاسخ نامعتبر از تارا (${serviceName}): HTTP ${response.status}`,
+      );
+    }
+
+    return await response.json();
   }
 
   async findPaymentByRefId(refId: string) {
@@ -265,6 +551,33 @@ export class TaraPaymentService {
   async failPayment(payment: Payment, resCode: string) {
     payment.status = PaymentStatus.FAILED;
     payment.resCode = resCode;
+
+    return this.paymentRepo.save(payment);
+  }
+
+  /**
+   * ذخیرهٔ اطلاعات callback تارا.
+   * طبق مستند، تارا این فیلدها را به callBackUrl می‌فرستد:
+   * result, desc, token, channelRefNumber, additionalData, orderId
+   */
+  async storeCallbackData(
+    payment: Payment,
+    callback: {
+      result?: string;
+      desc?: string;
+      channelRefNumber?: string;
+      additionalData?: string;
+      orderId?: string;
+    },
+  ) {
+    if (callback?.channelRefNumber) {
+      payment.channelRefNumber = String(callback.channelRefNumber);
+    }
+
+    payment.gatewayResponse = {
+      ...(payment.gatewayResponse ?? {}),
+      callback,
+    };
 
     return this.paymentRepo.save(payment);
   }

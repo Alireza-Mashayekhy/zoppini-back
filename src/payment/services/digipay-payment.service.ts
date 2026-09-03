@@ -244,7 +244,7 @@ export class DigipayPaymentService {
       payment.resCode = '0';
 
       if (data.referenceId != null) {
-        payment.saleReferenceId = Number(data.referenceId);
+        payment.saleReferenceId = String(data.referenceId);
       }
 
       await this.paymentRepo.save(payment);
