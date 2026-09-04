@@ -8,7 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
-import { Repository } from 'typeorm';
+import { LessThan, Repository } from 'typeorm';
 
 import {
   Payment,
@@ -17,6 +17,8 @@ import {
 } from '../entities/payment.entity';
 import {
   describeTaraResult,
+  TARA_AUTO_REFUND_MINUTES,
+  TARA_RECONCILE_AFTER_MINUTES,
   TARA_SUCCESS_RESULT,
   TaraUnit,
 } from '../utils/tara.constants';
@@ -253,7 +255,10 @@ export class TaraPaymentService {
         gateway: PaymentGateway.TARA,
         status: PaymentStatus.PENDING,
         resCode: String(data.result),
-        gatewayResponse: data,
+        gatewayResponse: {
+          getToken: data,
+          clientIp: payload.ip,
+        },
       });
       await this.paymentRepo.save(payment);
 
@@ -294,6 +299,7 @@ export class TaraPaymentService {
 
     const accessToken = await this.authService.getAccessToken();
     const apiUrl = this.getApiUrl();
+    const payerIp = clientIp || this.getStoredClientIp(payment);
 
     let data: any;
 
@@ -305,7 +311,7 @@ export class TaraPaymentService {
           Authorization: `Bearer ${accessToken}`,
         },
         body: JSON.stringify({
-          ip: clientIp || '',
+          ip: payerIp,
           token,
         }),
       });
@@ -346,7 +352,7 @@ export class TaraPaymentService {
 
       payment.status = PaymentStatus.FAILED;
       payment.resCode = String(data?.result ?? '');
-      payment.gatewayResponse = data;
+      this.mergeGatewayResponse(payment, 'purchaseVerify', data);
       await this.paymentRepo.save(payment);
 
       await this.ordersService.failOrderPayment(payment.orderId);
@@ -373,7 +379,7 @@ export class TaraPaymentService {
         );
 
         payment.resCode = String(data?.result ?? '');
-        payment.gatewayResponse = data;
+        this.mergeGatewayResponse(payment, 'purchaseVerify', data);
         await this.paymentRepo.save(payment);
 
         return {
@@ -432,10 +438,7 @@ export class TaraPaymentService {
         return null;
       }
 
-      return await this.markPaymentSuccess(payment, {
-        ...(track ?? {}),
-        inquiry,
-      });
+      return await this.markPaymentSuccess(payment, inquiry, track);
     } catch (error) {
       this.logger.error(
         `❌ استعلام (purchaseInquiry) هم برای پرداخت ${payment.id} پاسخ نداد.`,
@@ -453,17 +456,25 @@ export class TaraPaymentService {
   private async markPaymentSuccess(
     payment: Payment,
     data: any,
+    track?: any,
   ): Promise<{ success: boolean; message: string; orderId?: number }> {
     payment.status = PaymentStatus.SUCCESS;
     payment.resCode = TARA_SUCCESS_RESULT;
 
     // rrn در مستند از نوع string است (شماره مرجع پرداخت) — همان referenceNumber
     // موردنیاز سرویس‌های «برگشت خرید» است.
-    if (data?.rrn != null && String(data.rrn).trim()) {
-      payment.saleReferenceId = String(data.rrn).trim();
+    const rrn = data?.rrn ?? track?.rrn;
+
+    if (rrn != null && String(rrn).trim()) {
+      payment.saleReferenceId = String(rrn).trim();
     }
 
-    payment.gatewayResponse = data ?? payment.gatewayResponse;
+    this.mergeGatewayResponse(payment, 'purchaseVerify', data);
+
+    if (track) {
+      this.mergeGatewayResponse(payment, 'purchaseInquiry', track);
+    }
+
     await this.paymentRepo.save(payment);
 
     /*
@@ -562,11 +573,90 @@ export class TaraPaymentService {
       payment.channelRefNumber = String(callback.channelRefNumber);
     }
 
-    payment.gatewayResponse = {
-      ...(payment.gatewayResponse ?? {}),
-      callback,
-    };
+    this.mergeGatewayResponse(payment, 'callback', callback);
 
     return this.paymentRepo.save(payment);
+  }
+
+  async reconcilePendingPayments(limit = 25): Promise<void> {
+    const deadline = new Date(
+      Date.now() - TARA_RECONCILE_AFTER_MINUTES * 60_000,
+    );
+
+    const payments = await this.paymentRepo.find({
+      where: {
+        gateway: PaymentGateway.TARA,
+        status: PaymentStatus.PENDING,
+        createdAt: LessThan(deadline),
+      },
+      take: limit,
+      order: { id: 'ASC' },
+    });
+
+    for (const payment of payments) {
+      const result = await this.finalizeFromInquiry(
+        payment,
+        this.getStoredClientIp(payment),
+      );
+
+      if (result?.success) {
+        this.logger.log(
+          `✅ پرداخت بلاتکلیف ${payment.id} (سفارش ${payment.orderId}) با استعلام تارا موفق شناسایی و نهایی شد.`,
+        );
+
+        continue;
+      }
+
+      const ageMinutes =
+        (Date.now() - new Date(payment.createdAt).getTime()) / 60_000;
+
+      if (ageMinutes < TARA_AUTO_REFUND_MINUTES) {
+        // هنوز ممکن است کاربر وسط پرداخت باشد یا استعلام بعداً پاسخ دهد
+        continue;
+      }
+
+      this.logger.warn(
+        `پرداخت ${payment.id} (سفارش ${payment.orderId}) بیش از ${TARA_AUTO_REFUND_MINUTES} دقیقه بلاتکلیف ماند و ` +
+          'استعلام تارا هم موفق نبود؛ طبق مستند وجه به‌صورت خودکار برگشت می‌خورد.',
+      );
+
+      payment.status = PaymentStatus.FAILED;
+      payment.resCode = payment.resCode || 'AUTO_REFUNDED';
+      this.mergeGatewayResponse(
+        payment,
+        'reconciledAt',
+        new Date().toISOString(),
+      );
+      await this.paymentRepo.save(payment);
+    }
+  }
+
+  private getStoredClientIp(payment: Payment): string {
+    const response = payment.gatewayResponse;
+
+    if (response && typeof response === 'object' && !Array.isArray(response)) {
+      const stored = (response as Record<string, unknown>).clientIp;
+
+      if (typeof stored === 'string' && stored.trim()) {
+        return stored.trim();
+      }
+    }
+
+    return '';
+  }
+
+  /** ادغام بخشی از پاسخ درگاه در gatewayResponse بدون از دست دادن بخش‌های قبلی */
+  private mergeGatewayResponse(
+    payment: Payment,
+    key: string,
+    value: unknown,
+  ): void {
+    const current = payment.gatewayResponse;
+    const base =
+      current && typeof current === 'object' && !Array.isArray(current)
+        ? (current as Record<string, unknown>)
+        : {};
+
+    payment.gatewayResponse = { ...base, [key]: value };
   }
 }

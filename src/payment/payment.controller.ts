@@ -21,7 +21,9 @@ import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
 import { TaraPaymentService } from './services/tara-payment.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
+import { readCallbackFieldAny } from './utils/callback-fields.util';
 import { getClientIp } from './utils/client-ip.util';
+import { isMellatInconclusive, MELLAT_SUCCESS } from './utils/mellat.constants';
 import { TARA_SUCCESS_RESULT } from './utils/tara.constants';
 
 /** درخواست همراه با اطلاعات کاربر — AuthGuard تضمین می‌کند که user ست شده است */
@@ -95,41 +97,105 @@ export class PaymentController {
   //==============================================================
 
   @Post('callback/mellat')
-  async callbackMellat(@Req() req, @Res() res) {
-    // بانک ملت این مقادیر را در بدنه callback می‌فرستد
-    // (نام فیلدها در مستندات/نسخه‌های مختلف با حروف بزرگ/کوچک آمده؛ هر دو را می‌خوانیم)
-    const { RefId, ResCode } = req.body;
-    const saleOrderId = req.body.saleOrderId ?? req.body.SaleOrderId;
-    const saleReferenceId =
-      req.body.saleReferenceId ?? req.body.SaleReferenceId;
+  async callbackMellat(@Req() req: Request, @Res() res: Response) {
+    const refId = readCallbackFieldAny(req, ['RefId', 'refId', 'RefID']);
+    const resCode = readCallbackFieldAny(req, ['ResCode', 'resCode']);
+    const saleOrderId = readCallbackFieldAny(req, [
+      'SaleOrderId',
+      'saleOrderId',
+    ]);
+    const saleReferenceId = readCallbackFieldAny(req, [
+      'SaleReferenceId',
+      'saleReferenceId',
+    ]);
+    const cardHolderPan = readCallbackFieldAny(req, [
+      'CardHolderPan',
+      'cardHolderPan',
+      'CardHolderPAN',
+    ]);
+    const creditCardSaleResponseDetail = readCallbackFieldAny(req, [
+      'CreditCardSaleResponseDetail',
+    ]);
+    const finalAmount = readCallbackFieldAny(req, [
+      'FinalAmount',
+      'finalAmount',
+    ]);
 
-    if (!RefId) {
+    if (!refId) {
+      this.logger.warn('callback ملت بدون RefId دریافت شد.');
+
       return this.redirect(res, 'failed');
     }
 
-    if (ResCode !== '0') {
-      const payment = await this.mellatService.findPaymentByRefId(RefId);
+    const payment = await this.mellatService.findPaymentByRefId(refId);
 
-      if (payment) {
-        await this.mellatService.failPayment(payment, ResCode);
-        await this.ordersService.failOrderPayment(payment.orderId);
+    if (!payment) {
+      this.logger.warn(`callback ملت برای RefId ناشناخته: ${refId}`);
+
+      return this.redirect(res, 'failed');
+    }
+
+    try {
+      /*
+       * اگر بانک SaleReferenceId برنگردانده باشد، چیزی برای verify وجود ندارد؛
+       * در این حالت فقط کدهای قطعی (مثلاً ۱۷ = انصراف کاربر) ناموفق ثبت
+       * می‌شوند. کدهای نامشخص (مثلاً ۱۱۳ = پاسخی از سامانهٔ مقصد دریافت نشد)
+       * تراکنش را بلاتکلیف نگه می‌دارند تا زمان‌بند استعلام بگیرد.
+       */
+      if (!saleReferenceId) {
+        if (
+          resCode &&
+          resCode !== MELLAT_SUCCESS &&
+          !isMellatInconclusive(resCode)
+        ) {
+          const rejected = await this.mellatService.rejectFromCallback(
+            payment,
+            resCode,
+          );
+
+          return this.redirect(
+            res,
+            'failed',
+            rejected.orderId ?? payment.orderId,
+          );
+        }
+
+        this.logger.warn(
+          `callback ملت برای پرداخت ${payment.id} بدون SaleReferenceId بود (ResCode=${resCode || 'خالی'}).`,
+        );
 
         return this.redirect(res, 'failed', payment.orderId);
       }
 
-      return this.redirect(res, 'failed');
+      /*
+       * طبق مستند، حتی وقتی ResCode غیر از صفر است هم «می‌بایست تابع
+       * bpVerifyRequest مجدداً فراخوانی گردد تا پاسخ مناسب دریافت شود»؛
+       * پس همیشه verify صدا زده می‌شود. کنترل امنیتی همخوانی SaleOrderId
+       * با مقدار ارسالی در bpPayRequest هم داخل همان سرویس انجام می‌شود.
+       */
+      const result = await this.mellatService.verifyPayment(refId, {
+        resCode,
+        saleOrderId,
+        saleReferenceId,
+        cardHolderPan,
+        finalAmount,
+        creditCardSaleResponseDetail,
+      });
+
+      return this.redirect(
+        res,
+        result.success ? 'success' : 'failed',
+        result.orderId ?? payment.orderId,
+      );
+    } catch (error) {
+      // کاربر باید صفحهٔ نتیجه را ببیند، نه خطای ۵۰۰
+      this.logger.error(
+        `❌ خطا در پردازش callback ملت (پرداخت ${payment.id})`,
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return this.redirect(res, 'failed', payment.orderId);
     }
-
-    const result = await this.mellatService.verifyPayment(RefId, {
-      saleOrderId,
-      saleReferenceId,
-    });
-
-    return this.redirect(
-      res,
-      result.success ? 'success' : 'failed',
-      result.orderId,
-    );
   }
 
   //==============================================================
@@ -217,29 +283,18 @@ export class PaymentController {
    */
   @All('callback/tara')
   async callbackTara(@Req() req: Request, @Res() res: Response) {
-    const source: Record<string, unknown> = { ...req.query, ...req.body };
-
-    const readField = (key: string): string => {
-      const value = source[key];
-      const candidate = Array.isArray(value) ? value[value.length - 1] : value;
-
-      if (typeof candidate === 'string') {
-        return candidate.trim();
-      }
-
-      if (typeof candidate === 'number' || typeof candidate === 'boolean') {
-        return String(candidate);
-      }
-
-      return '';
-    };
-
-    const token = readField('token');
-    const result = readField('result');
-    const desc = readField('desc');
-    const channelRefNumber = readField('channelRefNumber');
-    const additionalData = readField('additionalData');
-    const callbackOrderId = readField('orderId');
+    const token = readCallbackFieldAny(req, ['token', 'Token']);
+    const result = readCallbackFieldAny(req, ['result', 'Result']);
+    const desc = readCallbackFieldAny(req, ['desc', 'Desc', 'description']);
+    const channelRefNumber = readCallbackFieldAny(req, [
+      'channelRefNumber',
+      'ChannelRefNumber',
+    ]);
+    const additionalData = readCallbackFieldAny(req, [
+      'additionalData',
+      'AdditionalData',
+    ]);
+    const callbackOrderId = readCallbackFieldAny(req, ['orderId', 'OrderId']);
 
     if (!token) {
       this.logger.warn('callback تارا بدون token دریافت شد.');
