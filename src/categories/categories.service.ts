@@ -12,6 +12,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Category } from './entities/category.entity';
+import { collectCategoryIdsWithDescendants } from './utils/category-tree.util';
 
 @Injectable()
 export class CategoriesService {
@@ -179,6 +180,16 @@ export class CategoriesService {
   async findManyByIds(ids: number[]): Promise<Category[]> {
     if (!ids.length) return [];
     return this.categoriesRepository.findBy({ id: In(ids) });
+  }
+
+  async findWithDescendantIds(ids: number[]): Promise<number[]> {
+    if (!ids?.length) return [];
+
+    const categories = await this.categoriesRepository.find({
+      select: { id: true, parentId: true },
+    });
+
+    return collectCategoryIdsWithDescendants(ids, categories);
   }
 
   async update(

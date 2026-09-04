@@ -382,9 +382,18 @@ export class ProductsService {
     }
 
     if (filters?.categoryIds?.length) {
-      qb.andWhere('category.id IN (:...categoryIds)', {
-        categoryIds: filters.categoryIds,
-      });
+      const categoryScope = await this.categoriesService.findWithDescendantIds(
+        filters.categoryIds,
+      );
+
+      if (!categoryScope.length) {
+        // فقط شناسه‌های نامعتبر فرستاده شده بود → هیچ محصولی نباید برگردد
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('category.id IN (:...categoryIds)', {
+          categoryIds: categoryScope,
+        });
+      }
     }
 
     if (filters?.colorIds?.length) {
