@@ -303,7 +303,7 @@ export class ZarinpalPaymentService {
       const refId = Number(data?.data?.ref_id);
 
       if (Number.isFinite(refId)) {
-        payment.saleReferenceId = refId;
+        payment.saleReferenceId = String(refId);
       }
 
       payment.gatewayResponse = data;

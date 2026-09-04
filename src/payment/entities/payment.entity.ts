@@ -35,11 +35,25 @@ export class Payment {
   @Column({ type: 'decimal', precision: 15, scale: 2 })
   amount: number;
 
-  @Column({ nullable: true })
-  saleOrderId: number; // شماره درخواست خرید
+  @Column({ type: 'bigint', nullable: true })
+  saleOrderId: string | null;
 
-  @Column({ nullable: true })
-  saleReferenceId: number; // کد مرجع تراکنش خرید
+  /**
+   * کد مرجع تراکنش خرید.
+   *
+   * - ملت: saleReferenceId (عدد بزرگ)
+   * - تارا: rrn که در مستندات نوعش string است
+   * پس به‌صورت varchar نگهداری می‌شود تا مقدار خراب نشود.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  saleReferenceId: string | null;
+
+  /**
+   * کد مرجع ارسالی تارا در callback (channelRefNumber).
+   * برای پیگیری و سرویس‌های برگشت وجه (refund) لازم است.
+   */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  channelRefNumber: string | null;
 
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
   status: PaymentStatus;

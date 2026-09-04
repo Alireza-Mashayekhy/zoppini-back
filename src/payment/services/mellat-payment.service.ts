@@ -113,7 +113,7 @@ export class MellatPaymentService {
         gateway: PaymentGateway.MELLAT,
         status: PaymentStatus.PENDING,
         resCode: code,
-        saleOrderId: gatewayOrderId, // لازم برای verify/settle
+        saleOrderId: String(gatewayOrderId), // لازم برای verify/settle
         gatewayResponse: response,
       });
       await this.paymentRepo.save(payment);
@@ -123,6 +123,25 @@ export class MellatPaymentService {
       this.logger.error(error.message, error.stack);
       throw new BadRequestException('خطا در ارتباط با درگاه پرداخت');
     }
+  }
+
+  /**
+   * تبدیل مقدار شناسه‌های عددی درگاه به رشتهٔ رقم‌ها.
+   *
+   * saleOrderId و saleReferenceId ملت اعداد ۱۶ رقمی و بزرگ‌ترند و از حد
+   * Number.MAX_SAFE_INTEGER (۹۰۰۷۱۹۹۲۵۴۷۴۰۹۹۱) عبور می‌کنند؛ اگر با
+   * Number() خوانده شوند رقم‌های انتهایی خراب می‌شود و bpVerifyRequest /
+   * bpSettleRequest شکست می‌خورند. SOAP این مقادیر را به‌صورت متنی می‌فرستد
+   * پس رشتهٔ دقیق، ورودی درست‌تری است.
+   */
+  private toGatewayNumber(value?: number | string | null): string {
+    if (value === undefined || value === null) {
+      return '';
+    }
+
+    const text = String(value).trim();
+
+    return /^\d+$/.test(text) ? text : '';
   }
 
   // src/payment/mellat-payment.service.ts (بخش verifyPayment)
@@ -159,10 +178,10 @@ export class MellatPaymentService {
      *
      * - saleReferenceId: کد مرجع تراکنشی که بانک در callback برمی‌گرداند
      */
-    const gatewayOrderId = Number(
+    const gatewayOrderId = this.toGatewayNumber(
       payment.saleOrderId ?? callbackData?.saleOrderId,
     );
-    const saleReferenceId = Number(
+    const saleReferenceId = this.toGatewayNumber(
       payment.saleReferenceId ?? callbackData?.saleReferenceId,
     );
 
