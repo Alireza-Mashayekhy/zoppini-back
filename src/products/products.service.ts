@@ -382,9 +382,23 @@ export class ProductsService {
     }
 
     if (filters?.categoryIds?.length) {
-      qb.andWhere('category.id IN (:...categoryIds)', {
-        categoryIds: filters.categoryIds,
-      });
+      /*
+       * فیلتر دسته‌بندی شامل زیردسته‌ها هم می‌شود: انتخاب دستهٔ والد (مثلاً
+       * «کفش») باید محصولات همهٔ زیردسته‌هایش (مثلاً «کفش مردانه») را هم
+       * برگرداند، چون محصولات به برگ‌های درخت دسته‌بندی وصل می‌شوند.
+       */
+      const categoryScope = await this.categoriesService.findWithDescendantIds(
+        filters.categoryIds,
+      );
+
+      if (!categoryScope.length) {
+        // فقط شناسه‌های نامعتبر فرستاده شده بود → هیچ محصولی نباید برگردد
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('category.id IN (:...categoryIds)', {
+          categoryIds: categoryScope,
+        });
+      }
     }
 
     if (filters?.colorIds?.length) {
