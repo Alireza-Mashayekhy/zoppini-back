@@ -6,16 +6,16 @@ Base URL: `https://pay.tara360.ir/pay` — هدر احراز هویت: `Authoriz
 
 ## متغیرهای محیطی
 
-| متغیر | اجباری | توضیح |
-| --- | --- | --- |
-| `TARA_API_URL` | بله | آدرس پایهٔ API تارا |
-| `TARA_USERNAME` | بله | نام کاربری پذیرنده (برای لاگین **و** برای فیلد `username` فرم هدایت به `ipgPurchase`) |
-| `TARA_PASSWORD` | بله | رمز عبور پذیرنده |
-| `APP_URL` | بله\* | آدرس عمومی بک‌اند؛ اگر `TARA_PAYMENT_CALLBACK_URL` ست نباشد، آدرس بازگشت از آن ساخته می‌شود |
-| `TARA_PAYMENT_CALLBACK_URL` | خیر | آدرس بازگشت (callback) — پیش‌فرض: `{APP_URL}/api/payment/callback/tara` |
-| `TARA_SERVICE_ID` | خیر | شمارهٔ سرویس (`serviceId` از نوع long در مدل `ServiceAmount`) — پیش‌فرض: `1` |
-| `TARA_MERCHANDISE_GROUP` | خیر | کد گروه کالایی آیتم‌های فاکتور (`group`) |
-| `TARA_MERCHANDISE_GROUP_TITLE` | خیر | عنوان گروه کالایی (`groupTitle`) |
+| متغیر                          | اجباری | توضیح                                                                                       |
+| ------------------------------ | ------ | ------------------------------------------------------------------------------------------- |
+| `TARA_API_URL`                 | بله    | آدرس پایهٔ API تارا                                                                         |
+| `TARA_USERNAME`                | بله    | نام کاربری پذیرنده (برای لاگین **و** برای فیلد `username` فرم هدایت به `ipgPurchase`)       |
+| `TARA_PASSWORD`                | بله    | رمز عبور پذیرنده                                                                            |
+| `APP_URL`                      | بله\*  | آدرس عمومی بک‌اند؛ اگر `TARA_PAYMENT_CALLBACK_URL` ست نباشد، آدرس بازگشت از آن ساخته می‌شود |
+| `TARA_PAYMENT_CALLBACK_URL`    | خیر    | آدرس بازگشت (callback) — پیش‌فرض: `{APP_URL}/api/payment/callback/tara`                     |
+| `TARA_SERVICE_ID`              | خیر    | شمارهٔ سرویس (`serviceId` از نوع long در مدل `ServiceAmount`) — پیش‌فرض: `1`                |
+| `TARA_MERCHANDISE_GROUP`       | خیر    | کد گروه کالایی آیتم‌های فاکتور (`group`)                                                    |
+| `TARA_MERCHANDISE_GROUP_TITLE` | خیر    | عنوان گروه کالایی (`groupTitle`)                                                            |
 
 \* اگر هر دو `TARA_PAYMENT_CALLBACK_URL` و `APP_URL` خالی باشند، `callBackUrl` خالی ارسال
 می‌شود و تارا خطای `92 = فرمت آدرس برگشتی صحیح نمیباشد` برمی‌گرداند؛ به همین دلیل در این

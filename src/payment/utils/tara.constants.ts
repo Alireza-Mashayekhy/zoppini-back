@@ -76,3 +76,15 @@ export function describeTaraResult(result: unknown): string {
 
 /** نتیجهٔ موفق در همهٔ سرویس‌های تارا */
 export const TARA_SUCCESS_RESULT = '0';
+
+/**
+ * حداقل سن یک تراکنش بلاتکلیف (دقیقه) پیش از آن‌که زمان‌بند سراغ استعلام
+ * (purchaseInquiry) برود؛ تا با درخواست‌های در جریان callback تداخل نکند.
+ */
+export const TARA_RECONCILE_AFTER_MINUTES = 5;
+
+/**
+ * طبق مستند، تراکنش ناموفق «حداکثر تا ۳۰ دقیقه» به‌صورت خودکار برگشت می‌خورد؛
+ * پس بعد از این مهلت می‌توان تراکنش بلاتکلیف را ناموفق ثبت کرد.
+ */
+export const TARA_AUTO_REFUND_MINUTES = 30;

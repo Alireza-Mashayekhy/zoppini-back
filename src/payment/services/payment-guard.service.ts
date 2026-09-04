@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Order, OrderStatus } from 'src/order/entities/order.entity';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 
 import { Payment, PaymentStatus } from '../entities/payment.entity';
 
@@ -11,7 +11,11 @@ import { Payment, PaymentStatus } from '../entities/payment.entity';
  * ۱. سفارش باید در وضعیت PENDING باشد
  *    (نمی‌گذاریم برای سفارش لغو‌شده/پرداخت‌شده پول گرفته شود)
  *
- * ۲. درخواست پرداخت‌های بازی (PENDING) قبلی برای این سفارش باطل می‌شوند
+ * ۲. اگر پرداخت موفق (SUCCESS) یا تأییدشده ولی در حال واریز (VERIFIED)
+ *    برای سفارش وجود داشته باشد، درخواست پرداخت جدید رد می‌شود؛
+ *    وگرنه امکان دارد از مشتری دو بار پول گرفته شود.
+ *
+ * ۳. درخواست پرداخت‌های بازی (PENDING) قبلی برای این سفارش باطل می‌شوند
  *    تا هم کاربرِ برگشته از درگاه بتواند دوباره پرداخت کند و هم
  *    امکان پرداخت همزمان با دو درگاه (پرداخت دوگانه) از بین برود.
  *    اگر کاربر واقعاً یکی از آن‌ها را پرداخته باشد، در callback همان
@@ -33,16 +37,42 @@ export class PaymentGuardService {
       );
     }
 
-    const pendingPayments = await this.paymentRepo.find({
+    const openPayments = await this.paymentRepo.find({
       where: {
         orderId: order.id,
-        status: PaymentStatus.PENDING,
+        status: In([
+          PaymentStatus.PENDING,
+          PaymentStatus.VERIFIED,
+          PaymentStatus.SUCCESS,
+        ]),
       },
     });
 
-    if (!pendingPayments.length) {
+    if (!openPayments.length) {
       return;
     }
+
+    const confirmed = openPayments.find(
+      payment =>
+        payment.status === PaymentStatus.SUCCESS ||
+        payment.status === PaymentStatus.VERIFIED,
+    );
+
+    if (confirmed) {
+      this.logger.error(
+        `❌ سفارش ${order.id} پرداخت ${confirmed.status} دارد ` +
+          `(پرداخت ${confirmed.id} از درگاه ${confirmed.gateway}) ولی وضعیت سفارش PENDING است. ` +
+          'درخواست پرداخت جدید رد شد تا پرداخت دوگانه رخ ندهد.',
+      );
+
+      throw new BadRequestException(
+        confirmed.status === PaymentStatus.SUCCESS
+          ? 'پرداخت این سفارش پیش‌تر انجام شده است'
+          : 'پرداخت این سفارش تأیید شده و در حال نهایی‌سازی است؛ لطفاً دوباره پرداخت نکنید',
+      );
+    }
+
+    const pendingPayments = openPayments;
 
     for (const payment of pendingPayments) {
       payment.status = PaymentStatus.FAILED;
