@@ -153,7 +153,7 @@ export class TaraPaymentService {
       throw new BadRequestException('مبلغ سفارش نامعتبر است');
     }
 
-    const { group, groupTitle } = this.getMerchandiseGroup();
+    // const { group, groupTitle } = this.getMerchandiseGroup();
 
     /*
      * ساخت آیتم‌های صورت‌حساب (مدل TaraInvoiceItem):
@@ -170,8 +170,8 @@ export class TaraPaymentService {
       count: Number(item.quantity),
       unit: TaraUnit.PIECE,
       fee: Math.round(Number(item.price) * 10),
-      group,
-      groupTitle,
+      // group,
+      // groupTitle,
       data: '',
     }));
 
