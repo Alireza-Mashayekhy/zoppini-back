@@ -31,6 +31,7 @@ import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { CatalogModule } from './catalog/catalog.module';
+import { GamificationModule } from './gamification/gamification.module';
 
 @Module({
   imports: [
@@ -74,6 +75,7 @@ import { CatalogModule } from './catalog/catalog.module';
     DiscountsModule,
     ContactModule,
     CatalogModule,
+    GamificationModule,
   ],
   controllers: [AppController],
   providers: [
