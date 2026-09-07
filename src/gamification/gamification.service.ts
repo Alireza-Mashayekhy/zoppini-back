@@ -77,8 +77,7 @@ export class GamificationService {
 
     const qb = this.participationRepo
       .createQueryBuilder('participation')
-      .leftJoinAndSelect('participation.answers', 'answer')
-      .leftJoin('participation.user', 'user');
+      .leftJoinAndSelect('participation.answers', 'answer');
 
     applySearch(qb, query.search, [
       'participation.fullName',
@@ -149,7 +148,6 @@ export class GamificationService {
     const participation = await this.participationRepo
       .createQueryBuilder('participation')
       .leftJoinAndSelect('participation.answers', 'answer')
-      .leftJoin('participation.user', 'user')
       .where('participation.id = :id', { id })
       .getOne();
 
@@ -177,17 +175,13 @@ export class GamificationService {
   }
 
   async getStats(query: QueryDto) {
-    const participationsQb =
-      this.participationRepo.createQueryBuilder('participation');
-
-    const totalParticipations = await participationsQb.getCount();
+    const totalParticipations = await this.participationRepo.count();
 
     const answersQb = this.answerRepo
       .createQueryBuilder('answer')
       .select('answer.questionNumber', 'questionNumber')
       .addSelect('answer.optionNumber', 'optionNumber')
-      .addSelect('COUNT(answer.id)', 'answersCount')
-      .innerJoin('answer.participation', 'participation')
+      .addSelect('COUNT(answer.id)', 'count')
       .groupBy('answer.questionNumber')
       .addGroupBy('answer.optionNumber');
 
@@ -197,83 +191,61 @@ export class GamificationService {
       });
     }
 
-    const countRows: Array<{
-      questionNumber: number;
-      optionNumber: number;
-      answersCount: string | number;
-    }> = await answersQb.getRawMany();
+    const rows = await answersQb.getRawMany<{
+      questionNumber: string;
+      optionNumber: string;
+      count: string;
+    }>();
 
     const countsByQuestion = new Map<number, Map<number, number>>();
 
-    countRows.forEach(row => {
+    for (const row of rows) {
       const questionNumber = Number(row.questionNumber);
       const optionNumber = Number(row.optionNumber);
-      const count = Number(row.answersCount) || 0;
+      const count = Number(row.count);
 
       if (!countsByQuestion.has(questionNumber)) {
         countsByQuestion.set(questionNumber, new Map<number, number>());
       }
 
-      countsByQuestion.get(questionNumber)?.set(optionNumber, count);
-    });
-
-    const questionNumbers = new Set<number>(countsByQuestion.keys());
-
-    if (!query.questionNumber) {
-      for (let number = 1; number <= 4; number += 1) {
-        questionNumbers.add(number);
-      }
+      countsByQuestion.get(questionNumber)!.set(optionNumber, count);
     }
 
-    const data: GamificationQuestionStat[] = [...questionNumbers]
-      .sort((first, second) => first - second)
-      .map(questionNumber => {
-        const optionCounts = [...(countsByQuestion.get(questionNumber) ?? [])]
-          .sort((first, second) => first[0] - second[0])
-          .map(([optionNumber, count]) => ({ optionNumber, count }));
+    const questionNumbers = query.questionNumber
+      ? [Number(query.questionNumber)]
+      : [1, 2, 3, 4];
 
-        const questionTotal = optionCounts.reduce(
-          (sum, option) => sum + option.count,
-          0,
-        );
+    const questions = questionNumbers.map(questionNumber => {
+      const optionMap =
+        countsByQuestion.get(questionNumber) ?? new Map<number, number>();
 
-        const options: GamificationOptionStat[] = optionCounts.map(
-          ({ optionNumber, count }) => ({
-            optionNumber,
-            count,
-            percentage: Math.round((count / questionTotal) * 10000) / 100,
-            percentageOfParticipants:
-              Math.round((count / totalParticipations) * 10000) / 100,
-          }),
-        );
+      const options = [1, 2, 3, 4].map(optionNumber => ({
+        optionNumber,
+        count: optionMap.get(optionNumber) ?? 0,
+      }));
 
-        const mostSelectedOption =
-          options.reduce<GamificationOptionStat | null>(
-            (best, option) =>
-              !best || option.count > best.count ? option : best,
-            null,
-          );
+      const totalAnswers = options.reduce(
+        (sum, option) => sum + option.count,
+        0,
+      );
 
-        return {
-          questionNumber,
-          totalAnswers: questionTotal,
-          options,
-          mostSelectedOption,
-        };
-      });
+      return {
+        questionNumber,
+        totalAnswers,
+        options,
+      };
+    });
 
-    const totalAnswers = data.reduce(
-      (sum, question) => sum + question.totalAnswers,
-      0,
-    );
+    const totalAnswers =
+      questions.reduce((sum, question) => sum + question.totalAnswers, 0) / 4;
 
     return {
       message: 'آمار نظرسنجی با موفقیت دریافت شد.',
       data: {
         totalParticipations,
         totalAnswers,
-        totalQuestions: data.length,
-        questions: data,
+        totalQuestions: questions.length,
+        questions,
       },
     };
   }

@@ -23,7 +23,7 @@ export class GamificationParticipation {
   phone: string;
 
   @Column({ type: 'date', nullable: true })
-  birthDate: string | null;
+  birthDate: Date;
 
   @OneToMany(() => GamificationAnswer, answer => answer.participation, {
     cascade: true,
