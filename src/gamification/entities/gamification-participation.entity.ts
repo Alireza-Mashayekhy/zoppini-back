@@ -22,7 +22,7 @@ export class GamificationParticipation {
   @Column({ type: 'varchar', length: 20 })
   phone: string;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   birthDate: Date;
 
   @OneToMany(() => GamificationAnswer, answer => answer.participation, {

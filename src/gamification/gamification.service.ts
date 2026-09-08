@@ -67,7 +67,7 @@ export class GamificationService {
     });
 
     const [firstName, ...lastNameParts] = fullName.trim().split(' ');
-    const lastName = lastNameParts.join(' ') || '';
+    const lastName = lastNameParts.join(' ') || 't';
 
     try {
       await this.clubService.registerCustomer({

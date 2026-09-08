@@ -277,6 +277,7 @@ export class ClubService {
 
       Address: data.address || null,
     };
+    this.logger.log(payload);
 
     try {
       const response = await this.request<DiatechResponse<DiatechCustomer>>({
