@@ -69,15 +69,15 @@ export class GamificationService {
     const [firstName, ...lastNameParts] = fullName.trim().split(' ');
     const lastName = lastNameParts.join(' ') || '';
 
-    await this.clubService.getOffices();
-
-    await this.clubService.registerCustomer({
-      firstName: firstName,
-      lastName: lastName,
-      customerCode: dto.phone,
-      birthDate: dto.birthDate || undefined,
-      officeId: 3,
-    });
+    try {
+      await this.clubService.registerCustomer({
+        firstName,
+        lastName,
+        customerCode: dto.phone,
+        birthDate: dto.birthDate || undefined,
+        officeId: 3,
+      });
+    } catch {}
 
     const saved = await this.participationRepo.save(participation);
 
