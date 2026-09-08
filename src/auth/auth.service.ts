@@ -72,13 +72,13 @@ export class AuthService {
     await this.otpService.verifyOtp(createUserDto.phone, createUserDto.code);
 
     const user = await this.usersService.findWithPhone(createUserDto.phone);
-    const userEmail = await this.usersService.findWithEmail(
-      createUserDto.email,
-    );
+    // const userEmail = await this.usersService.findWithEmail(
+    //   createUserDto.email,
+    // );
 
-    if (userEmail) {
-      throw new BadRequestException('کاربر با این ایمیل وجود دارد');
-    }
+    // if (userEmail) {
+    //   throw new BadRequestException('کاربر با این ایمیل وجود دارد');
+    // }
     if (user) {
       throw new BadRequestException('کاربر با این شماره تلفن وجود دارد');
     }
