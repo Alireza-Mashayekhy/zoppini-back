@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ClubModule } from 'src/club/club.module';
 
 import { GamificationAdminController } from './admin.gamification.controller';
 import { GamificationAnswer } from './entities/gamification-answer.entity';
@@ -10,6 +11,7 @@ import { GamificationService } from './gamification.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([GamificationParticipation, GamificationAnswer]),
+    ClubModule,
   ],
   controllers: [GamificationController, GamificationAdminController],
   providers: [GamificationService],

@@ -300,6 +300,24 @@ export class ClubService {
     }
   }
 
+  async getOffices() {
+    try {
+      const response = await this.request<DiatechResponse<DiatechCustomer>>({
+        method: 'GET',
+        url: '/api/v1/offices',
+      });
+
+      this.logger.log(response);
+    } catch (error) {
+      this.logger.error(
+        `❌ دریافت آفیس در باشگاه دایاتک ناموفق بود.`,
+        this.getErrorMessage(error),
+      );
+
+      throw error;
+    }
+  }
+
   /**
    * دریافت مشتری با CustomerCode
    *

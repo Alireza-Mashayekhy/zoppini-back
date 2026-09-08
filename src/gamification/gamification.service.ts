@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { ClubService } from 'src/club/club.service';
 import {
   applySearch,
   applySort,
@@ -39,6 +40,8 @@ export class GamificationService {
 
     @InjectRepository(GamificationAnswer)
     private readonly answerRepo: Repository<GamificationAnswer>,
+
+    private readonly clubService: ClubService,
   ) {}
 
   async create(dto: CreateGamificationParticipationDto) {
@@ -61,6 +64,19 @@ export class GamificationService {
       phone: dto.phone,
       birthDate: dto.birthDate,
       answers,
+    });
+
+    const [firstName, ...lastNameParts] = fullName.trim().split(' ');
+    const lastName = lastNameParts.join(' ') || '';
+
+    await this.clubService.getOffices();
+
+    await this.clubService.registerCustomer({
+      firstName: firstName,
+      lastName: lastName,
+      customerCode: dto.phone,
+      birthDate: dto.birthDate || undefined,
+      officeId: 3,
     });
 
     const saved = await this.participationRepo.save(participation);
