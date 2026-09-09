@@ -87,24 +87,28 @@ export class AuthService {
 
     const newUser = await this.usersService.create({
       ...createUserDto,
+      email: createUserDto.email?.trim() || null,
       password: hashedPassword,
     });
 
-    await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
-
+    try {
+      await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
+    } catch () {}
     const [firstName, ...lastNameParts] = createUserDto.fullName
       .trim()
       .split(' ');
     const lastName = lastNameParts.join(' ') || '';
 
     // ثبت غیرهمزمان (اجرا در پس‌زمینه) برای عدم تأخیر در پاسخ
-    await this.clubService.registerCustomer({
-      firstName: firstName,
-      lastName: lastName,
-      customerCode: createUserDto.phone,
-      email: createUserDto.email,
-      birthDate: createUserDto.birthDate || undefined,
-    });
+    try {
+      await this.clubService.registerCustomer({
+        firstName: firstName,
+        lastName: lastName,
+        customerCode: createUserDto.phone,
+        email: createUserDto.email,
+        birthDate: createUserDto.birthDate || undefined,
+      });
+    } catch () {}
 
     // ادغام سبد خرید مهمان
     if (guestId) {

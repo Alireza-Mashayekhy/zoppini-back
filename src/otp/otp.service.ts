@@ -53,6 +53,17 @@ export class OtpService {
     // تولید OTP امن
     const code = randomInt(10000, 100000).toString();
 
+    try {
+      await this.smsService.sendOtp(phone, code);
+    } catch (error) {
+      // rollback state اگر SMS ارسال نشد
+      await redis.del(otpKey);
+      await redis.del(attemptsKey);
+      await redis.del(cooldownKey);
+
+      throw error;
+    }
+
     // ذخیره OTP
     await redis.set(otpKey, code, {
       EX: this.OTP_TTL,
@@ -71,17 +82,6 @@ export class OtpService {
     // فقط development
     if (process.env.NODE_ENV !== 'production') {
       this.logger.log(`OTP for ${phone}: ${code}`);
-    }
-
-    try {
-      await this.smsService.sendOtp(phone, code);
-    } catch (error) {
-      // rollback state اگر SMS ارسال نشد
-      await redis.del(otpKey);
-      await redis.del(attemptsKey);
-      await redis.del(cooldownKey);
-
-      throw error;
     }
 
     return {

@@ -13,13 +13,18 @@ export class User {
   @Column({ unique: true })
   phone: string;
 
-  @Column({ unique: true })
-  email: string;
+  @Column({
+    type: 'varchar',
+    length: 255,
+    unique: true,
+    nullable: true,
+  })
+  email: string | null;
 
   @Column()
   password: string;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   birthDate: Date | null;
 
   @Column({
