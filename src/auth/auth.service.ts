@@ -93,7 +93,9 @@ export class AuthService {
 
     try {
       await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
-    } catch () {}
+    } catch (err) {
+      this.logger.log(err);
+    }
     const [firstName, ...lastNameParts] = createUserDto.fullName
       .trim()
       .split(' ');
@@ -108,7 +110,9 @@ export class AuthService {
         email: createUserDto.email,
         birthDate: createUserDto.birthDate || undefined,
       });
-    } catch () {}
+    } catch (err) {
+      this.logger.log(err);
+    }
 
     // ادغام سبد خرید مهمان
     if (guestId) {
