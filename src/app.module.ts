@@ -29,6 +29,7 @@ import { RedisModule } from './redis/redis.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
+import { VisitsModule } from './visits/visits.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GamificationModule } from './gamification/gamification.module';
@@ -76,6 +77,7 @@ import { GamificationModule } from './gamification/gamification.module';
     ContactModule,
     CatalogModule,
     GamificationModule,
+    VisitsModule,
   ],
   controllers: [AppController],
   providers: [
