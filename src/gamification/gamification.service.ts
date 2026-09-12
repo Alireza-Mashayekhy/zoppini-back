@@ -2,9 +2,11 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import * as bcrypt from 'bcrypt';
 import { ClubService } from 'src/club/club.service';
 import {
   applySearch,
@@ -12,6 +14,8 @@ import {
   getPagination,
   QueryDto,
 } from 'src/common/query';
+import { RahkaranService } from 'src/rahkaran/rahkaran.service';
+import { UsersService } from 'src/users/users.service';
 import { Repository } from 'typeorm';
 
 import { CreateGamificationParticipationDto } from './dto/create-gamification.dto';
@@ -34,6 +38,8 @@ export interface GamificationQuestionStat {
 
 @Injectable()
 export class GamificationService {
+  private readonly logger = new Logger(GamificationService.name);
+
   constructor(
     @InjectRepository(GamificationParticipation)
     private readonly participationRepo: Repository<GamificationParticipation>,
@@ -42,6 +48,8 @@ export class GamificationService {
     private readonly answerRepo: Repository<GamificationAnswer>,
 
     private readonly clubService: ClubService,
+    private readonly usersService: UsersService,
+    private readonly rahkaranService: RahkaranService,
   ) {}
 
   async create(dto: CreateGamificationParticipationDto) {
@@ -69,6 +77,28 @@ export class GamificationService {
     const [firstName, ...lastNameParts] = fullName.trim().split(' ');
     const lastName = lastNameParts.join(' ') || 't';
 
+    const user = await this.usersService.findWithPhone(dto.phone);
+
+    let newUser;
+    if (!user) {
+      const hashedPassword = await bcrypt.hash('123456789', 10);
+
+      newUser = await this.usersService.create({
+        fullName,
+        phone: dto.phone,
+        email: null,
+        birthDate: dto.birthDate,
+        password: hashedPassword,
+        code: '12345',
+      });
+    }
+
+    try {
+      await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
+    } catch (err) {
+      this.logger.log(err);
+    }
+
     try {
       await this.clubService.registerCustomer({
         firstName,
@@ -77,7 +107,9 @@ export class GamificationService {
         birthDate: dto.birthDate || undefined,
         officeId: 3,
       });
-    } catch {}
+    } catch (err) {
+      this.logger.log(err);
+    }
 
     const saved = await this.participationRepo.save(participation);
 
