@@ -214,12 +214,22 @@ export class VisitsService {
   private extractIp(request: Request): string | null {
     const headers = request.headers;
 
+    // آخرین عضو X-Forwarded-For = آی‌پی واقعی که آخرین پروکسی دیده است
+    // (اعضای اول لیست را کلاینت می‌تواند جعل کند)
+    const xff =
+      typeof headers['x-forwarded-for'] === 'string'
+        ? headers['x-forwarded-for']
+            .split(',')
+            .map(part => part.trim())
+            .filter(Boolean)
+            .pop()
+        : undefined;
+
     const candidates = [
-      headers['cf-connecting-ip'],
+      headers['cf-connecting-ip'], // Cloudflare
+      headers['ar-real-ip'], // ArvanCloud
       headers['x-real-ip'],
-      ...(typeof headers['x-forwarded-for'] === 'string'
-        ? [headers['x-forwarded-for'].split(',')[0]?.trim()]
-        : []),
+      xff,
     ];
 
     for (const candidate of candidates) {

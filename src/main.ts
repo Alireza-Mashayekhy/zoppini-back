@@ -13,6 +13,11 @@ import { ResponseInterceptor } from './common/interceptors/response.interceptor'
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
+  // اعتماد به هدرهای پروکسی (Nginx / Cloudflare / ArvanCloud) برای استخراج
+  // آی‌پی واقعی کاربر در req.ip و req.ips — بدون این، آی‌پی پروکسی ثبت می‌شود.
+  const proxyCount = Number(process.env.TRUST_PROXY_COUNT ?? '1');
+  app.set('trust proxy', Number.isNaN(proxyCount) ? 1 : proxyCount);
+
   app.setGlobalPrefix('api');
 
   setupSwagger(app);
