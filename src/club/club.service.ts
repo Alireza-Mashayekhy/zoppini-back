@@ -461,6 +461,8 @@ export class ClubService {
       return;
     }
 
+    this.logger.log(response);
+
     const errors = response.Errors || [];
 
     const message =
