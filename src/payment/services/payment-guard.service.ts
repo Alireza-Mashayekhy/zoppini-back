@@ -33,6 +33,15 @@ export class PaymentGuardService {
       );
     }
 
+    const finalPrice = Number(order.finalPrice ?? 0);
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    if (finalPrice > 0 && walletPayment >= finalPrice) {
+      throw new BadRequestException(
+        'کل مبلغ این سفارش با کیف پول پرداخت می‌شود و نیازی به درگاه پرداخت نیست',
+      );
+    }
+
     const openPayments = await this.paymentRepo.find({
       where: {
         orderId: order.id,

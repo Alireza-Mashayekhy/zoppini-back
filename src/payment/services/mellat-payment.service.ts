@@ -2,12 +2,15 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as soap from 'soap';
+import { Order } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
+import { WalletChargeStatus } from 'src/wallet/entities/wallet-charge.entity';
 import { LessThan, Repository } from 'typeorm';
 
 import {
   Payment,
   PaymentGateway,
+  PaymentPurpose,
   PaymentStatus,
 } from '../entities/payment.entity';
 import {
@@ -21,6 +24,7 @@ import {
   parseMellatPayResponse,
 } from '../utils/mellat.constants';
 import { PaymentGuardService } from './payment-guard.service';
+import { WalletChargeService } from './wallet-charge.service';
 
 @Injectable()
 export class MellatPaymentService {
@@ -37,7 +41,15 @@ export class MellatPaymentService {
     private ordersService: OrdersService,
 
     private readonly paymentGuard: PaymentGuardService,
+
+    private readonly walletChargeService: WalletChargeService,
   ) {}
+
+  private getOrderCardAmount(order: Order): number {
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    return Math.round((Number(order.finalPrice) - walletPayment) * 10);
+  }
 
   // === اصلاح متد getClient ===
   private getCredentials(): {
@@ -169,7 +181,7 @@ export class MellatPaymentService {
     const callbackUrl = this.getCallbackUrl();
     const payUrl = this.getPayUrl();
 
-    const amount = Math.round(Number(order.finalPrice) * 10);
+    const amount = this.getOrderCardAmount(order);
 
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('مبلغ سفارش نامعتبر است');
@@ -257,6 +269,108 @@ export class MellatPaymentService {
     return { refId, payUrl };
   }
 
+  async requestWalletCharge(
+    chargeId: number,
+    userId: number,
+  ): Promise<{ refId: string; payUrl: string }> {
+    const charge = await this.walletChargeService.getChargeWithUser(chargeId);
+
+    if (!charge || charge.user.id !== userId) {
+      throw new BadRequestException('درخواست شارژ یافت نشد');
+    }
+
+    if (charge.status === WalletChargeStatus.SUCCESS) {
+      throw new BadRequestException('این درخواست شارژ قبلاً پرداخت شده است');
+    }
+
+    const { terminalId, userName, userPassword } = this.getCredentials();
+    const callbackUrl = this.getCallbackUrl();
+    const payUrl = this.getPayUrl();
+
+    const amount = Math.round(Number(charge.amount) * 10);
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('مبلغ شارژ نامعتبر است');
+    }
+
+    const gatewayOrderId = this.nextGatewayOrderId();
+
+    // تاریخ/ساعت باید به وقت تهران باشد نه وقت سرور (کد ۳۵ = تاریخ نامعتبر)
+    const now = new Date();
+    const localDate = now
+      .toLocaleDateString('en-CA', { timeZone: 'Asia/Tehran' })
+      .replace(/-/g, '');
+    const localTime = now
+      .toLocaleTimeString('en-GB', {
+        timeZone: 'Asia/Tehran',
+        hour12: false,
+      })
+      .replace(/:/g, '');
+
+    const payload = {
+      terminalId,
+      userName,
+      userPassword,
+      orderId: gatewayOrderId,
+      amount,
+      localDate,
+      localTime,
+      additionalData: `walletChargeId:${chargeId}`,
+      callBackUrl: callbackUrl,
+      payerId: this.configService.get<string>('MELLAT_PAYER_ID')?.trim() || '0',
+    };
+
+    let response: string;
+
+    try {
+      response = await this.callBp<string>('bpPayRequestAsync', payload);
+    } catch (error) {
+      this.logger.error(
+        `❌ خطا در ارتباط با درگاه ملت (bpPayRequest) برای شارژ کیف پول ${chargeId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      throw new BadRequestException('خطا در ارتباط با درگاه پرداخت');
+    }
+
+    const { resCode, refId } = parseMellatPayResponse(response);
+
+    if (resCode !== '0') {
+      this.logger.error(
+        `❌ bpPayRequest برای شارژ کیف پول ${chargeId} رد شد: ${describeMellatResCode(resCode)}`,
+      );
+
+      throw new BadRequestException(
+        `خطا در درخواست پرداخت: ${describeMellatResCode(resCode)}`,
+      );
+    }
+
+    if (!refId) {
+      this.logger.error(
+        `❌ bpPayRequest برای شارژ کیف پول ${chargeId} موفق بود ولی RefId برنگشت: ${response}`,
+      );
+
+      throw new BadRequestException('شناسهٔ پرداخت از درگاه دریافت نشد');
+    }
+
+    const payment = this.paymentRepo.create({
+      orderId: null,
+      walletChargeId: charge.id,
+      purpose: PaymentPurpose.WALLET_CHARGE,
+      refId,
+      amount,
+      gateway: PaymentGateway.MELLAT,
+      status: PaymentStatus.PENDING,
+      resCode,
+      // همان orderId مرحلهٔ Sale که طبق مستند به SaleOrderId تبدیل می‌شود
+      saleOrderId: gatewayOrderId,
+      gatewayResponse: { bpPayRequest: response },
+    });
+    await this.paymentRepo.save(payment);
+
+    return { refId, payUrl };
+  }
+
   /**
    * تبدیل مقدار شناسه‌های عددی درگاه به رشتهٔ رقم‌ها.
    *
@@ -298,7 +412,7 @@ export class MellatPaymentService {
       return {
         success: true,
         message: 'پرداخت قبلاً تأیید شده است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -330,7 +444,7 @@ export class MellatPaymentService {
       return {
         success: false,
         message: 'تراکنش نامعتبر است؛ با پشتیبانی تماس بگیرید',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -354,7 +468,7 @@ export class MellatPaymentService {
       return {
         success: false,
         message: 'اطلاعات تراکنش ناقص است؛ با پشتیبانی تماس بگیرید',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -432,7 +546,7 @@ export class MellatPaymentService {
       return {
         success: false,
         message: 'اطلاعات تراکنش ناقص است؛ با پشتیبانی تماس بگیرید',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -461,7 +575,7 @@ export class MellatPaymentService {
       return {
         success: true,
         message: 'پرداخت تأیید شد؛ واریز در حال پیگیری است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -480,7 +594,7 @@ export class MellatPaymentService {
       return {
         success: true,
         message: 'پرداخت تأیید شد؛ واریز در حال پیگیری است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -632,7 +746,7 @@ export class MellatPaymentService {
       return {
         success: false,
         message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -647,7 +761,7 @@ export class MellatPaymentService {
       return {
         success: false,
         message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -760,12 +874,16 @@ export class MellatPaymentService {
       `تراکنش ملت ناموفق — پرداخت ${payment.id} (${reason}): ${describeMellatResCode(normalized)}`,
     );
 
-    await this.failOrder(payment.orderId);
+    if (payment.purpose === PaymentPurpose.ORDER) {
+      await this.failOrder(payment.orderId!);
+    } else {
+      await this.walletChargeService.markChargeFailed(payment);
+    }
 
     return {
       success: false,
       message: `پرداخت ناموفق: ${describeMellatResCode(normalized)}`,
-      orderId: payment.orderId,
+      orderId: payment.orderId ?? undefined,
     };
   }
 
@@ -793,8 +911,34 @@ export class MellatPaymentService {
     message: string;
     orderId?: number;
   }> {
+    if (payment.purpose === PaymentPurpose.WALLET_CHARGE) {
+      /*
+       * شارژ کیف پول: وجه از کاربر گرفته شده؛ حالا به کیف پول واریز می‌شود
+       * (واریز idempotent است — کلید wallet-charge-{chargeId}).
+       */
+      try {
+        await this.walletChargeService.settleCharge(payment);
+      } catch (error) {
+        /*
+         * پول گرفته شده است؛ پرداخت را SUCCESS نگه می‌داریم تا دستی
+         * بررسی/واریز شود (واریز تکراری با همان کلید امن است).
+         */
+        this.logger.error(
+          `❌ پرداخت ${payment.id} موفق بود ولی واریز به کیف پول (شارژ ${payment.walletChargeId}) خطا خورد! ` +
+            'پرداخت SUCCESS باقی می‌ماند تا بررسی شود.',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+
+      return {
+        success: true,
+        message: 'پرداخت با موفقیت انجام شد',
+        orderId: payment.orderId ?? undefined,
+      };
+    }
+
     try {
-      await this.ordersService.confirmOrderPayment(payment.orderId);
+      await this.ordersService.confirmOrderPayment(payment.orderId!);
     } catch (error) {
       this.logger.error(
         `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
@@ -805,14 +949,14 @@ export class MellatPaymentService {
       return {
         success: true,
         message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
     return {
       success: true,
       message: 'پرداخت با موفقیت انجام شد',
-      orderId: payment.orderId,
+      orderId: payment.orderId ?? undefined,
     };
   }
 

@@ -11,6 +11,7 @@ import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
 import { SmsModule } from 'src/sms/sms.module';
 import { User } from 'src/users/entities/user.entity';
+import { WalletModule } from 'src/wallet/wallet.module';
 
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item';
@@ -34,6 +35,7 @@ import { OrdersService } from './order.service';
     forwardRef(() => RahkaranModule),
     DiscountsModule,
     ClubModule,
+    WalletModule,
   ],
   controllers: [OrdersController, AdminOrdersController],
   providers: [OrdersService],

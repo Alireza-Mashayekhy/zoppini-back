@@ -21,13 +21,26 @@ export enum PaymentGateway {
   TARA = 'tara',
 }
 
+export enum PaymentPurpose {
+  ORDER = 'order',
+  WALLET_CHARGE = 'wallet_charge',
+}
+
 @Entity('payments')
 export class Payment {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column()
-  orderId: number; // شناسه سفارش
+  @Column({ type: 'int', nullable: true })
+  orderId: number | null;
+
+  /** هدف پرداخت: سفارش یا شارژ کیف پول */
+  @Column({ type: 'enum', enum: PaymentPurpose, default: PaymentPurpose.ORDER })
+  purpose: PaymentPurpose;
+
+  /** شناسه درخواست شارژ کیف پول (فقط برای پرداخت‌های WALLET_CHARGE) */
+  @Column({ type: 'int', nullable: true })
+  walletChargeId: number | null;
 
   @Column({ unique: true })
   refId: string; // RefId دریافتی از درگاه

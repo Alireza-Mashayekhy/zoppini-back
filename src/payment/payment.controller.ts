@@ -16,10 +16,12 @@ import { AuthGuard } from 'src/common/guards/auth.guard';
 import { OrdersService } from 'src/order/order.service';
 
 import { RequestPaymentDto } from './dto/request-payment.dto';
-import { PaymentGateway } from './entities/payment.entity';
+import { StartWalletChargeDto } from './dto/start-wallet-charge.dto';
+import { PaymentGateway, PaymentPurpose } from './entities/payment.entity';
 import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
 import { TaraPaymentService } from './services/tara-payment.service';
+import { WalletChargeService } from './services/wallet-charge.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 import { readCallbackFieldAny } from './utils/callback-fields.util';
 import { getClientIp } from './utils/client-ip.util';
@@ -39,6 +41,7 @@ export class PaymentController {
     private readonly digipayService: DigipayPaymentService,
     private readonly taraService: TaraPaymentService,
     private readonly ordersService: OrdersService,
+    private readonly walletChargeService: WalletChargeService,
   ) {}
 
   private redirect(
@@ -89,6 +92,57 @@ export class PaymentController {
 
       default:
         throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
+    }
+  }
+
+  @Post('start-wallet-charge')
+  @UseGuards(AuthGuard)
+  async startWalletCharge(
+    @Req() req: AuthenticatedRequest,
+    @Body() dto: StartWalletChargeDto,
+  ) {
+    const { id: userId } = req.user;
+
+    const charge = await this.walletChargeService.createPendingCharge(
+      userId,
+      dto.amount,
+      dto.gateway,
+    );
+
+    try {
+      switch (dto.gateway) {
+        case PaymentGateway.MELLAT:
+          return await this.mellatService.requestWalletCharge(
+            charge.id,
+            userId,
+          );
+
+        case PaymentGateway.ZARINPAL:
+          return await this.zarinpalService.requestWalletCharge(
+            charge.id,
+            userId,
+          );
+
+        case PaymentGateway.DIGIPAY:
+          return await this.digipayService.requestWalletCharge(
+            charge.id,
+            userId,
+          );
+
+        case PaymentGateway.TARA:
+          return await this.taraService.requestWalletCharge(
+            charge.id,
+            userId,
+            getClientIp(req),
+          );
+
+        default:
+          throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
+      }
+    } catch (error) {
+      // درخواست درگاه شکست خورد؛ شارژ را FAILED ثبت می‌کنیم
+      await this.walletChargeService.markChargeFailedById(charge.id);
+      throw error;
     }
   }
 
@@ -156,7 +210,7 @@ export class PaymentController {
           return this.redirect(
             res,
             'failed',
-            rejected.orderId ?? payment.orderId,
+            rejected.orderId ?? payment.orderId ?? undefined,
           );
         }
 
@@ -164,7 +218,7 @@ export class PaymentController {
           `callback ملت برای پرداخت ${payment.id} بدون SaleReferenceId بود (ResCode=${resCode || 'خالی'}).`,
         );
 
-        return this.redirect(res, 'failed', payment.orderId);
+        return this.redirect(res, 'failed', payment.orderId ?? undefined);
       }
 
       /*
@@ -185,7 +239,7 @@ export class PaymentController {
       return this.redirect(
         res,
         result.success ? 'success' : 'failed',
-        result.orderId ?? payment.orderId,
+        result.orderId ?? payment.orderId ?? undefined,
       );
     } catch (error) {
       // کاربر باید صفحهٔ نتیجه را ببیند، نه خطای ۵۰۰
@@ -194,7 +248,7 @@ export class PaymentController {
         error instanceof Error ? error.stack : String(error),
       );
 
-      return this.redirect(res, 'failed', payment.orderId);
+      return this.redirect(res, 'failed', payment.orderId ?? undefined);
     }
   }
 
@@ -217,9 +271,14 @@ export class PaymentController {
 
       if (payment) {
         await this.zarinpalService.failPayment(payment, 'CANCELLED');
-        await this.ordersService.failOrderPayment(payment.orderId);
 
-        return this.redirect(res, 'failed', payment.orderId);
+        if (payment.purpose === PaymentPurpose.ORDER) {
+          await this.ordersService.failOrderPayment(payment.orderId!);
+        } else {
+          await this.walletChargeService.markChargeFailed(payment);
+        }
+
+        return this.redirect(res, 'failed', payment.orderId ?? undefined);
       }
 
       return this.redirect(res, 'failed');
@@ -251,9 +310,13 @@ export class PaymentController {
 
       if (payment) {
         await this.digipayService.failPayment(payment);
-        await this.ordersService.failOrderPayment(payment.orderId);
+        if (payment.purpose === PaymentPurpose.ORDER) {
+          await this.ordersService.failOrderPayment(payment.orderId!);
+        } else {
+          await this.walletChargeService.markChargeFailed(payment);
+        }
 
-        return this.redirect(res, 'failed', payment.orderId);
+        return this.redirect(res, 'failed', payment.orderId ?? undefined);
       }
 
       return this.redirect(res, 'failed');
@@ -314,11 +377,16 @@ export class PaymentController {
      * کنترل امنیتی: orderId برگشتی از تارا باید با سفارشِ این تراکنش یکی باشد
      * (همان orderId که در getToken فرستادیم).
      */
-    if (callbackOrderId && callbackOrderId !== String(payment.orderId)) {
+    const expectedOrderId =
+      payment.purpose === PaymentPurpose.WALLET_CHARGE
+        ? String(payment.walletChargeId ?? '')
+        : String(payment.orderId ?? '');
+
+    if (callbackOrderId && callbackOrderId !== expectedOrderId) {
       this.logger.error(
-        `❌ orderId نامعتبر در callback تارا: انتظار ${payment.orderId} بود ولی ${callbackOrderId} دریافت شد.`,
+        `❌ orderId نامعتبر در callback تارا: انتظار ${expectedOrderId} بود ولی ${callbackOrderId} دریافت شد.`,
       );
-      return this.redirect(res, 'failed', payment.orderId);
+      return this.redirect(res, 'failed', payment.orderId ?? undefined);
     }
 
     // ثبت اطلاعات callback (از جمله channelRefNumber که فقط تارا برمی‌گرداند)
@@ -342,9 +410,13 @@ export class PaymentController {
       );
 
       await this.taraService.failPayment(payment, result || 'UNKNOWN');
-      await this.ordersService.failOrderPayment(payment.orderId);
+      if (payment.purpose === PaymentPurpose.ORDER) {
+        await this.ordersService.failOrderPayment(payment.orderId!);
+      } else {
+        await this.walletChargeService.markChargeFailed(payment);
+      }
 
-      return this.redirect(res, 'failed', payment.orderId);
+      return this.redirect(res, 'failed', payment.orderId ?? undefined);
     }
 
     try {
@@ -356,7 +428,7 @@ export class PaymentController {
       return this.redirect(
         res,
         verify.success ? 'success' : 'failed',
-        verify.orderId ?? payment.orderId,
+        verify.orderId ?? payment.orderId ?? undefined,
       );
     } catch (error) {
       /*
@@ -368,7 +440,7 @@ export class PaymentController {
         error instanceof Error ? error.stack : String(error),
       );
 
-      return this.redirect(res, 'failed', payment.orderId);
+      return this.redirect(res, 'failed', payment.orderId ?? undefined);
     }
   }
 }

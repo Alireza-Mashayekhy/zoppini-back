@@ -16,6 +16,7 @@ import {
 } from 'src/common/query';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { UsersService } from 'src/users/users.service';
+import { WalletService } from 'src/wallet/wallet.service';
 import { Repository } from 'typeorm';
 
 import { CreateGamificationParticipationDto } from './dto/create-gamification.dto';
@@ -36,6 +37,8 @@ export interface GamificationQuestionStat {
   mostSelectedOption: GamificationOptionStat | null;
 }
 
+const SURVEY_WALLET_BONUS = 2_000_000;
+
 @Injectable()
 export class GamificationService {
   private readonly logger = new Logger(GamificationService.name);
@@ -50,6 +53,7 @@ export class GamificationService {
     private readonly clubService: ClubService,
     private readonly usersService: UsersService,
     private readonly rahkaranService: RahkaranService,
+    private readonly walletService: WalletService,
   ) {}
 
   async create(dto: CreateGamificationParticipationDto) {
@@ -112,6 +116,34 @@ export class GamificationService {
     }
 
     const saved = await this.participationRepo.save(participation);
+
+    const targetUserId = (newUser ?? user)?.id;
+
+    if (targetUserId) {
+      try {
+        await this.walletService.chargeWallet(
+          targetUserId,
+          SURVEY_WALLET_BONUS,
+          {
+            transactionKey: `gamification-survey-${dto.phone}`,
+            description: 'شارژ کیف پول بابت شرکت در نظرسنجی',
+            meta: {
+              participationId: saved.id,
+              phone: dto.phone,
+            },
+          },
+        );
+
+        this.logger.log(
+          `✅ کیف پول کاربر ${targetUserId} (${SURVEY_WALLET_BONUS} تومان) بابت شرکت در نظرسنجی شارژ شد.`,
+        );
+      } catch (err) {
+        this.logger.error(
+          `❌ شارژ کیف پول شرکت‌کننده ${saved.id} ناموفق بود — نیاز به بررسی دستی.`,
+          err instanceof Error ? err.stack : String(err),
+        );
+      }
+    }
 
     return {
       message: 'نظر شما با موفقیت ثبت شد. از همراهی شما سپاسگزاریم.',

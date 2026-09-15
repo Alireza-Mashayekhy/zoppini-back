@@ -33,6 +33,7 @@ import { VisitsModule } from './visits/visits.module';
 import { WishlistModule } from './wishlist/wishlist.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GamificationModule } from './gamification/gamification.module';
+import { WalletModule } from './wallet/wallet.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { GamificationModule } from './gamification/gamification.module';
     CatalogModule,
     GamificationModule,
     VisitsModule,
+    WalletModule,
   ],
   controllers: [AppController],
   providers: [

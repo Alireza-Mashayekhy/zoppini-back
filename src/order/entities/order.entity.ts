@@ -63,6 +63,9 @@ export class Order {
   @Column({ type: 'decimal', precision: 15, scale: 2 })
   finalPrice: number;
 
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  walletPayment: number;
+
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 

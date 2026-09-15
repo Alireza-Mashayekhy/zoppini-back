@@ -6,13 +6,15 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
-import { OrderStatus } from 'src/order/entities/order.entity';
+import { Order, OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
+import { WalletChargeStatus } from 'src/wallet/entities/wallet-charge.entity';
 import { LessThan, Repository } from 'typeorm';
 
 import {
   Payment,
   PaymentGateway,
+  PaymentPurpose,
   PaymentStatus,
 } from '../entities/payment.entity';
 import {
@@ -24,6 +26,7 @@ import {
 } from '../utils/tara.constants';
 import { PaymentGuardService } from './payment-guard.service';
 import { TaraAuthService } from './tara-auth.service';
+import { WalletChargeService } from './wallet-charge.service';
 
 /**
  * پیاده‌سازی درگاه تارا (IPG) بر پایهٔ
@@ -45,7 +48,15 @@ export class TaraPaymentService {
     private authService: TaraAuthService,
 
     private readonly paymentGuard: PaymentGuardService,
+
+    private readonly walletChargeService: WalletChargeService,
   ) {}
+
+  private getOrderCardAmount(order: Order): number {
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    return Math.round((Number(order.finalPrice) - walletPayment) * 10);
+  }
 
   // =========================================================
   // پیکربندی
@@ -147,11 +158,13 @@ export class TaraPaymentService {
     const username = this.getUsername();
 
     // مبلغ به ریال (ورودی amount در مستند از نوع string است)
-    const amount = Math.round(Number(order.finalPrice) * 10);
+    const amount = this.getOrderCardAmount(order);
 
     if (!amount || amount <= 0) {
       throw new BadRequestException('مبلغ سفارش نامعتبر است');
     }
+
+    const walletPayment = Number(order.walletPayment ?? 0);
 
     // const { group, groupTitle } = this.getMerchandiseGroup();
 
@@ -174,6 +187,17 @@ export class TaraPaymentService {
       // groupTitle,
       data: '',
     }));
+
+    if (walletPayment > 0) {
+      taraInvoiceItemList.push({
+        name: 'سودمندی از کیف پول',
+        code: 'WALLET',
+        count: 1,
+        unit: TaraUnit.PIECE,
+        fee: -Math.round(walletPayment * 10),
+        data: '',
+      });
+    }
 
     /*
      * کنترل داخلی: جمع آیتم‌ها باید با مبلغ کل بخواند.
@@ -278,6 +302,130 @@ export class TaraPaymentService {
     }
   }
 
+  async requestWalletCharge(
+    chargeId: number,
+    userId: number,
+    clientIp?: string,
+  ): Promise<{ refId: string; payUrl: string; username: string }> {
+    const charge = await this.walletChargeService.getChargeWithUser(chargeId);
+
+    if (!charge || charge.user.id !== userId) {
+      throw new BadRequestException('درخواست شارژ یافت نشد');
+    }
+
+    if (charge.status === WalletChargeStatus.SUCCESS) {
+      throw new BadRequestException('این درخواست شارژ قبلاً پرداخت شده است');
+    }
+
+    const accessToken = await this.authService.getAccessToken();
+    const apiUrl = this.getApiUrl();
+    const callbackUrl = this.getCallbackUrl();
+    const username = this.getUsername();
+
+    // مبلغ به ریال (ورودی amount در مستند از نوع string است)
+    const amount = Math.round(Number(charge.amount) * 10);
+
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('مبلغ شارژ نامعتبر است');
+    }
+
+    // قلم صورت‌حساب: خودِ شارژ کیف پول (جمع قلم‌ها = مبلغ ارسالی)
+    const taraInvoiceItemList = [
+      {
+        name: 'شارژ کیف پول',
+        code: 'WALLET-CHARGE',
+        count: 1,
+        unit: TaraUnit.PIECE,
+        fee: amount,
+        data: '',
+      },
+    ];
+
+    const payload = {
+      // فیلد اجباری؛ باید IP واقعی کاربر باشد (خطاهای 1 و 88)
+      ip: clientIp || '',
+      serviceAmountList: [
+        {
+          serviceId: this.getServiceId(),
+          amount,
+        },
+      ],
+      taraInvoiceItemList,
+      additionalData: '',
+      callBackUrl: callbackUrl,
+      amount: String(amount),
+      mobile: charge.user?.phone || '',
+      orderId: String(chargeId),
+      vat: 0,
+    };
+
+    if (!payload.mobile) {
+      this.logger.warn(
+        `شارژ ${chargeId}: شماره موبایل کاربر خالی است ولی فیلد mobile در getToken اجباری است.`,
+      );
+    }
+
+    try {
+      const response = await fetch(`${apiUrl}/api/getToken`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await this.parseJsonResponse(response, 'getToken');
+
+      if (String(data?.result) !== TARA_SUCCESS_RESULT) {
+        this.logger.error(
+          `❌ getToken ناموفق برای شارژ کیف پول ${chargeId}: ${describeTaraResult(data?.result)} ` +
+            `- ${data?.description || ''}`,
+        );
+
+        throw new BadRequestException(
+          data?.description || 'خطا در دریافت توکن تارا',
+        );
+      }
+
+      const token = data?.token;
+
+      if (!token) {
+        throw new BadRequestException('توکنی از تارا دریافت نشد');
+      }
+
+      const payment = this.paymentRepo.create({
+        orderId: null,
+        walletChargeId: charge.id,
+        purpose: PaymentPurpose.WALLET_CHARGE,
+        refId: token,
+        amount,
+        gateway: PaymentGateway.TARA,
+        status: PaymentStatus.PENDING,
+        resCode: String(data.result),
+        gatewayResponse: {
+          getToken: data,
+          clientIp: payload.ip,
+        },
+      });
+      await this.paymentRepo.save(payment);
+
+      const payUrl = `${apiUrl}/api/ipgPurchase`;
+
+      return { refId: token, payUrl, username };
+    } catch (error) {
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      this.logger.error(
+        `❌ خطا در ارتباط با تارا (getToken) برای شارژ کیف پول ${chargeId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      throw new BadRequestException('خطا در ارتباط با درگاه تارا');
+    }
+  }
+
   async verifyPayment(
     token: string,
     clientIp?: string,
@@ -293,7 +441,7 @@ export class TaraPaymentService {
       return {
         success: true,
         message: 'پرداخت قبلاً تأیید شده است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -340,7 +488,7 @@ export class TaraPaymentService {
       return {
         success: false,
         message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -355,12 +503,16 @@ export class TaraPaymentService {
       this.mergeGatewayResponse(payment, 'purchaseVerify', data);
       await this.paymentRepo.save(payment);
 
-      await this.ordersService.failOrderPayment(payment.orderId);
+      if (payment.purpose === PaymentPurpose.ORDER) {
+        await this.ordersService.failOrderPayment(payment.orderId!);
+      } else {
+        await this.walletChargeService.markChargeFailed(payment);
+      }
 
       return {
         success: false,
         message: data?.description || 'خطا در تأیید پرداخت',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -385,7 +537,7 @@ export class TaraPaymentService {
         return {
           success: false,
           message: 'مبلغ تراکنش با مبلغ سفارش مطابقت ندارد',
-          orderId: payment.orderId,
+          orderId: payment.orderId ?? undefined,
         };
       }
     }
@@ -477,16 +629,38 @@ export class TaraPaymentService {
 
     await this.paymentRepo.save(payment);
 
+    if (payment.purpose === PaymentPurpose.WALLET_CHARGE) {
+      /*
+       * شارژ کیف پول: وجه گرفته شده؛ حالا به کیف پول واریز می‌شود
+       * (واریز idempotent است — کلید wallet-charge-{chargeId}).
+       */
+      try {
+        await this.walletChargeService.settleCharge(payment);
+      } catch (error) {
+        this.logger.error(
+          `❌ پرداخت ${payment.id} موفق بود ولی واریز به کیف پول (شارژ ${payment.walletChargeId}) خطا خورد! ` +
+            'پرداخت SUCCESS باقی می‌ماند تا بررسی شود.',
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+
+      return {
+        success: true,
+        message: 'پرداخت با موفقیت انجام شد',
+        orderId: payment.orderId ?? undefined,
+      };
+    }
+
     /*
      * تأیید نهایی سفارش (کاهش موجودی و خالی کردن سبد).
      * اگر خطا بدهد، پول گرفته شده؛ پس پرداخت SUCCESS می‌ماند
      * و سفارش لغو نمی‌شود تا دستی بررسی/اصلاح شود.
      */
     try {
-      const order = await this.ordersService.findOneForAdmin(payment.orderId);
+      const order = await this.ordersService.findOneForAdmin(payment.orderId!);
 
       if (order.status === OrderStatus.PENDING) {
-        await this.ordersService.confirmOrderPayment(payment.orderId);
+        await this.ordersService.confirmOrderPayment(payment.orderId!);
       }
     } catch (error) {
       this.logger.error(
@@ -498,14 +672,14 @@ export class TaraPaymentService {
       return {
         success: true,
         message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
     return {
       success: true,
       message: 'پرداخت با موفقیت انجام شد',
-      orderId: payment.orderId,
+      orderId: payment.orderId ?? undefined,
     };
   }
 

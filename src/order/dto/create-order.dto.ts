@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
@@ -27,4 +28,8 @@ export class CreateOrderDto {
 
   @IsEnum(ShippingMethod)
   shippingMethod: ShippingMethod;
+
+  @IsOptional()
+  @IsBoolean()
+  useWallet?: boolean;
 }

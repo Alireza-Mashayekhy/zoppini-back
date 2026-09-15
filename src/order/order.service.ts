@@ -17,6 +17,7 @@ import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
 import { User } from 'src/users/entities/user.entity';
+import { WalletService } from 'src/wallet/wallet.service';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
@@ -52,6 +53,8 @@ export class OrdersService {
     private readonly discountService: DiscountService,
 
     private readonly smsService: SmsService,
+
+    private readonly walletService: WalletService,
 
     private readonly dataSource: DataSource,
   ) {}
@@ -190,6 +193,13 @@ export class OrdersService {
       totalPrice + Number(shippingCost) - discountAmount,
     );
 
+    let walletPayment = 0;
+
+    if (dto.useWallet) {
+      const balance = await this.walletService.getBalance(userId);
+      walletPayment = Math.min(balance, finalPrice);
+    }
+
     // =====================================================
     // 8. ساخت Order
     // =====================================================
@@ -208,6 +218,8 @@ export class OrdersService {
       discount: discountAmount,
 
       finalPrice,
+
+      walletPayment,
 
       discountId,
 
@@ -237,6 +249,20 @@ export class OrdersService {
     // این کار باید بعد از پرداخت موفق انجام شود.
     //
     // await this.cartService.clearCart(userId);
+
+    if (dto.useWallet && walletPayment >= finalPrice) {
+      try {
+        return await this.confirmOrderPayment(savedOrder.id);
+      } catch (error) {
+        // مثلاً موجودی محصول کافی نبود؛ سفارش PENDING باقی می‌ماند و
+        // کاربر می‌تواند با POST /orders/:id/confirm-from-wallet تلاش کند.
+        this.logger.error(
+          `❌ تأیید فوری سفارش ${savedOrder.id} با کیف پول خطا خورد: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
 
     return savedOrder;
   }
@@ -272,6 +298,16 @@ export class OrdersService {
       }
 
       const userId = order.user.id;
+
+      const walletPayment = Number(order.walletPayment ?? 0);
+
+      if (walletPayment > 0) {
+        await this.walletService.debitWallet(userId, walletPayment, {
+          transactionKey: `wallet-order-${orderId}`,
+          description: `پرداخت سفارش ${order.orderNumber}`,
+          meta: { orderId, orderNumber: order.orderNumber },
+        });
+      }
 
       // =========================================================
       // 1. کاهش موجودی
@@ -456,7 +492,66 @@ export class OrdersService {
 
     order.status = OrderStatus.CANCELLED;
     await this.orderRepo.save(order);
+
+    await this.refundWalletPaymentForOrder(order);
+
     return this.findOne(order.id);
+  }
+
+  async confirmOrderFromWallet(
+    orderId: number,
+    userId: number,
+  ): Promise<Order> {
+    const order = await this.findOne(orderId, userId);
+
+    if (order.status !== OrderStatus.PENDING) {
+      throw new BadRequestException('فقط سفارشات در انتظار قابل تأیید هستند');
+    }
+
+    const finalPrice = Number(order.finalPrice);
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    if (walletPayment < finalPrice) {
+      throw new BadRequestException(
+        'این سفارش به‌طور کامل با کیف پول پوشش داده نشده است',
+      );
+    }
+
+    return this.confirmOrderPayment(orderId);
+  }
+
+  private async refundWalletPaymentForOrder(order: Order): Promise<void> {
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    if (walletPayment <= 0 || !order.user) {
+      return;
+    }
+
+    const debitKey = `wallet-order-${order.id}`;
+
+    try {
+      const debitTx = await this.walletService.getTransactionByKey(debitKey);
+
+      if (!debitTx) {
+        // سهم کیف پول هرگز کسر نشده؛ چیزی برای عودت نیست
+        return;
+      }
+
+      await this.walletService.refundWallet(order.user.id, walletPayment, {
+        transactionKey: `wallet-order-${order.id}-refund`,
+        description: `عودت کیف پول به دلیل لغو سفارش ${order.orderNumber}`,
+        meta: { orderId: order.id, orderNumber: order.orderNumber },
+      });
+
+      this.logger.log(
+        `✅ سهم کیف پول سفارش ${order.id} (${walletPayment} تومان) عودت داده شد.`,
+      );
+    } catch (error) {
+      this.logger.error(
+        `❌ عودت سهم کیف پول سفارش ${order.id} ناموفق بود؛ نیاز به بررسی دستی دارد.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   // دریافت یک سفارش
@@ -562,24 +657,36 @@ export class OrdersService {
       await queryRunner.manager.save(order);
 
       await queryRunner.commitTransaction();
-      return this.findOne(id, userId);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
+
+    await this.refundWalletPaymentForOrder(order);
+
+    return this.findOne(id, userId);
   }
 
   // (برای ادمین) تغییر وضعیت سفارش
   async updateStatus(id: number, status: OrderStatus): Promise<Order> {
-    const order = await this.orderRepo.findOne({ where: { id } });
+    const order = await this.orderRepo.findOne({
+      where: { id },
+      relations: { user: true },
+    });
     if (!order) {
       throw new NotFoundException('سفارش یافت نشد');
     }
 
+    const wasCancelled = order.status === OrderStatus.CANCELLED;
+
     order.status = status;
     await this.orderRepo.save(order);
+
+    if (status === OrderStatus.CANCELLED && !wasCancelled) {
+      await this.refundWalletPaymentForOrder(order);
+    }
 
     return this.orderRepo.findOneOrFail({
       where: { id },
@@ -733,13 +840,16 @@ export class OrdersService {
       await queryRunner.manager.save(order);
 
       await queryRunner.commitTransaction();
-      return this.findOneForAdmin(id);
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
+
+    await this.refundWalletPaymentForOrder(order);
+
+    return this.findOneForAdmin(id);
   }
 
   private calculateShippingCost(shippingMethod: ShippingMethod): number {

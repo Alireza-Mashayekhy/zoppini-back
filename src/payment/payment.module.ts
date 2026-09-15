@@ -2,6 +2,8 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrdersModule } from 'src/order/order.module';
+import { WalletCharge } from 'src/wallet/entities/wallet-charge.entity';
+import { WalletModule } from 'src/wallet/wallet.module';
 
 import { Payment } from './entities/payment.entity';
 import { PaymentController } from './payment.controller';
@@ -11,10 +13,16 @@ import { MellatPaymentService } from './services/mellat-payment.service';
 import { PaymentGuardService } from './services/payment-guard.service';
 import { TaraAuthService } from './services/tara-auth.service';
 import { TaraPaymentService } from './services/tara-payment.service';
+import { WalletChargeService } from './services/wallet-charge.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Payment]), HttpModule, OrdersModule],
+  imports: [
+    TypeOrmModule.forFeature([Payment, WalletCharge]),
+    HttpModule,
+    OrdersModule,
+    WalletModule,
+  ],
   controllers: [PaymentController],
   providers: [
     PaymentGuardService,
@@ -24,12 +32,14 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
     DigipayPaymentService,
     TaraPaymentService,
     TaraAuthService,
+    WalletChargeService,
   ],
   exports: [
     MellatPaymentService,
     ZarinpalPaymentService,
     DigipayPaymentService,
     TaraPaymentService,
+    WalletChargeService,
   ],
 })
 export class PaymentModule {}

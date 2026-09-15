@@ -44,4 +44,10 @@ export class OrdersController {
     const userId = req.user.id;
     return this.ordersService.cancelOrder(id, userId);
   }
+
+  @Post(':id/confirm-from-wallet')
+  confirmFromWallet(@Param('id') id: number, @Request() req) {
+    const userId = req.user.id;
+    return this.ordersService.confirmOrderFromWallet(id, userId);
+  }
 }

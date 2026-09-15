@@ -3,16 +3,19 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { firstValueFrom } from 'rxjs';
-import { OrderStatus } from 'src/order/entities/order.entity';
+import { Order, OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
+import { WalletChargeStatus } from 'src/wallet/entities/wallet-charge.entity';
 import { Repository } from 'typeorm';
 
 import {
   Payment,
   PaymentGateway,
+  PaymentPurpose,
   PaymentStatus,
 } from '../entities/payment.entity';
 import { PaymentGuardService } from './payment-guard.service';
+import { WalletChargeService } from './wallet-charge.service';
 
 @Injectable()
 export class ZarinpalPaymentService {
@@ -28,7 +31,15 @@ export class ZarinpalPaymentService {
     private readonly ordersService: OrdersService,
 
     private readonly paymentGuard: PaymentGuardService,
+
+    private readonly walletChargeService: WalletChargeService,
   ) {}
+
+  private getOrderCardAmount(order: Order): number {
+    const walletPayment = Number(order.walletPayment ?? 0);
+
+    return Math.round((Number(order.finalPrice) - walletPayment) * 10);
+  }
 
   private getMerchantId(): string {
     const merchantId = this.configService.get<string>('ZARINPAL_MERCHANT_ID');
@@ -85,7 +96,7 @@ export class ZarinpalPaymentService {
      * اگر finalPrice شما در دیتابیس تومان است:
      * تومان × 10 = ریال
      */
-    const amount = Math.round(Number(order.finalPrice) * 10);
+    const amount = this.getOrderCardAmount(order);
 
     if (!amount || amount <= 0) {
       throw new BadRequestException('مبلغ سفارش نامعتبر است');
@@ -176,7 +187,7 @@ export class ZarinpalPaymentService {
         refId: authority,
         payUrl: this.getStartPayUrl(authority),
       };
-    } catch (error) {
+    } catch (error: any) {
       if (error.isAxiosError) {
         this.logger.error('Zarinpal status:', error.response?.status);
 
@@ -202,6 +213,114 @@ export class ZarinpalPaymentService {
           error.response?.data?.message ||
           'خطا در ارتباط با درگاه زرین پال',
       );
+    }
+  }
+
+  async requestWalletCharge(
+    chargeId: number,
+    userId: number,
+  ): Promise<{ refId: string; payUrl: string }> {
+    const charge = await this.walletChargeService.getChargeWithUser(chargeId);
+
+    if (!charge || charge.user.id !== userId) {
+      throw new BadRequestException('درخواست شارژ یافت نشد');
+    }
+
+    if (charge.status === WalletChargeStatus.SUCCESS) {
+      throw new BadRequestException('این درخواست شارژ قبلاً پرداخت شده است');
+    }
+
+    const amount = Math.round(Number(charge.amount) * 10);
+
+    if (!amount || amount <= 0) {
+      throw new BadRequestException('مبلغ شارژ نامعتبر است');
+    }
+
+    const callbackUrl = this.configService.get<string>(
+      'ZARINPAL_PAYMENT_CALLBACK_URL',
+    );
+
+    if (!callbackUrl) {
+      throw new BadRequestException('آدرس callback زرین پال تنظیم نشده است');
+    }
+
+    const payload = {
+      merchant_id: this.getMerchantId(),
+      amount,
+      currency: 'IRR',
+      description: 'شارژ کیف پول',
+      callback_url: callbackUrl,
+      metadata: {
+        mobile: charge.user?.phone || '',
+        email: charge.user?.email || '',
+        order_id: String(chargeId),
+      },
+    };
+
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post(this.getRequestUrl(), payload, {
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+        }),
+      );
+
+      const data = response.data;
+
+      const error = data?.errors?.[0];
+
+      if (error) {
+        this.logger.error(
+          `Zarinpal request (wallet charge) error ${error.code}: ${error.message}`,
+        );
+
+        throw new BadRequestException(error.message);
+      }
+
+      if (data?.data?.code !== 100) {
+        throw new BadRequestException(
+          data?.data?.message ||
+            `خطا در ایجاد تراکنش زرین پال (${data?.data?.code})`,
+        );
+      }
+
+      const authority = data.data.authority;
+
+      if (!authority) {
+        throw new BadRequestException('Authority از زرین پال دریافت نشد');
+      }
+
+      const payment = this.paymentRepo.create({
+        orderId: null,
+        walletChargeId: charge.id,
+        purpose: PaymentPurpose.WALLET_CHARGE,
+        refId: authority,
+        amount,
+        gateway: PaymentGateway.ZARINPAL,
+        status: PaymentStatus.PENDING,
+        resCode: String(data.data.code),
+        gatewayResponse: data,
+      });
+
+      await this.paymentRepo.save(payment);
+
+      return {
+        refId: authority,
+        payUrl: this.getStartPayUrl(authority),
+      };
+    } catch (error: any) {
+      this.logger.error(
+        '❌ خطا در درخواست شارژ کیف پول از زرین‌پال',
+        error?.stack || error,
+      );
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      throw new BadRequestException('خطا در ارتباط با درگاه زرین پال');
     }
   }
 
@@ -231,7 +350,7 @@ export class ZarinpalPaymentService {
       return {
         success: true,
         message: 'پرداخت قبلاً تأیید شده است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
 
@@ -262,12 +381,16 @@ export class ZarinpalPaymentService {
 
         await this.paymentRepo.save(payment);
 
-        await this.ordersService.failOrderPayment(payment.orderId);
+        if (payment.purpose === PaymentPurpose.ORDER) {
+          await this.ordersService.failOrderPayment(payment.orderId!);
+        } else {
+          await this.walletChargeService.markChargeFailed(payment);
+        }
 
         return {
           success: false,
           message: error.message,
-          orderId: payment.orderId,
+          orderId: payment.orderId ?? undefined,
         };
       }
 
@@ -287,12 +410,16 @@ export class ZarinpalPaymentService {
 
         await this.paymentRepo.save(payment);
 
-        await this.ordersService.failOrderPayment(payment.orderId);
+        if (payment.purpose === PaymentPurpose.ORDER) {
+          await this.ordersService.failOrderPayment(payment.orderId!);
+        } else {
+          await this.walletChargeService.markChargeFailed(payment);
+        }
 
         return {
           success: false,
           message: data?.data?.message || `پرداخت ناموفق: کد ${code}`,
-          orderId: payment.orderId,
+          orderId: payment.orderId ?? undefined,
         };
       }
 
@@ -310,35 +437,46 @@ export class ZarinpalPaymentService {
 
       await this.paymentRepo.save(payment);
 
-      /*
-       * نهایی‌کردن سفارش (کاهش موجودی + خالی کردن سبد)
-       *
-       * - کد 100: اولین verify موفق
-       * - کد 101: قبلاً verify شده؛ اگر سفارش هنوز PENDING است
-       *   (مثلاً بار اول بعد از verify خطا خورده بود) همین‌جا نهایی‌اش می‌کنیم
-       */
-      try {
-        const order = await this.ordersService.findOneForAdmin(payment.orderId);
-
-        if (order.status === OrderStatus.PENDING) {
-          await this.ordersService.confirmOrderPayment(payment.orderId);
-        }
-      } catch (error) {
+      if (payment.purpose === PaymentPurpose.WALLET_CHARGE) {
         /*
-         * پول گرفته شده است؛ پرداخت را SUCCESS نگه می‌داریم
-         * و سفارش را لغو نمی‌کنیم تا دستی بررسی/اصلاح شود.
+         * شارژ کیف پول: وجه از کاربر گرفته شده؛ حالا به کیف پول واریز می‌شود.
+         * واریز idempotent است (کلید wallet-charge-{chargeId}).
          */
-        this.logger.error(
-          `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
-            'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
-          error instanceof Error ? error.stack : String(error),
-        );
+        try {
+          await this.walletChargeService.settleCharge(payment);
+        } catch (error) {
+          /*
+           * پول گرفته شده است؛ پرداخت را SUCCESS نگه می‌داریم تا دستی
+           * بررسی/واریز شود (واریز تکراری با همان کلید امن است).
+           */
+          this.logger.error(
+            `❌ پرداخت ${payment.id} موفق بود ولی واریز به کیف پول (شارژ ${payment.walletChargeId}) خطا خورد! ` +
+              'پرداخت SUCCESS باقی می‌ماند تا بررسی شود.',
+            error instanceof Error ? error.stack : String(error),
+          );
+        }
+      } else {
+        try {
+          const order = await this.ordersService.findOneForAdmin(
+            payment.orderId!,
+          );
 
-        return {
-          success: true,
-          message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
-          orderId: payment.orderId,
-        };
+          if (order.status === OrderStatus.PENDING) {
+            await this.ordersService.confirmOrderPayment(payment.orderId!);
+          }
+        } catch (error) {
+          this.logger.error(
+            `❌ پرداخت ${payment.id} موفق بود ولی ثبت نهایی سفارش ${payment.orderId} خطا خورد! ` +
+              'پرداخت SUCCESS و سفارش PENDING باقی می‌ماند تا بررسی شود.',
+            error instanceof Error ? error.stack : String(error),
+          );
+
+          return {
+            success: true,
+            message: 'پرداخت دریافت شد؛ ثبت نهایی سفارش به‌زودی انجام می‌شود',
+            orderId: payment.orderId ?? undefined,
+          };
+        }
       }
 
       return {
@@ -347,7 +485,7 @@ export class ZarinpalPaymentService {
           code === 101
             ? 'پرداخت قبلاً تأیید شده است'
             : 'پرداخت با موفقیت انجام شد',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     } catch (error) {
       /*
@@ -365,7 +503,7 @@ export class ZarinpalPaymentService {
       return {
         success: false,
         message: 'خطا در تأیید پرداخت؛ تراکنش در حال بررسی است',
-        orderId: payment.orderId,
+        orderId: payment.orderId ?? undefined,
       };
     }
   }
