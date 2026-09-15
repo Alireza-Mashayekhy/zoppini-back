@@ -966,7 +966,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('کاربر پیدا نشد');
     }
 
-    const fullName = user.fullName?.trim() || '';
+    const fullName = user.fullName?.trim() || 't';
 
     const parts = fullName.split(/\s+/);
 
