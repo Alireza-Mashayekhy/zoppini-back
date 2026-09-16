@@ -979,7 +979,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         method: 'POST',
         data: {
           partyType: 0,
-          Id: id,
+          Id: 0,
           firstName: firstName,
           lastName: lastName,
           nationalID: user?.nationalCode,
