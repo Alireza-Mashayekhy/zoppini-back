@@ -8,22 +8,26 @@ import {
   Patch,
   Post,
   Query,
-  UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Roles } from 'src/common/decorators/roles.decorator';
 import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
-import { FileSizeValidationPipe } from 'src/files/validation/fileSize.validator';
 import { QueryDto } from 'src/common/query';
 
 import { CategoriesService } from './categories.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
+import type { CategoryImageUploads } from './utils/category-images.util';
+import {
+  CATEGORY_IMAGE_FIELDS,
+  pickCategoryImages,
+} from './utils/category-images.util';
 
 @UseGuards(AuthGuard, RolesGuard)
 @Roles(Role.Admin, Role.Seo)
@@ -32,12 +36,19 @@ export class CategoriesAdminController {
   constructor(private readonly categoriesService: CategoriesService) {}
 
   @Post()
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(
+    FileFieldsInterceptor([...CATEGORY_IMAGE_FIELDS], {
+      storage: memoryStorage(),
+    }),
+  )
   create(
     @Body() createCategoryDto: CreateCategoryDto,
-    @UploadedFile(new FileSizeValidationPipe()) file: Express.Multer.File,
+    @UploadedFiles() files: CategoryImageUploads,
   ) {
-    return this.categoriesService.create(createCategoryDto, file);
+    return this.categoriesService.create(
+      createCategoryDto,
+      pickCategoryImages(files, { requirePrimary: true }),
+    );
   }
 
   @Get()
@@ -54,14 +65,21 @@ export class CategoriesAdminController {
   }
 
   @Patch(':id')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileFieldsInterceptor([...CATEGORY_IMAGE_FIELDS], {
+      storage: memoryStorage(),
+    }),
+  )
   update(
     @Param('id') id: string,
     @Body() updateCategoryDto: UpdateCategoryDto,
-    @UploadedFile(new FileSizeValidationPipe({ optional: true }))
-    file?: Express.Multer.File,
+    @UploadedFiles() files: CategoryImageUploads,
   ) {
-    return this.categoriesService.update(+id, updateCategoryDto, file);
+    return this.categoriesService.update(
+      +id,
+      updateCategoryDto,
+      pickCategoryImages(files),
+    );
   }
 
   @Delete(':id')

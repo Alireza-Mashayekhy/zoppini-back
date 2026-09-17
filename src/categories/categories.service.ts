@@ -12,6 +12,7 @@ import { DataSource, In, Repository } from 'typeorm';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
 import { Category } from './entities/category.entity';
+import { CategoryImages } from './utils/category-images.util';
 import { collectCategoryIdsWithDescendants } from './utils/category-tree.util';
 
 @Injectable()
@@ -22,6 +23,24 @@ export class CategoriesService {
     private readonly filesService: FilesService,
     private dataSource: DataSource,
   ) {}
+
+  private normalizeSecondImages<T extends Category>(
+    category: T | null,
+  ): T | null {
+    if (category && !Array.isArray(category.secondImages)) {
+      category.secondImages = [];
+    }
+
+    return category;
+  }
+
+  private deleteSecondImageFiles(filenames?: string[] | null): void {
+    for (const filename of filenames ?? []) {
+      if (filename) {
+        this.filesService.deleteFile(filename);
+      }
+    }
+  }
 
   private async shiftOrders(
     field: 'orderInHome' | 'orderInHero', // کدام فیلد
@@ -47,7 +66,7 @@ export class CategoriesService {
 
   async create(
     createCategoryDto: CreateCategoryDto,
-    file?: Express.Multer.File,
+    images: CategoryImages = {},
   ) {
     const { orderInHome, orderInHero, ...rest } = createCategoryDto;
 
@@ -66,14 +85,18 @@ export class CategoriesService {
       }
 
       let image = '';
-      if (file) {
-        const result = this.filesService.saveFile(file);
-        image = result.filename;
+      if (images.primary) {
+        image = this.filesService.saveFile(images.primary).filename;
       }
+
+      const secondImages = (images.second ?? []).map(
+        file => this.filesService.saveFile(file).filename,
+      );
 
       const category = queryRunner.manager.create(Category, {
         ...rest,
         image,
+        secondImages,
         orderInHome: orderInHome || 0,
         orderInHero: orderInHero || 0,
       });
@@ -156,7 +179,9 @@ export class CategoriesService {
     }
 
     return {
-      data,
+      data: (data as Category[]).map(category =>
+        this.normalizeSecondImages(category),
+      ),
       pagination: {
         page,
         limit,
@@ -170,16 +195,24 @@ export class CategoriesService {
     const payload = await this.categoriesRepository.findOne({
       where: { id },
     });
-    return payload;
+    return this.normalizeSecondImages(payload);
   }
 
   async findOneBySlug(slug: string) {
-    return this.categoriesRepository.findOne({ where: { slug } });
+    const payload = await this.categoriesRepository.findOne({
+      where: { slug },
+    });
+
+    return this.normalizeSecondImages(payload);
   }
 
   async findManyByIds(ids: number[]): Promise<Category[]> {
     if (!ids.length) return [];
-    return this.categoriesRepository.findBy({ id: In(ids) });
+    const categories = await this.categoriesRepository.findBy({ id: In(ids) });
+
+    return categories.map(
+      category => this.normalizeSecondImages(category) as Category,
+    );
   }
 
   async findWithDescendantIds(ids: number[]): Promise<number[]> {
@@ -195,13 +228,13 @@ export class CategoriesService {
   async update(
     id: number,
     updateCategoryDto: UpdateCategoryDto,
-    file?: Express.Multer.File,
+    images: CategoryImages = {},
   ) {
     const category = await this.categoriesRepository.findOne({ where: { id } });
     if (!category) throw new NotFoundException();
 
-    const { orderInHome, orderInHero, ...rest } = updateCategoryDto;
-
+    const { orderInHome, orderInHero, removeSecondImages, ...rest } =
+      updateCategoryDto;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -226,12 +259,25 @@ export class CategoriesService {
       }
 
       // به‌روزرسانی تصویر (اگر وجود داشته باشد)
-      if (file) {
-        const result = this.filesService.saveFile(file);
+      if (images.primary) {
+        const result = this.filesService.saveFile(images.primary);
         if (category.image) {
           this.filesService.deleteFile(category.image);
         }
         category.image = result.filename;
+      }
+
+      if (images.second?.length) {
+        const newFilenames = images.second.map(
+          file => this.filesService.saveFile(file).filename,
+        );
+
+        this.deleteSecondImageFiles(category.secondImages);
+        category.secondImages = newFilenames;
+      } else if (removeSecondImages && category.secondImages?.length) {
+        // فایل جدیدی نیامده و ادمین خواسته تصویرهای دوم پاک شوند
+        this.deleteSecondImageFiles(category.secondImages);
+        category.secondImages = [];
       }
 
       // به‌روزرسانی سایر فیلدها

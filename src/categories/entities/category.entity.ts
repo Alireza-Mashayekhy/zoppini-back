@@ -26,6 +26,9 @@ export class Category {
   })
   image: string;
 
+  @Column({ type: 'json', nullable: true })
+  secondImages: string[];
+
   @Column()
   description: string;
 
