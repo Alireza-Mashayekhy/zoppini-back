@@ -6,7 +6,7 @@ import { firstValueFrom } from 'rxjs';
 import { Order, OrderStatus } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
 import { WalletChargeStatus } from 'src/wallet/entities/wallet-charge.entity';
-import { Repository } from 'typeorm';
+import { LessThan, Repository } from 'typeorm';
 
 import {
   Payment,
@@ -340,13 +340,24 @@ export class ZarinpalPaymentService {
     });
 
     if (!payment) {
+      this.logger.warn(
+        `verify زرین‌پال: تراکنشی با authority=${authority} یافت نشد.`,
+      );
       throw new BadRequestException('تراکنش یافت نشد');
     }
+
+    this.logger.log(
+      `🔍 شروع verify زرین‌پال برای پرداخت ${payment.id} (سفارش ${payment.orderId}, ` +
+        `purpose=${payment.purpose}, status فعلی=${payment.status}, amount=${payment.amount})`,
+    );
 
     /*
      * اگر قبلاً موفق شده، دوباره موجودی کم نکن.
      */
     if (payment.status === PaymentStatus.SUCCESS) {
+      this.logger.log(
+        `↩️ پرداخت ${payment.id} قبلاً SUCCESS شده؛ verify مجدد نادیده گرفته شد.`,
+      );
       return {
         success: true,
         message: 'پرداخت قبلاً تأیید شده است',
@@ -373,6 +384,17 @@ export class ZarinpalPaymentService {
       const data = response.data;
 
       const error = data?.errors?.[0];
+
+      this.logger.log(
+        `📥 پاسخ verify زرین‌پال برای پرداخت ${payment.id}: ` +
+          JSON.stringify({
+            code: data?.data?.code,
+            ref_id: data?.data?.ref_id,
+            card_pan: data?.data?.card_pan,
+            message: data?.data?.message,
+            errors: data?.errors,
+          }),
+      );
 
       if (error) {
         payment.status = PaymentStatus.FAILED;
@@ -404,6 +426,10 @@ export class ZarinpalPaymentService {
        * این تراکنش قبلاً verify شده و موفق بوده.
        */
       if (code !== 100 && code !== 101) {
+        this.logger.warn(
+          `⚠️ پاسخ verify غیرموفق از زرین‌پال برای پرداخت ${payment.id}: code=${code}, ` +
+            `message=${data?.data?.message || '(خالی)'}`,
+        );
         payment.status = PaymentStatus.FAILED;
         payment.resCode = String(code);
         payment.gatewayResponse = data;
@@ -424,6 +450,9 @@ export class ZarinpalPaymentService {
       }
 
       // پرداخت موفق
+      this.logger.log(
+        `✅ verify زرین‌پال موفق برای پرداخت ${payment.id}: code=${code}, ref_id=${data?.data?.ref_id}`,
+      );
       payment.status = PaymentStatus.SUCCESS;
       payment.resCode = String(code);
 
@@ -522,5 +551,34 @@ export class ZarinpalPaymentService {
     payment.resCode = resCode;
 
     return this.paymentRepo.save(payment);
+  }
+
+  async reconcilePendingPayments(limit = 25): Promise<void> {
+    const cutoff = new Date(Date.now() - 15 * 60_000);
+
+    const pendingPayments = await this.paymentRepo.find({
+      where: {
+        gateway: PaymentGateway.ZARINPAL,
+        status: PaymentStatus.PENDING,
+        createdAt: LessThan(cutoff),
+      },
+      take: limit,
+      order: { id: 'ASC' },
+    });
+
+    for (const payment of pendingPayments) {
+      try {
+        this.logger.log(
+          `🔄 همسان‌سازی پرداخت بلاتکلیف زرین‌پال ${payment.id} (سفارش ${payment.orderId})`,
+        );
+
+        await this.verifyPayment(payment.refId);
+      } catch (error) {
+        this.logger.error(
+          `❌ همسان‌سازی پرداخت زرین‌پال ${payment.id} خطا خورد:`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
   }
 }

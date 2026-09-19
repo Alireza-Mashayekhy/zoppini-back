@@ -262,7 +262,11 @@ export class PaymentController {
     @Query('Status') status: string,
     @Res() res,
   ) {
+    this.logger.log(
+      `↩️ callback زرین‌پال دریافت شد: Authority=${authority}, Status=${status}`,
+    );
     if (!authority) {
+      this.logger.warn('callback زرین‌پال بدون Authority دریافت شد.');
       return this.redirect(res, 'failed');
     }
 
@@ -270,6 +274,9 @@ export class PaymentController {
       const payment = await this.zarinpalService.findPaymentByRefId(authority);
 
       if (payment) {
+        this.logger.warn(
+          `پرداخت ${payment.id} توسط کاربر لغو شد (Status=${status}).`,
+        );
         await this.zarinpalService.failPayment(payment, 'CANCELLED');
 
         if (payment.purpose === PaymentPurpose.ORDER) {
@@ -285,6 +292,10 @@ export class PaymentController {
     }
 
     const result = await this.zarinpalService.verifyPayment(authority);
+
+    this.logger.log(
+      `🏁 نتیجهٔ verify زرین‌پال برای Authority=${authority}: success=${result.success}, message=${result.message}`,
+    );
 
     return this.redirect(
       res,
