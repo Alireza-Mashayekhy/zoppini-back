@@ -14,9 +14,10 @@ import {
   getPagination,
   QueryDto,
 } from 'src/common/query';
+import { Discount, DiscountType } from 'src/discounts/entities/discount.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
+import { SmsService } from 'src/sms/sms.service';
 import { UsersService } from 'src/users/users.service';
-import { WalletService } from 'src/wallet/wallet.service';
 import { Repository } from 'typeorm';
 
 import { CreateGamificationParticipationDto } from './dto/create-gamification.dto';
@@ -37,7 +38,22 @@ export interface GamificationQuestionStat {
   mostSelectedOption: GamificationOptionStat | null;
 }
 
-const SURVEY_WALLET_BONUS = 2_000_000;
+const SURVEY_DISCOUNT_AMOUNT = 2_000_000;
+export const SURVEY_EXCLUDED_CATEGORY_ID = 85;
+const SURVEY_DISCOUNT_VALID_DAYS = 30;
+const SURVEY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function generateSurveyDiscountCode(): string {
+  let suffix = '';
+
+  for (let i = 0; i < 6; i++) {
+    suffix +=
+      SURVEY_CODE_ALPHABET[
+        Math.floor(Math.random() * SURVEY_CODE_ALPHABET.length)
+      ];
+  }
+
+  return `SURVEY-${suffix}`;
+}
 
 @Injectable()
 export class GamificationService {
@@ -50,10 +66,13 @@ export class GamificationService {
     @InjectRepository(GamificationAnswer)
     private readonly answerRepo: Repository<GamificationAnswer>,
 
+    @InjectRepository(Discount)
+    private readonly discountRepo: Repository<Discount>,
+
     private readonly clubService: ClubService,
     private readonly usersService: UsersService,
     private readonly rahkaranService: RahkaranService,
-    private readonly walletService: WalletService,
+    private readonly smsService: SmsService,
   ) {}
 
   async create(dto: CreateGamificationParticipationDto) {
@@ -119,36 +138,92 @@ export class GamificationService {
 
     const targetUserId = (newUser ?? user)?.id;
 
+    let discountCode: string | null = null;
+
     if (targetUserId) {
       try {
-        await this.walletService.chargeWallet(
-          targetUserId,
-          SURVEY_WALLET_BONUS,
-          {
-            transactionKey: `gamification-survey-${dto.phone}`,
-            description: 'شارژ کیف پول بابت شرکت در نظرسنجی',
-            meta: {
-              participationId: saved.id,
-              phone: dto.phone,
-            },
-          },
-        );
+        discountCode = await this.createSurveyRewardDiscount(targetUserId);
 
         this.logger.log(
-          `✅ کیف پول کاربر ${targetUserId} (${SURVEY_WALLET_BONUS} تومان) بابت شرکت در نظرسنجی شارژ شد.`,
+          `✅ کد تخفیف ${discountCode} (${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان) برای کاربر ${targetUserId} بابت شرکت در نظرسنجی ساخته شد.`,
         );
+
+        try {
+          await this.smsService.sendSms(
+            dto.phone,
+            this.buildSurveySmsMessage(discountCode),
+          );
+        } catch (smsError) {
+          this.logger.error(
+            `❌ ارسال پیامک کد تخفیف ${discountCode} به ${dto.phone} ناموفق بود.`,
+            smsError instanceof Error ? smsError.stack : String(smsError),
+          );
+        }
       } catch (err) {
         this.logger.error(
-          `❌ شارژ کیف پول شرکت‌کننده ${saved.id} ناموفق بود — نیاز به بررسی دستی.`,
+          `❌ ساخت کد تخفیف برای شرکت‌کننده ${saved.id} ناموفق بود — نیاز به بررسی دستی.`,
           err instanceof Error ? err.stack : String(err),
         );
       }
     }
 
     return {
-      message: 'نظر شما با موفقیت ثبت شد. از همراهی شما سپاسگزاریم.',
+      message: discountCode
+        ? `نظر شما با موفقیت ثبت شد. کد تخفیف ${discountCode} (${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان) برای شما فعال شد.`
+        : 'نظر شما با موفقیت ثبت شد. از همراهی شما سپاسگزاریم.',
       data: saved,
+      discountCode,
     };
+  }
+
+  private async createSurveyRewardDiscount(userId: number): Promise<string> {
+    let code = generateSurveyDiscountCode();
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const existing = await this.discountRepo.findOne({ where: { code } });
+
+      if (!existing) {
+        break;
+      }
+
+      code = generateSurveyDiscountCode();
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(
+      now.getTime() + SURVEY_DISCOUNT_VALID_DAYS * 24 * 60 * 60 * 1000,
+    );
+
+    const discount = this.discountRepo.create({
+      code,
+      type: DiscountType.FIXED,
+      value: SURVEY_DISCOUNT_AMOUNT,
+      maxDiscountAmount: null,
+      minOrderAmount: null,
+      isActive: true,
+      startsAt: now,
+      expiresAt,
+      users: [{ id: userId }],
+      categories: [],
+      products: [],
+    });
+
+    const saved = await this.discountRepo.save(discount);
+
+    this.logger.log(
+      `🎁 کد تخفیف ${saved.code} ساخته شد (مبلغ=${SURVEY_DISCOUNT_AMOUNT}, ` +
+        `انقضا=${expiresAt.toISOString()}).`,
+    );
+
+    return saved.code;
+  }
+
+  private buildSurveySmsMessage(code: string): string {
+    return (
+      `🎁 کد تخفیم هدیهٔ شما بابت شرکت در نظرسنجی: ${code}\n` +
+      `تا سقف ${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان روی همهٔ محصولات ` +
+      `به‌جز اکسسوری به مدت ${SURVEY_DISCOUNT_VALID_DAYS} روز معتبر است.`
+    );
   }
 
   async findAll(query: QueryDto) {

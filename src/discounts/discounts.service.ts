@@ -15,6 +15,17 @@ import { UpdateDiscountDto } from './dto/update-discount.dto';
 import { Discount, DiscountType } from './entities/discount.entity';
 import { DiscountUsage } from './entities/discount-code-usage.entity';
 
+const SURVEY_DISCOUNT_CODE_PREFIX = 'SURVEY-';
+
+const HARDCODED_EXCLUDED_CATEGORY_ROOT_IDS: readonly number[] = [85];
+
+const DESCENDANTS_CACHE_TTL_MS = 5 * 60_000;
+
+interface CachedDescendants {
+  ids: Set<number>;
+  cachedAt: number;
+}
+
 @Injectable()
 export class DiscountService {
   constructor(
@@ -36,6 +47,8 @@ export class DiscountService {
     @InjectRepository(Cart)
     private readonly cartRepo: Repository<Cart>,
   ) {}
+
+  private readonly descendantsCache = new Map<number, CachedDescendants>();
 
   // =========================================================
   // CREATE
@@ -326,6 +339,82 @@ export class DiscountService {
     return discount.users.some(user => user.id === userId);
   }
 
+  private isSurveyDiscount(code: string): boolean {
+    return code.trim().toUpperCase().startsWith(SURVEY_DISCOUNT_CODE_PREFIX);
+  }
+
+  private async getHardcodedExcludedCategoryIds(): Promise<Set<number>> {
+    const result = new Set<number>();
+
+    for (const rootId of HARDCODED_EXCLUDED_CATEGORY_ROOT_IDS) {
+      result.add(rootId);
+
+      const descendants = await this.getAllDescendantIds(rootId);
+
+      for (const id of descendants) {
+        result.add(id);
+      }
+    }
+
+    return result;
+  }
+
+  private async getAllDescendantIds(rootId: number): Promise<number[]> {
+    const cached = this.descendantsCache.get(rootId);
+
+    if (cached && Date.now() - cached.cachedAt < DESCENDANTS_CACHE_TTL_MS) {
+      return Array.from(cached.ids);
+    }
+
+    const allCategories = await this.categoryRepo.find({
+      select: {
+        id: true,
+        parentId: true,
+      },
+    });
+
+    // parentId در entity از نوع string است (نه number).
+    const childrenByParentId = new Map<string, number[]>();
+
+    for (const cat of allCategories) {
+      if (cat.parentId !== null && cat.parentId !== undefined) {
+        const key = String(cat.parentId);
+
+        if (!childrenByParentId.has(key)) {
+          childrenByParentId.set(key, []);
+        }
+
+        childrenByParentId.get(key)!.push(cat.id);
+      }
+    }
+
+    const result = new Set<number>();
+    const queue: number[] = [rootId];
+
+    while (queue.length) {
+      const current = queue.shift()!;
+
+      if (result.has(current)) {
+        continue;
+      }
+
+      result.add(current);
+
+      const children = childrenByParentId.get(String(current)) ?? [];
+
+      for (const child of children) {
+        queue.push(child);
+      }
+    }
+
+    this.descendantsCache.set(rootId, {
+      ids: result,
+      cachedAt: Date.now(),
+    });
+
+    return Array.from(result);
+  }
+
   // =========================================================
   // CALCULATE DISCOUNT
   // =========================================================
@@ -441,16 +530,39 @@ export class DiscountService {
       throw new BadRequestException('این کد تخفیف را قبلاً استفاده کرده‌اید.');
     }
 
+    let effectiveAmount = amount;
+    let effectiveItems = items;
+
+    if (this.isSurveyDiscount(discount.code)) {
+      const excludedIds = await this.getHardcodedExcludedCategoryIds();
+
+      effectiveItems = items.filter(
+        item =>
+          !item.categoryIds.some(categoryId => excludedIds.has(categoryId)),
+      );
+
+      if (effectiveItems.length === 0) {
+        throw new BadRequestException(
+          'این کد تخفیف شامل محصولات سبد خرید شما نمی‌شود.',
+        );
+      }
+
+      effectiveAmount = effectiveItems.reduce(
+        (sum, item) => sum + item.price * item.quantity,
+        0,
+      );
+    }
+
     // =====================================================
     // 6. حداقل مبلغ
     // =====================================================
 
     if (
       discount.minOrderAmount !== null &&
-      amount < Number(discount.minOrderAmount)
+      effectiveAmount < Number(discount.minOrderAmount)
     ) {
       throw new BadRequestException(
-        `حداقل مبلغ سفارش برای استفاده از این کد ${Number(
+        `حداقل مبلغ سفارش (پس از حذف دسته‌های مستثنا) برای استفاده از این کد ${Number(
           discount.minOrderAmount,
         ).toLocaleString()} تومان است.`,
       );
@@ -460,7 +572,10 @@ export class DiscountService {
     // 7. محاسبه تخفیف
     // =====================================================
 
-    const discountAmount = this.calculateDiscountAmount(discount, amount);
+    const discountAmount = this.calculateDiscountAmount(
+      discount,
+      effectiveAmount,
+    );
 
     return {
       discount,

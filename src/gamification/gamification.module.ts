@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClubModule } from 'src/club/club.module';
+import { Discount } from 'src/discounts/entities/discount.entity';
 import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
+import { SmsModule } from 'src/sms/sms.module';
 import { UsersModule } from 'src/users/users.module';
-import { WalletModule } from 'src/wallet/wallet.module';
 
 import { GamificationAdminController } from './admin.gamification.controller';
 import { GamificationAnswer } from './entities/gamification-answer.entity';
@@ -14,10 +15,11 @@ import { GamificationService } from './gamification.service';
 @Module({
   imports: [
     TypeOrmModule.forFeature([GamificationParticipation, GamificationAnswer]),
+    TypeOrmModule.forFeature([Discount]),
     ClubModule,
     RahkaranModule,
     UsersModule,
-    WalletModule,
+    SmsModule,
   ],
   controllers: [GamificationController, GamificationAdminController],
   providers: [GamificationService],
