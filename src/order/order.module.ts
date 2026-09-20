@@ -7,6 +7,7 @@ import { ClubModule } from 'src/club/club.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
+import { Payment } from 'src/payment/entities/payment.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
 import { SmsModule } from 'src/sms/sms.module';
@@ -30,6 +31,7 @@ import { OrdersService } from './order.service';
       User,
       Discount,
       DiscountUsage,
+      Payment,
     ]),
     SmsModule,
     forwardRef(() => RahkaranModule),

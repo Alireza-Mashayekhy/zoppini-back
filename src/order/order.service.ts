@@ -13,6 +13,11 @@ import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
+import {
+  Payment,
+  PaymentGateway,
+  PaymentStatus,
+} from 'src/payment/entities/payment.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
@@ -45,6 +50,9 @@ export class OrdersService {
 
     @InjectRepository(DiscountUsage)
     private readonly discountUsageRepo: Repository<DiscountUsage>,
+
+    @InjectRepository(Payment)
+    private readonly paymentRepo: Repository<Payment>,
 
     private readonly rahkaranService: RahkaranService,
 
@@ -711,7 +719,7 @@ export class OrdersService {
   }
 
   async findAllForAdmin(query: QueryDto): Promise<{
-    data: Order[];
+    data: any[];
     pagination: any;
   }> {
     const page = query.page ?? 1;
@@ -744,8 +752,47 @@ export class OrdersService {
 
     const [data, total] = await qb.getManyAndCount();
 
+    const orderIds = data.map(o => o.id);
+
+    const payments = orderIds.length
+      ? await this.paymentRepo.find({
+          where: {
+            orderId: In(orderIds),
+            status: PaymentStatus.SUCCESS,
+          },
+          select: {
+            id: true,
+            orderId: true,
+            gateway: true,
+            amount: true,
+            saleReferenceId: true,
+            resCode: true,
+            createdAt: true,
+          },
+          order: {
+            createdAt: 'ASC',
+          },
+        })
+      : [];
+
+    const paymentsByOrderId = new Map<number, Payment[]>();
+
+    for (const payment of payments) {
+      if (payment.orderId === null || payment.orderId === undefined) {
+        continue;
+      }
+
+      const list = paymentsByOrderId.get(payment.orderId) ?? [];
+
+      list.push(payment);
+      paymentsByOrderId.set(payment.orderId, list);
+    }
+
     return {
-      data,
+      data: data.map(order => ({
+        ...order,
+        paymentBreakdown: this.buildPaymentBreakdown(order, paymentsByOrderId),
+      })),
 
       pagination: {
         page,
@@ -790,7 +837,7 @@ export class OrdersService {
   }
 
   // دریافت یک سفارش بدون فیلتر کاربر - برای ادمین
-  async findOneForAdmin(id: number): Promise<Order> {
+  async findOneForAdmin(id: number) {
     const order = await this.orderRepo.findOne({
       where: { id },
       relations: {
@@ -809,11 +856,46 @@ export class OrdersService {
       },
     });
 
+    const payments = await this.paymentRepo.find({
+      where: {
+        orderId: id,
+        status: PaymentStatus.SUCCESS,
+      },
+      select: {
+        id: true,
+        orderId: true,
+        gateway: true,
+        amount: true,
+        saleReferenceId: true,
+        resCode: true,
+        createdAt: true,
+      },
+      order: {
+        createdAt: 'ASC',
+      },
+    });
+
+    const paymentsByOrderId = new Map<number, Payment[]>();
+
+    for (const payment of payments) {
+      if (payment.orderId === null || payment.orderId === undefined) {
+        continue;
+      }
+
+      const list = paymentsByOrderId.get(payment.orderId) ?? [];
+
+      list.push(payment);
+      paymentsByOrderId.set(payment.orderId, list);
+    }
+
     if (!order) {
       throw new NotFoundException('سفارش یافت نشد');
     }
 
-    return order;
+    return {
+      ...order,
+      paymentBreakdown: this.buildPaymentBreakdown(order, paymentsByOrderId),
+    };
   }
 
   // لغو سفارش توسط ادمین (با ثبت دلیل)
@@ -865,6 +947,71 @@ export class OrdersService {
 
       default:
         return 0;
+    }
+  }
+
+  private buildPaymentBreakdown(
+    order: Order,
+    paymentsByOrderId: Map<number, Payment[]>,
+  ) {
+    const finalPrice = Number(order.finalPrice ?? 0);
+    const walletAmount = Number(order.walletPayment ?? 0);
+
+    const orderPayments = (paymentsByOrderId.get(order.id) ?? []).map(p => ({
+      paymentId: p.id,
+      gateway: p.gateway,
+      gatewayLabel: this.getGatewayLabel(p.gateway),
+      amount: Number(p.amount),
+      saleReferenceId: p.saleReferenceId,
+      resCode: p.resCode,
+      createdAt: p.createdAt,
+    }));
+
+    const gatewayAmount = orderPayments.reduce(
+      (sum, p) => sum + Number(p.amount),
+      0,
+    );
+
+    let type: 'wallet' | 'gateway' | 'mixed' | 'pending' | 'cancelled';
+
+    if (order.status === OrderStatus.CANCELLED) {
+      type = 'cancelled';
+    } else if (walletAmount >= finalPrice && finalPrice > 0) {
+      type = 'wallet';
+    } else if (walletAmount > 0 && gatewayAmount > 0) {
+      type = 'mixed';
+    } else if (gatewayAmount > 0) {
+      type = 'gateway';
+    } else {
+      type = 'pending';
+    }
+
+    return {
+      type,
+      finalPrice,
+      walletAmount,
+      gatewayAmount,
+      // در صورت mixed ممکن است walletAmount + gatewayAmount == finalPrice نباشد
+      // (مثلاً گرد کردن ریالی یا خطای انسانی). هر دو مقدار برای ادمین
+      // مفید هستند، پس جمع و اختلاف هم برگردانده می‌شود.
+      paidTotal: walletAmount + gatewayAmount,
+      remaining: Math.max(0, finalPrice - walletAmount - gatewayAmount),
+      gateways: orderPayments,
+    };
+  }
+
+  private getGatewayLabel(gateway: PaymentGateway): string {
+    switch (gateway) {
+      case PaymentGateway.MELLAT:
+        return 'ملت';
+      case PaymentGateway.ZARINPAL:
+        return 'زرین‌پال';
+      case PaymentGateway.DIGIPAY:
+        return 'دیجی‌پی';
+      case PaymentGateway.TARA:
+        return 'تارا';
+      default:
+        return String(gateway);
     }
   }
 }
