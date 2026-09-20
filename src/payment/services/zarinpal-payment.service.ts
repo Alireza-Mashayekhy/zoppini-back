@@ -88,14 +88,6 @@ export class ZarinpalPaymentService {
     // سفارش باید PENDING باشد و درخواست پرداخت بازی (هر درگاهی) نباشد
     await this.paymentGuard.ensureOrderPayable(order);
 
-    /*
-     * طبق مستندات زرین پال:
-     *
-     * amount باید به ریال ارسال شود.
-     *
-     * اگر finalPrice شما در دیتابیس تومان است:
-     * تومان × 10 = ریال
-     */
     const amount = this.getOrderCardAmount(order);
 
     if (!amount || amount <= 0) {
@@ -132,6 +124,8 @@ export class ZarinpalPaymentService {
           },
         }),
       );
+
+      this.logger.log(response);
 
       const data = response.data;
 

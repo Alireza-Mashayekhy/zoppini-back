@@ -858,10 +858,10 @@ export class OrdersService {
         return 170000;
 
       case ShippingMethod.COURIER:
-        return 100000;
+        return 0;
 
       case ShippingMethod.TIBAX:
-        return 120000;
+        return 0;
 
       default:
         return 0;
