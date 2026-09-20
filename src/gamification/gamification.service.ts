@@ -14,9 +14,13 @@ import {
   getPagination,
   QueryDto,
 } from 'src/common/query';
-import { Discount, DiscountType } from 'src/discounts/entities/discount.entity';
+import {
+  Discount,
+  DiscountType,
+  OPENING_DISCOUNT_CODE,
+} from 'src/discounts/entities/discount.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
-import { SmsService } from 'src/sms/sms.service';
+import { User } from 'src/users/entities/user.entity';
 import { UsersService } from 'src/users/users.service';
 import { Repository } from 'typeorm';
 
@@ -38,22 +42,8 @@ export interface GamificationQuestionStat {
   mostSelectedOption: GamificationOptionStat | null;
 }
 
-const SURVEY_DISCOUNT_AMOUNT = 2_000_000;
-export const SURVEY_EXCLUDED_CATEGORY_ID = 85;
-const SURVEY_DISCOUNT_VALID_DAYS = 30;
-const SURVEY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-function generateSurveyDiscountCode(): string {
-  let suffix = '';
-
-  for (let i = 0; i < 6; i++) {
-    suffix +=
-      SURVEY_CODE_ALPHABET[
-        Math.floor(Math.random() * SURVEY_CODE_ALPHABET.length)
-      ];
-  }
-
-  return `SURVEY-${suffix}`;
-}
+const OPENING_DISCOUNT_AMOUNT = 2_000_000;
+const OPENING_DISCOUNT_VALID_DAYS = 30;
 
 @Injectable()
 export class GamificationService {
@@ -72,7 +62,6 @@ export class GamificationService {
     private readonly clubService: ClubService,
     private readonly usersService: UsersService,
     private readonly rahkaranService: RahkaranService,
-    private readonly smsService: SmsService,
   ) {}
 
   async create(dto: CreateGamificationParticipationDto) {
@@ -142,26 +131,14 @@ export class GamificationService {
 
     if (targetUserId) {
       try {
-        discountCode = await this.createSurveyRewardDiscount(targetUserId);
+        discountCode = await this.grantOpeningDiscount(targetUserId);
 
         this.logger.log(
-          `✅ کد تخفیف ${discountCode} (${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان) برای کاربر ${targetUserId} بابت شرکت در نظرسنجی ساخته شد.`,
+          `✅ کد تخفیف ${discountCode} برای کاربر ${targetUserId} بابت شرکت در نظرسنجی فعال شد.`,
         );
-
-        try {
-          await this.smsService.sendSms(
-            dto.phone,
-            this.buildSurveySmsMessage(discountCode),
-          );
-        } catch (smsError) {
-          this.logger.error(
-            `❌ ارسال پیامک کد تخفیف ${discountCode} به ${dto.phone} ناموفق بود.`,
-            smsError instanceof Error ? smsError.stack : String(smsError),
-          );
-        }
       } catch (err) {
         this.logger.error(
-          `❌ ساخت کد تخفیف برای شرکت‌کننده ${saved.id} ناموفق بود — نیاز به بررسی دستی.`,
+          `❌ فعال‌سازی کد تخفیف ${OPENING_DISCOUNT_CODE} برای شرکت‌کننده ${saved.id} ناموفق بود — نیاز به بررسی دستی.`,
           err instanceof Error ? err.stack : String(err),
         );
       }
@@ -169,61 +146,83 @@ export class GamificationService {
 
     return {
       message: discountCode
-        ? `نظر شما با موفقیت ثبت شد. کد تخفیف ${discountCode} (${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان) برای شما فعال شد.`
+        ? `نظر شما با موفقیت ثبت شد. کد تخفیف ${discountCode} برای شما فعال شد و یک‌بار قابل استفاده است.`
         : 'نظر شما با موفقیت ثبت شد. از همراهی شما سپاسگزاریم.',
       data: saved,
       discountCode,
     };
   }
 
-  private async createSurveyRewardDiscount(userId: number): Promise<string> {
-    let code = generateSurveyDiscountCode();
+  private async grantOpeningDiscount(userId: number): Promise<string> {
+    let discount = await this.discountRepo.findOne({
+      where: { code: OPENING_DISCOUNT_CODE },
+      relations: { users: true },
+    });
 
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const existing = await this.discountRepo.findOne({ where: { code } });
-
-      if (!existing) {
-        break;
-      }
-
-      code = generateSurveyDiscountCode();
+    if (!discount) {
+      discount = await this.ensureOpeningDiscountExists();
     }
 
+    const users = discount.users ?? [];
+
+    if (!users.some(user => user.id === userId)) {
+      discount.users = [...users, { id: userId } as User];
+
+      await this.discountRepo.save(discount);
+
+      this.logger.log(
+        `🎁 کاربر ${userId} به لیست کد تخفیف ${OPENING_DISCOUNT_CODE} اضافه شد.`,
+      );
+    }
+
+    return discount.code;
+  }
+
+  private async ensureOpeningDiscountExists(): Promise<Discount> {
     const now = new Date();
     const expiresAt = new Date(
-      now.getTime() + SURVEY_DISCOUNT_VALID_DAYS * 24 * 60 * 60 * 1000,
+      now.getTime() + OPENING_DISCOUNT_VALID_DAYS * 24 * 60 * 60 * 1000,
     );
 
     const discount = this.discountRepo.create({
-      code,
+      code: OPENING_DISCOUNT_CODE,
       type: DiscountType.FIXED,
-      value: SURVEY_DISCOUNT_AMOUNT,
+      value: OPENING_DISCOUNT_AMOUNT,
       maxDiscountAmount: null,
       minOrderAmount: null,
       isActive: true,
       startsAt: now,
       expiresAt,
-      users: [{ id: userId }],
-      categories: [],
-      products: [],
     });
 
-    const saved = await this.discountRepo.save(discount);
+    try {
+      const saved = await this.discountRepo.save(discount);
 
-    this.logger.log(
-      `🎁 کد تخفیف ${saved.code} ساخته شد (مبلغ=${SURVEY_DISCOUNT_AMOUNT}, ` +
-        `انقضا=${expiresAt.toISOString()}).`,
-    );
+      this.logger.log(
+        `🎁 کد تخفیف ${OPENING_DISCOUNT_CODE} در دیتابیس وجود نداشت و با مقدار پیش‌فرض ` +
+          `(${OPENING_DISCOUNT_AMOUNT.toLocaleString()} تومان، ` +
+          `اعتبار ${OPENING_DISCOUNT_VALID_DAYS} روزه) ساخته شد.`,
+      );
 
-    return saved.code;
-  }
+      return saved;
+    } catch (error) {
+      /**
+       * unique constraint روی کد:
+       * اگر دو درخواست همزمان باشند، دیتابیس ساخت دوم را رد می‌کند.
+       */
+      const existing = await this.discountRepo.findOne({
+        where: { code: OPENING_DISCOUNT_CODE },
+      });
+      if (existing) {
+        this.logger.log(
+          `🎁 کد تخفیف ${OPENING_DISCOUNT_CODE} همزمان توسط درخواست دیگری ساخته شد.`,
+        );
 
-  private buildSurveySmsMessage(code: string): string {
-    return (
-      `🎁 کد تخفیم هدیهٔ شما بابت شرکت در نظرسنجی: ${code}\n` +
-      `تا سقف ${SURVEY_DISCOUNT_AMOUNT.toLocaleString()} تومان روی همهٔ محصولات ` +
-      `به‌جز اکسسوری به مدت ${SURVEY_DISCOUNT_VALID_DAYS} روز معتبر است.`
-    );
+        return existing;
+      }
+
+      throw error;
+    }
   }
 
   async findAll(query: QueryDto) {

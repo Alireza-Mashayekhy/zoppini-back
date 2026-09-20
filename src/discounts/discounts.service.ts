@@ -12,12 +12,18 @@ import { In, Repository } from 'typeorm';
 
 import { CreateDiscountDto } from './dto/create-discount.dto';
 import { UpdateDiscountDto } from './dto/update-discount.dto';
-import { Discount, DiscountType } from './entities/discount.entity';
+import {
+  Discount,
+  DiscountType,
+  OPENING_DISCOUNT_CODE,
+} from './entities/discount.entity';
 import { DiscountUsage } from './entities/discount-code-usage.entity';
 
 const SURVEY_DISCOUNT_CODE_PREFIX = 'SURVEY-';
 
 const HARDCODED_EXCLUDED_CATEGORY_ROOT_IDS: readonly number[] = [85];
+
+const OPENING_EXCLUDED_CATEGORY_IDS: readonly number[] = [86, 93, 94, 97, 98];
 
 const DESCENDANTS_CACHE_TTL_MS = 5 * 60_000;
 
@@ -343,7 +349,16 @@ export class DiscountService {
     return code.trim().toUpperCase().startsWith(SURVEY_DISCOUNT_CODE_PREFIX);
   }
 
-  private async getHardcodedExcludedCategoryIds(): Promise<Set<number>> {
+  private isOpeningDiscount(code: string): boolean {
+    return code.trim().toUpperCase() === OPENING_DISCOUNT_CODE;
+  }
+
+  private async getExcludedCategoryIdsForCode(
+    code: string,
+  ): Promise<Set<number>> {
+    if (!this.isSurveyDiscount(code) && !this.isOpeningDiscount(code)) {
+      return new Set<number>();
+    }
     const result = new Set<number>();
 
     for (const rootId of HARDCODED_EXCLUDED_CATEGORY_ROOT_IDS) {
@@ -352,6 +367,12 @@ export class DiscountService {
       const descendants = await this.getAllDescendantIds(rootId);
 
       for (const id of descendants) {
+        result.add(id);
+      }
+    }
+
+    if (this.isOpeningDiscount(code)) {
+      for (const id of OPENING_EXCLUDED_CATEGORY_IDS) {
         result.add(id);
       }
     }
@@ -533,12 +554,16 @@ export class DiscountService {
     let effectiveAmount = amount;
     let effectiveItems = items;
 
-    if (this.isSurveyDiscount(discount.code)) {
-      const excludedIds = await this.getHardcodedExcludedCategoryIds();
+    const excludedCategoryIds = await this.getExcludedCategoryIdsForCode(
+      discount.code,
+    );
 
+    if (excludedCategoryIds.size > 0) {
       effectiveItems = items.filter(
         item =>
-          !item.categoryIds.some(categoryId => excludedIds.has(categoryId)),
+          !item.categoryIds.some(categoryId =>
+            excludedCategoryIds.has(categoryId),
+          ),
       );
 
       if (effectiveItems.length === 0) {

@@ -3,7 +3,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ClubModule } from 'src/club/club.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
-import { SmsModule } from 'src/sms/sms.module';
 import { UsersModule } from 'src/users/users.module';
 
 import { GamificationAdminController } from './admin.gamification.controller';
@@ -19,7 +18,6 @@ import { GamificationService } from './gamification.service';
     ClubModule,
     RahkaranModule,
     UsersModule,
-    SmsModule,
   ],
   controllers: [GamificationController, GamificationAdminController],
   providers: [GamificationService],

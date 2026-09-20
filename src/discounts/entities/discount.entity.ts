@@ -19,6 +19,8 @@ export enum DiscountType {
   FIXED = 'fixed',
 }
 
+export const OPENING_DISCOUNT_CODE = 'OPENING';
+
 export interface ProductDiscount {
   id: number;
   code: string;
