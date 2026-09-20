@@ -961,7 +961,7 @@ export class OrdersService {
       paymentId: p.id,
       gateway: p.gateway,
       gatewayLabel: this.getGatewayLabel(p.gateway),
-      amount: Number(p.amount),
+      amount: Number(p.amount) / 10,
       saleReferenceId: p.saleReferenceId,
       resCode: p.resCode,
       createdAt: p.createdAt,
