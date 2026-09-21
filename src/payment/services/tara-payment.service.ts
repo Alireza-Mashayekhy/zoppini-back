@@ -286,9 +286,17 @@ export class TaraPaymentService {
       });
       await this.paymentRepo.save(payment);
 
-      const payUrl = `${apiUrl}/api/ipgPurchase`;
+      const paymentBaseUrl = `${apiUrl}/api/ipgPurchase`;
 
-      return { token, payUrl, username };
+      const payUrl =
+        `${paymentBaseUrl}?token=${encodeURIComponent(token)}` +
+        `&username=${encodeURIComponent(username)}`;
+
+      return {
+        token,
+        payUrl,
+        username,
+      };
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;

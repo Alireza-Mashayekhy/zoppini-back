@@ -66,7 +66,6 @@ export class PaymentController {
   @UseGuards(AuthGuard)
   async startPayment(
     @Req() req: AuthenticatedRequest,
-    @Res() res: Response,
     @Body() dto: RequestPaymentDto,
   ) {
     // فقط مالک سفارش می‌تواند برای آن درخواست پرداخت بدهد
@@ -82,22 +81,12 @@ export class PaymentController {
       case PaymentGateway.DIGIPAY:
         return this.digipayService.requestPayment(dto.orderId, userId);
 
-      case PaymentGateway.TARA: {
-        const { token, payUrl, username } =
-          await this.taraService.requestPayment(
-            dto.orderId,
-            userId,
-            getClientIp(req),
-          );
-
-        const paymentUrl =
-          `${payUrl}?token=${encodeURIComponent(token)}` +
-          `&username=${encodeURIComponent(username)}`;
-
-        return {
-          paymentUrl,
-        };
-      }
+      case PaymentGateway.TARA:
+        return this.taraService.requestPayment(
+          dto.orderId,
+          userId,
+          getClientIp(req),
+        );
 
       default:
         throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
