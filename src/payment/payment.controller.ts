@@ -66,6 +66,7 @@ export class PaymentController {
   @UseGuards(AuthGuard)
   async startPayment(
     @Req() req: AuthenticatedRequest,
+    @Res() res: Response,
     @Body() dto: RequestPaymentDto,
   ) {
     // فقط مالک سفارش می‌تواند برای آن درخواست پرداخت بدهد
@@ -81,14 +82,20 @@ export class PaymentController {
       case PaymentGateway.DIGIPAY:
         return this.digipayService.requestPayment(dto.orderId, userId);
 
-      case PaymentGateway.TARA:
-        // فیلد ip در getToken/purchaseVerify تارا اجباری است و باید IP واقعی
-        // کاربر باشد (خطاهای 1 = IP غیرمجاز و 88 = IP خالی)
-        return this.taraService.requestPayment(
-          dto.orderId,
-          userId,
-          getClientIp(req),
-        );
+      case PaymentGateway.TARA: {
+        const { token, payUrl, username } =
+          await this.taraService.requestPayment(
+            dto.orderId,
+            userId,
+            getClientIp(req),
+          );
+
+        const redirectUrl =
+          `${payUrl}?token=${encodeURIComponent(token)}` +
+          `&username=${encodeURIComponent(username)}`;
+
+        return res.redirect(302, redirectUrl);
+      }
 
       default:
         throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
