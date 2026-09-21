@@ -90,11 +90,13 @@ export class PaymentController {
             getClientIp(req),
           );
 
-        const redirectUrl =
+        const paymentUrl =
           `${payUrl}?token=${encodeURIComponent(token)}` +
           `&username=${encodeURIComponent(username)}`;
 
-        return res.redirect(302, redirectUrl);
+        return {
+          paymentUrl,
+        };
       }
 
       default:
