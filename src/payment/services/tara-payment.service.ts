@@ -143,7 +143,7 @@ export class TaraPaymentService {
     orderId: number,
     userId: number,
     clientIp?: string,
-  ): Promise<{ refId: string; payUrl: string; username: string }> {
+  ): Promise<{ token: string; payUrl: string; username: string }> {
     const order = await this.ordersService.findOneForPayment(orderId, userId);
     if (!order) {
       throw new BadRequestException('سفارش یافت نشد');
@@ -289,7 +289,7 @@ export class TaraPaymentService {
       this.logger.log(token, username);
       const payUrl = `${apiUrl}/api/ipgPurchase`;
 
-      return { refId: token, payUrl, username };
+      return { token, payUrl, username };
     } catch (error) {
       if (error instanceof BadRequestException) {
         throw error;
