@@ -478,7 +478,11 @@ export class OrdersService {
         // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
       }
 
-      await this.smsService.sendOrderConfirmationToCustomer(order.user.phone);
+      await this.smsService.sendOrderConfirmationToCustomer(
+        order.user.phone,
+        order.user.fullName,
+        order.id.toString(),
+      );
       await this.smsService.sendOrderNotificationToAdmin(order.id.toString());
 
       return this.findOne(order.id);

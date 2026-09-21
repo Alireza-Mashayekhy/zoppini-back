@@ -149,8 +149,19 @@ export class SmsService {
   // ۲. پیامک ثبت سفارش به مشتری (CustomerOrder)
   async sendOrderConfirmationToCustomer(
     phone: string,
+    fullName: string,
+    orderId: string,
   ): Promise<{ success: boolean }> {
-    const result = await this.sendSms(phone, 'سفارش شما با موفقیت ثبت شد');
+    const message = `
+      ${fullName} عزیز،
+      سفارش شما با موفقیت در سایت زوپینی ثبت شد.
+
+      وضعیت سفارش: ${process.env.FRONT_URL}/dashboard/orders
+      شماره سفارش: ${orderId}
+
+      Zoppini
+    `;
+    const result = await this.sendSms(phone, message);
     return { success: result.success };
   }
 

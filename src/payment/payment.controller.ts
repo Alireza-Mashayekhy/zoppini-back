@@ -58,6 +58,11 @@ export class PaymentController {
     return res.redirect(url);
   }
 
+  // private sendVerifySmsToUser(username: string, link: string) {
+  //   const result = await this.sendSms(this.adminPhone, message);
+  //   return { success: result.success };
+  // }
+
   //==============================================================
   // Start Payment
   //==============================================================
