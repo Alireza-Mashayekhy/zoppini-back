@@ -286,6 +286,7 @@ export class TaraPaymentService {
       });
       await this.paymentRepo.save(payment);
 
+      this.logger.log(token, username);
       const payUrl = `${apiUrl}/api/ipgPurchase`;
 
       return { refId: token, payUrl, username };
