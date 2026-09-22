@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
+import { StyleProfileKey } from '../style-profile';
 import { GamificationAnswer } from './gamification-answer.entity';
 
 @Entity('gamification_participations')
@@ -24,6 +25,15 @@ export class GamificationParticipation {
 
   @Column({ type: 'datetime', nullable: true })
   birthDate: Date;
+
+  @Index()
+  @Column({
+    name: 'style_profile_key',
+    type: 'varchar',
+    length: 10,
+    nullable: true,
+  })
+  styleProfileKey: StyleProfileKey | null;
 
   @OneToMany(() => GamificationAnswer, answer => answer.participation, {
     cascade: true,

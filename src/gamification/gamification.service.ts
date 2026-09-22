@@ -22,11 +22,18 @@ import {
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { User } from 'src/users/entities/user.entity';
 import { UsersService } from 'src/users/users.service';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 
 import { CreateGamificationParticipationDto } from './dto/create-gamification.dto';
 import { GamificationAnswer } from './entities/gamification-answer.entity';
 import { GamificationParticipation } from './entities/gamification-participation.entity';
+import {
+  getStyleProfile,
+  resolveStyleProfileKey,
+  STYLE_PROFILE_LIST,
+  StyleProfileContent,
+  StyleProfileKey,
+} from './style-profile';
 
 export interface GamificationOptionStat {
   optionNumber: number;
@@ -40,6 +47,11 @@ export interface GamificationQuestionStat {
   totalAnswers: number;
   options: GamificationOptionStat[];
   mostSelectedOption: GamificationOptionStat | null;
+}
+
+export interface GamificationStyleStat extends StyleProfileContent {
+  count: number;
+  percentage: number;
 }
 
 const OPENING_DISCOUNT_AMOUNT = 2_000_000;
@@ -78,11 +90,13 @@ export class GamificationService {
     }
 
     const answers = this.buildAnswers(dto.answers);
+    const styleProfileKey = resolveStyleProfileKey(dto.answers);
 
     const participation = this.participationRepo.create({
       fullName,
       phone: dto.phone,
       birthDate: dto.birthDate,
+      styleProfileKey,
       answers,
     });
 
@@ -148,7 +162,7 @@ export class GamificationService {
       message: discountCode
         ? `نظر شما با موفقیت ثبت شد. کد تخفیف ${discountCode} برای شما فعال شد و یک‌بار قابل استفاده است.`
         : 'نظر شما با موفقیت ثبت شد. از همراهی شما سپاسگزاریم.',
-      data: saved,
+      data: this.toAdminView(saved),
       discountCode,
     };
   }
@@ -393,6 +407,8 @@ export class GamificationService {
     const totalAnswers =
       questions.reduce((sum, question) => sum + question.totalAnswers, 0) / 4;
 
+    const styleProfiles = await this.getStyleProfileStats(totalParticipations);
+
     return {
       message: 'آمار نظرسنجی با موفقیت دریافت شد.',
       data: {
@@ -400,8 +416,64 @@ export class GamificationService {
         totalAnswers,
         totalQuestions: questions.length,
         questions,
+        styleProfiles,
       },
     };
+  }
+
+  private async getStyleProfileStats(
+    totalParticipations: number,
+  ): Promise<GamificationStyleStat[]> {
+    await this.backfillStyleProfileKeys();
+
+    const rows = await this.participationRepo
+      .createQueryBuilder('participation')
+      .select('participation.styleProfileKey', 'styleProfileKey')
+      .addSelect('COUNT(participation.id)', 'count')
+      .groupBy('participation.styleProfileKey')
+      .getRawMany<{ styleProfileKey: StyleProfileKey | null; count: string }>();
+
+    const countByProfileKey = new Map<string, number>(
+      rows.map(row => [row.styleProfileKey ?? '', Number(row.count)]),
+    );
+
+    return STYLE_PROFILE_LIST.map(profile => {
+      const count = countByProfileKey.get(profile.key) ?? 0;
+
+      return {
+        ...profile,
+        count,
+        percentage: totalParticipations
+          ? Math.round((count / totalParticipations) * 100)
+          : 0,
+      };
+    });
+  }
+
+  private async backfillStyleProfileKeys(): Promise<void> {
+    try {
+      const pending = await this.participationRepo.find({
+        where: { styleProfileKey: IsNull() },
+        relations: { answers: true },
+      });
+
+      if (!pending.length) return;
+
+      for (const participation of pending) {
+        await this.participationRepo.update(participation.id, {
+          styleProfileKey: resolveStyleProfileKey(participation.answers ?? []),
+        });
+      }
+
+      this.logger.log(
+        `🧩 استایل ${pending.length} شرکت‌کننده قدیمی از روی پاسخ‌هایشان محاسبه و ذخیره شد.`,
+      );
+    } catch (error) {
+      this.logger.error(
+        '❌ محاسبه استایل رکوردهای قدیمی ناموفق بود.',
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   private buildAnswers(items: CreateGamificationParticipationDto['answers']) {
@@ -448,17 +520,32 @@ export class GamificationService {
   }
 
   private toAdminView(participation: GamificationParticipation) {
+    const answers = (participation.answers ?? []).map(answer => ({
+      questionNumber: answer.questionNumber,
+      optionNumber: answer.optionNumber,
+    }));
+
     return {
       id: participation.id,
       fullName: participation.fullName,
       phone: participation.phone,
       birthDate: participation.birthDate,
-      answers: (participation.answers ?? []).map(answer => ({
-        questionNumber: answer.questionNumber,
-        optionNumber: answer.optionNumber,
-      })),
+      answers,
+      styleProfile: this.resolveParticipationStyle(participation, answers),
       answersText: participation.answersText,
       createdAt: participation.createdAt,
     };
+  }
+
+  private resolveParticipationStyle(
+    participation: GamificationParticipation,
+    answers: { questionNumber: number; optionNumber: number }[],
+  ): StyleProfileContent | null {
+    if (!participation.styleProfileKey && !answers.length) return null;
+
+    const key =
+      participation.styleProfileKey ?? resolveStyleProfileKey(answers);
+
+    return getStyleProfile(key);
   }
 }
