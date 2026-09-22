@@ -34,6 +34,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { WalletModule } from './wallet/wallet.module';
+import { ProductGuidesModule } from './product-guides/product-guides.module';
 
 @Module({
   imports: [
@@ -80,6 +81,7 @@ import { WalletModule } from './wallet/wallet.module';
     GamificationModule,
     VisitsModule,
     WalletModule,
+    ProductGuidesModule,
   ],
   controllers: [AppController],
   providers: [
