@@ -53,6 +53,7 @@ export class CartsService {
         });
 
         await this.cartRepo.save(cart);
+        cart.items = [];
       }
 
       return cart;
@@ -77,6 +78,7 @@ export class CartsService {
       if (!cart) {
         cart = this.cartRepo.create({ guestId });
         await this.cartRepo.save(cart);
+        cart.items = [];
       }
 
       return cart;
@@ -109,6 +111,7 @@ export class CartsService {
         });
 
         await this.cartRepo.save(cart);
+        cart.items = [];
       }
 
       return this.applyDiscountsToCart(cart);
@@ -133,6 +136,7 @@ export class CartsService {
       if (!cart) {
         cart = this.cartRepo.create({ guestId });
         await this.cartRepo.save(cart);
+        cart.items = [];
       }
 
       return this.applyDiscountsToCart(cart);
@@ -269,6 +273,7 @@ export class CartsService {
     if (!userCart) {
       userCart = this.cartRepo.create({ user: { id: userId } });
       await this.cartRepo.save(userCart);
+      userCart.items = [];
     }
 
     for (const guestItem of guestCart.items) {
