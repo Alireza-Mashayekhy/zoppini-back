@@ -1,5 +1,5 @@
-import { ValidationPipe } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
+import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
 import cookieParser from 'cookie-parser';
@@ -18,7 +18,16 @@ async function bootstrap() {
   const proxyCount = Number(process.env.TRUST_PROXY_COUNT ?? '1');
   app.set('trust proxy', Number.isNaN(proxyCount) ? 1 : proxyCount);
 
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('api', {
+    // درگاه ترب باید دقیقاً روی آدرسی باشد که در پنل ترب ثبت می‌شود،
+    // پس از پیشوند global مستثنا شده است.
+    exclude: [
+      {
+        path: 'torob_api/v3/products',
+        method: RequestMethod.POST,
+      },
+    ],
+  });
 
   setupSwagger(app);
 
@@ -57,7 +66,7 @@ async function bootstrap() {
     }),
   );
 
-  app.useGlobalInterceptors(new ResponseInterceptor());
+  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)));
 
   app.useStaticAssets(join(process.cwd(), 'uploads'), {
     prefix: '/uploads',

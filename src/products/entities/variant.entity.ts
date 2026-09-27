@@ -5,6 +5,7 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
   Unique,
+  UpdateDateColumn,
 } from 'typeorm';
 
 import { Product } from './product.entity';
@@ -25,6 +26,9 @@ export class Variant {
 
   @Column({ type: 'varchar', length: 255, nullable: true, unique: true })
   sku: string | null;
+
+  @UpdateDateColumn({ type: 'datetime' })
+  updatedAt: Date;
 
   @Column({ name: 'product_id' })
   productId: number;

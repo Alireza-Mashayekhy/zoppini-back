@@ -35,6 +35,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { WalletModule } from './wallet/wallet.module';
 import { ProductGuidesModule } from './product-guides/product-guides.module';
+import { TorobModule } from './torob/torob.module';
 
 @Module({
   imports: [
@@ -82,6 +83,7 @@ import { ProductGuidesModule } from './product-guides/product-guides.module';
     VisitsModule,
     WalletModule,
     ProductGuidesModule,
+    TorobModule,
   ],
   controllers: [AppController],
   providers: [
