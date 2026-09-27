@@ -1,4 +1,4 @@
-import { RequestMethod, ValidationPipe } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
@@ -18,16 +18,7 @@ async function bootstrap() {
   const proxyCount = Number(process.env.TRUST_PROXY_COUNT ?? '1');
   app.set('trust proxy', Number.isNaN(proxyCount) ? 1 : proxyCount);
 
-  app.setGlobalPrefix('api', {
-    // درگاه ترب باید دقیقاً روی آدرسی باشد که در پنل ترب ثبت می‌شود،
-    // پس از پیشوند global مستثنا شده است.
-    exclude: [
-      {
-        path: 'torob_api/v3/products',
-        method: RequestMethod.POST,
-      },
-    ],
-  });
+  app.setGlobalPrefix('api');
 
   setupSwagger(app);
 
