@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -85,6 +86,18 @@ export class UsersService {
     });
 
     if (!userEntity) throw new NotFoundException();
+
+    if (updateUserDto.email && updateUserDto.email !== userEntity.email) {
+      const existingUser = await this.usersRepository.findOne({
+        where: {
+          email: updateUserDto.email,
+        },
+      });
+
+      if (existingUser && existingUser.id !== id) {
+        throw new ConflictException('این ایمیل قبلاً استفاده شده است');
+      }
+    }
 
     Object.assign(userEntity, updateUserDto);
 
