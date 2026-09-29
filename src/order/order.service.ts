@@ -159,7 +159,10 @@ export class OrdersService {
     // 5. هزینه ارسال
     // =====================================================
 
-    const shippingCost = this.calculateShippingCost(dto.shippingMethod);
+    const shippingCost = this.calculateShippingCost(
+      dto.shippingMethod,
+      totalPrice,
+    );
 
     // =====================================================
     // 6. تخفیف
@@ -938,17 +941,20 @@ export class OrdersService {
     return this.findOneForAdmin(id);
   }
 
-  private calculateShippingCost(shippingMethod: ShippingMethod): number {
+  private calculateShippingCost(
+    shippingMethod: ShippingMethod,
+    totalPrice: number,
+  ): number {
+    // Free shipping for orders over 10 million Tomans
+    if (totalPrice >= 10000000) {
+      return 0;
+    }
     switch (shippingMethod) {
       case ShippingMethod.POST:
         return 170000;
 
       case ShippingMethod.COURIER:
-        return 0;
-
       case ShippingMethod.TIBAX:
-        return 0;
-
       default:
         return 0;
     }
