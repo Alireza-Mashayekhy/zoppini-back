@@ -67,6 +67,11 @@ interface RahkaranResponse<T> {
   };
 }
 
+interface RahkaranCustomer {
+  id: number;
+  mobile: string;
+}
+
 interface RahkaranRemainingQuantity {
   StoreID: number;
   StoreName: string;
@@ -817,6 +822,8 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       method: 'GET',
     });
 
+    this.logger.log(response);
+
     // اگر Session منقضی شده باشد ولی HTTP 200 برگشته باشد
     if (this.isSessionExpiredResponse(response)) {
       this.logger.warn(
@@ -973,6 +980,8 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     const firstName = parts.shift() || '';
     const lastName = parts.join(' ');
 
+    await this.ensureAuthenticated();
+
     const response = await this.request(
       `${this.baseUrl}/Retail/Api/Structure/CustomerService.svc/customer`,
       {
@@ -998,13 +1007,15 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     this.logger.log(`✅ ثبت کاربر موفق بود `);
 
+    const customerId = await this.getCustomerIdByMobile(user.phone);
+
     const loyalityResponse = await this.request(
       `${this.baseUrl}/Retail/LoyaltyApi/RetailLoyaltyMemberService.svc/loyaltyMember`,
       {
         method: 'POST',
         data: {
           loyaltyMemberPatternId: 3,
-          customerId: id,
+          customerId,
         },
         headers: this.authHeaders(),
       },
@@ -1018,6 +1029,53 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.logger.log(`✅ ثبت کاربر در مشتریان وفادار موفق بود `);
+  }
+
+  async getCustomerIdByMobile(mobile: string): Promise<number> {
+    const phone = mobile?.trim();
+
+    if (!phone) {
+      throw new BadRequestException(
+        'شماره موبایل مشتری برای جستجو در راهکاران مشخص نیست.',
+      );
+    }
+
+    const url =
+      `${this.baseUrl}/Services/Retail/ESales.svc/customers?` +
+      new URLSearchParams({ mobile: phone }).toString();
+
+    let response = await this.authenticatedRequest<
+      RahkaranResponse<RahkaranCustomer[] | null>
+    >(url, { method: 'GET' });
+
+    // Some Rahkaran endpoints report an expired session with HTTP 200.
+    if (this.isSessionExpiredResponse(response)) {
+      this.clearState();
+      await this.login();
+      response = await this.request<
+        RahkaranResponse<RahkaranCustomer[] | null>
+      >(url, { method: 'GET', headers: this.authHeaders() });
+    }
+
+    if (response?.metadata?.isSuccessfull !== true) {
+      throw new BadRequestException(
+        response?.metadata?.errorMessage ||
+          'جستجوی مشتری در راهکاران ناموفق بود.',
+      );
+    }
+
+    // Do not use an unrelated result (or the website's user ID) for an invoice.
+    if (response.result != null && !Array.isArray(response.result)) {
+      throw new BadRequestException('پاسخ جستجوی مشتری راهکاران معتبر نیست.');
+    }
+
+    if (!response?.result?.length) {
+      throw new BadRequestException(
+        `شناسه معتبر و یکتای مشتری با موبایل ${phone} در راهکاران پیدا نشد.`,
+      );
+    }
+
+    return response?.result[0]?.id;
   }
 
   async createSalesInvoice(
@@ -1039,7 +1097,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     const inventoryId = 20;
 
-    const settlementPolicyId = 9;
+    const settlementPolicyId = 18;
 
     const documentPatternId = 3;
 
@@ -1175,7 +1233,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     orderNumber: string;
     finalPrice: number;
     user: {
-      id: number;
+      phone: string;
     };
     items: Array<{
       quantity: number;
@@ -1193,6 +1251,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    const customerId = await this.getCustomerIdByMobile(order.user?.phone);
     const invoiceItems: CreateRahkaranInvoiceItem[] = [];
 
     for (const item of order.items) {
@@ -1259,7 +1318,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     // =====================================================
 
     const invoice = await this.createSalesInvoice({
-      customerId: Number(order.user.id),
+      customerId,
 
       items: invoiceItems,
 
@@ -1271,7 +1330,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
       salesAgentId: 4,
 
-      receiptAmount: Number(order.finalPrice),
+      receiptAmount: Number(order.finalPrice) * 10,
 
       description: `Order ${order.orderNumber}`,
     });

@@ -63,7 +63,7 @@ export interface DiatechInvoiceDetail {
 
 export interface DiatechInvoice {
   CustomerId: number;
-
+  officeId: number;
   FinalPrice: number;
 }
 
@@ -360,7 +360,9 @@ export class ClubService {
     const payload: DiatechInvoice = {
       CustomerId: customer.Id,
 
-      FinalPrice: Number(data.finalPrice) || 0,
+      officeId: 1,
+
+      FinalPrice: Number(data.finalPrice) * 10 || 0,
     };
 
     // ============================================================
