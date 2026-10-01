@@ -10,7 +10,7 @@ import {
   Min,
 } from 'class-validator';
 
-import { DiscountType } from '../entities/discount.entity';
+import { DiscountKind, DiscountType } from '../entities/discount.entity';
 
 export class CreateDiscountDto {
   @IsOptional()

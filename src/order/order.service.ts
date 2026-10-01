@@ -188,7 +188,7 @@ export class OrdersService {
     // 6. تخفیف
     // =====================================================
 
-    lets codeDiscountAmount = 0;
+    let codeDiscountAmount = 0;
     let discountId: number | null = null;
     let discountCode: string | null = null;
 
