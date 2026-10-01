@@ -189,7 +189,7 @@ export class GamificationService {
       );
     }
 
-    return discount.code;
+    return discount.code ?? OPENING_DISCOUNT_CODE;
   }
 
   private async ensureOpeningDiscountExists(): Promise<Discount> {

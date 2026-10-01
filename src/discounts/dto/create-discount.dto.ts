@@ -13,8 +13,17 @@ import {
 import { DiscountType } from '../entities/discount.entity';
 
 export class CreateDiscountDto {
+  @IsOptional()
+  @IsEnum(DiscountKind)
+  kind?: DiscountKind;
+
+  @IsOptional()
   @IsString()
-  code: string;
+  title?: string;
+
+  @IsOptional()
+  @IsString()
+  code?: string;
 
   @IsEnum(DiscountType)
   type: DiscountType;
@@ -43,6 +52,26 @@ export class CreateDiscountDto {
   @IsBoolean()
   isActive?: boolean;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxUsesPerUser?: number | null;
+
+  /**
+   * (فقط کد تخفیف) سقف کل دفعات استفاده؛ null = نامحدود
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  maxTotalUses?: number | null;
+
+  /**
+   * (فقط کد تخفیف) عدم اعمال روی کالاهای در فروش ویژه
+   */
+  @IsOptional()
+  @IsBoolean()
+  excludeSaleItems?: boolean;
+
   /**
    * خالی => همه کاربران
    */
@@ -66,4 +95,14 @@ export class CreateDiscountDto {
   @IsArray()
   @IsInt({ each: true })
   categoryIds?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  excludedProductIds?: number[];
+
+  @IsOptional()
+  @IsArray()
+  @IsInt({ each: true })
+  excludedCategoryIds?: number[];
 }

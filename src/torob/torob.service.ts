@@ -2,8 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Category } from 'src/categories/entities/category.entity';
-import { DiscountService } from 'src/discounts/discounts.service';
-import { Discount } from 'src/discounts/entities/discount.entity';
+import { ActiveSale, DiscountService } from 'src/discounts/discounts.service';
 import { Product } from 'src/products/entities/product.entity';
 import { ProductColorImage } from 'src/products/entities/product-color-image.entity';
 import { Variant } from 'src/products/entities/variant.entity';
@@ -52,7 +51,7 @@ interface CategoryLinkRow {
 }
 
 interface BuildContext {
-  discounts: Discount[];
+  discounts: ActiveSale[];
   categoryIdsByProduct: Map<number, number[]>;
   categoryNameById: Map<number, string>;
   categoryDepthById: Map<number, number>;
@@ -892,69 +891,17 @@ export class TorobService {
   }
 
   private pickBestDiscount(
-    discounts: Discount[],
+    discounts: ActiveSale[],
     productId: number,
     categoryIds: number[],
     originalPrice: number,
   ): { discountAmount: number; finalPrice: number } | null {
-    let best: { discountAmount: number; finalPrice: number } | null = null;
-
-    for (const discount of discounts) {
-      if (!this.isDiscountApplicable(discount, productId, categoryIds)) {
-        continue;
-      }
-
-      const result = this.discountsService.calculateProductDiscount(
-        discount,
-        originalPrice,
-      );
-
-      if (!best || result.discountAmount > best.discountAmount) {
-        best = {
-          discountAmount: result.discountAmount,
-          finalPrice: result.finalPrice,
-        };
-      }
-    }
-
-    return best;
-  }
-
-  /**
-   * همان منطق `DiscountService.getBestDiscountForProduct`، ولی بدون کوئری اضافه
-   * به ازای هر محصول (تخفیف‌های فعال یک‌بار برای کل صفحه خوانده می‌شود).
-   */
-  private isDiscountApplicable(
-    discount: Discount,
-    productId: number,
-    categoryIds: number[],
-  ): boolean {
-    const discountProductIds = (discount.products ?? []).map(
-      product => product.id,
+    return this.discountsService.pickBestSale(
+      discounts,
+      productId,
+      categoryIds,
+      originalPrice,
     );
-    const discountCategoryIds = (discount.categories ?? []).map(
-      category => category.id,
-    );
-
-    const hasProductRestriction = discountProductIds.length > 0;
-    const hasCategoryRestriction = discountCategoryIds.length > 0;
-
-    if (!hasProductRestriction && !hasCategoryRestriction) {
-      return true;
-    }
-
-    if (hasProductRestriction && discountProductIds.includes(productId)) {
-      return true;
-    }
-
-    if (
-      hasCategoryRestriction &&
-      discountCategoryIds.some(id => categoryIds.includes(id))
-    ) {
-      return true;
-    }
-
-    return false;
   }
 
   private buildPageUrl(row: VariantRow, variantId: number): string {

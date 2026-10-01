@@ -47,6 +47,9 @@ export class Order {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   discount: number;
 
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  saleDiscount: number;
+
   @Column({
     type: 'varchar',
     length: 100,

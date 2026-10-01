@@ -10,12 +10,14 @@ import { DiscountController } from './discount.controller';
 import { DiscountService } from './discounts.service';
 import { Discount } from './entities/discount.entity';
 import { DiscountUsage } from './entities/discount-code-usage.entity';
+import { DiscountRedemption } from './entities/discount-redemption.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Discount,
       DiscountUsage,
+      DiscountRedemption,
       User,
       Product,
       Category,

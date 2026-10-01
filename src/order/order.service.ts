@@ -138,22 +138,42 @@ export class OrdersService {
     // 4. محاسبه قیمت محصولات
     // =====================================================
 
+    const pricedLines = await this.discountService.priceCartLines(
+      cart.items.map(item => ({
+        productId: item.variant.product.id,
+        quantity: item.quantity,
+        price: Number(item.variant.price),
+        categoryIds:
+          item.variant.product.categories?.map(category => category.id) ?? [],
+      })),
+    );
+
     let totalPrice = 0;
 
-    const orderItems = cart.items.map(item => {
-      const price = Number(item.variant.price);
+    let saleDiscountAmount = 0;
+
+    const orderItems = cart.items.map((item, index) => {
+      const line = pricedLines[index];
+
+      // قیمت فریزشدهٔ هر واحد = قیمت پس از فروش ویژه
+      const price = line.unitPrice;
 
       const itemTotal = price * item.quantity;
 
-      totalPrice += itemTotal;
+      totalPrice += line.originalPrice * item.quantity;
+
+      saleDiscountAmount += line.saleDiscountPerUnit * item.quantity;
 
       return {
         variant: item.variant,
         quantity: item.quantity,
         price,
+        originalPrice: line.originalPrice,
         totalPrice: itemTotal,
       };
     });
+
+    const subtotalAfterSale = totalPrice - saleDiscountAmount;
 
     // =====================================================
     // 5. هزینه ارسال
@@ -161,22 +181,14 @@ export class OrdersService {
 
     const shippingCost = this.calculateShippingCost(
       dto.shippingMethod,
-      totalPrice,
+      subtotalAfterSale,
     );
 
     // =====================================================
     // 6. تخفیف
     // =====================================================
 
-    const discountItems = cart.items.map(item => ({
-      productId: item.variant.product.id,
-      quantity: item.quantity,
-      price: Number(item.variant.price),
-      categoryIds:
-        item.variant.product.categories?.map(category => category.id) ?? [],
-    }));
-
-    let discountAmount = 0;
+    lets codeDiscountAmount = 0;
     let discountId: number | null = null;
     let discountCode: string | null = null;
 
@@ -184,16 +196,23 @@ export class OrdersService {
       const result = await this.discountService.validateDiscount(
         dto.discountCode.trim(),
         userId,
-        totalPrice,
-        discountItems,
+        pricedLines.map(line => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          price: line.unitPrice,
+          categoryIds: line.categoryIds,
+          isOnSale: line.isOnSale,
+        })),
       );
 
-      discountAmount = Number(result.discountAmount);
+      codeDiscountAmount = Number(result.discountAmount);
 
       discountId = result.discount.id;
 
       discountCode = result.discount.code;
     }
+
+    const discountAmount = saleDiscountAmount + codeDiscountAmount;
 
     // =====================================================
     // 7. مبلغ نهایی
@@ -227,6 +246,8 @@ export class OrdersService {
       shippingCost: Number(shippingCost),
 
       discount: discountAmount,
+
+      saleDiscount: saleDiscountAmount,
 
       finalPrice,
 
@@ -357,44 +378,13 @@ export class OrdersService {
       // 2. ثبت مصرف کد تخفیف
       // =========================================================
 
-      if (order.discountCode) {
-        const discount = await queryRunner.manager.findOne(Discount, {
-          where: {
-            code: order.discountCode,
-          },
+      if (order.discountCode || order.discountId) {
+        await this.discountService.redeemInTransaction(queryRunner.manager, {
+          discountId: order.discountId,
+          code: order.discountCode,
+          userId,
+          orderId: order.id,
         });
-
-        if (!discount) {
-          throw new BadRequestException('کد تخفیف سفارش یافت نشد');
-        }
-
-        // بررسی اینکه این کاربر قبلاً این کد را مصرف نکرده
-        const existingUsage = await queryRunner.manager.findOne(DiscountUsage, {
-          where: {
-            discount: {
-              id: discount.id,
-            },
-            user: {
-              id: userId,
-            },
-          },
-        });
-
-        if (existingUsage) {
-          throw new BadRequestException(
-            'این کد تخفیف قبلاً توسط کاربر استفاده شده است',
-          );
-        }
-
-        const usage = queryRunner.manager.create(DiscountUsage, {
-          discount,
-          user: order.user,
-          order,
-        });
-
-        await queryRunner.manager.save(DiscountUsage, usage);
-
-        await queryRunner.manager.save(Discount, discount);
       }
 
       // =========================================================

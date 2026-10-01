@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -15,6 +16,7 @@ import { RolesGuard } from 'src/common/guards/roles.guard';
 
 import { DiscountService } from './discounts.service';
 import { CreateDiscountDto } from './dto/create-discount.dto';
+import { ListDiscountsQueryDto } from './dto/list-discounts.dto';
 import { UpdateDiscountDto } from './dto/update-discount.dto';
 
 @Controller('admin/discounts')
@@ -24,8 +26,8 @@ export class AdminDiscountController {
   constructor(private readonly discountService: DiscountService) {}
 
   @Get()
-  findAll() {
-    return this.discountService.findAll();
+  findAll(@Query() query: ListDiscountsQueryDto) {
+    return this.discountService.findAll(query);
   }
 
   @Get(':id')

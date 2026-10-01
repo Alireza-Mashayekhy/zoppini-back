@@ -28,6 +28,9 @@ export class OrderItem {
   @Column({ type: 'decimal', precision: 15, scale: 2 })
   price: number; // قیمت در زمان خرید (فریز شده)
 
+  @Column({ type: 'decimal', precision: 15, scale: 2, nullable: true })
+  originalPrice: number | null;
+
   @Column({ type: 'decimal', precision: 15, scale: 2 })
   totalPrice: number;
 }

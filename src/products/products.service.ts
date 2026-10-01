@@ -11,7 +11,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { CategoriesService } from 'src/categories/categories.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
-import { Discount, DiscountType } from 'src/discounts/entities/discount.entity';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranProduct } from 'src/rahkaran/rahkaran-product-sync.service';
@@ -48,8 +47,6 @@ export class ProductsService {
     private sizeRepo: Repository<Size>,
     @InjectRepository(ProductColorImage)
     private colorImageRepo: Repository<ProductColorImage>,
-    @InjectRepository(Discount)
-    private discountRepo: Repository<Discount>,
 
     @Inject(forwardRef(() => DiscountService))
     private readonly discountsService: DiscountService,
@@ -595,6 +592,7 @@ export class ProductsService {
         (variant as any).discount = {
           id: discount.id,
           code: discount.code,
+          title: discount.title,
           type: discount.type,
           value: Number(discount.value),
           maxDiscountAmount:
@@ -1169,7 +1167,7 @@ export class ProductsService {
 
     const onlyInStock = options?.onlyInStock ?? false;
 
-    const now = new Date();
+    const scope = await this.discountsService.getActiveSaleScope();
 
     const qb = this.productRepo
       .createQueryBuilder('products')
@@ -1181,79 +1179,19 @@ export class ProductsService {
       .leftJoinAndSelect('products.colorImages', 'colorImages')
       .leftJoinAndSelect('colorImages.color', 'imageColor')
 
-      // کل شرط تخفیف داخل پرانتز باشد تا با ANDهای بعدی
-      // (موجودی و جست‌وجو) درست ترکیب شود
       .where(
-        `
-        (
-        EXISTS (
-          SELECT 1
-          FROM discount_products dp
-          INNER JOIN discounts d
-            ON d.id = dp.discount_id
-          WHERE dp.product_id = products.id
-            AND d.isActive = :isActive
-            AND d.startsAt <= :now
-            AND d.expiresAt >= :now
-            AND NOT EXISTS (
-              SELECT 1
-              FROM discount_users du
-              WHERE du.discount_id = d.id
-            )
-        )
-  
-        OR
-  
-        EXISTS (
-          SELECT 1
-          FROM product_categories pc
-          INNER JOIN discount_categories dc
-            ON dc.category_id = pc.category_id
-          INNER JOIN discounts d2
-            ON d2.id = dc.discount_id
-          WHERE pc.product_id = products.id
-            AND d2.isActive = :isActive
-            AND d2.startsAt <= :now
-            AND d2.expiresAt >= :now
-            AND NOT EXISTS (
-              SELECT 1
-              FROM discount_users du2
-              WHERE du2.discount_id = d2.id
-            )
-        )
-  
-        OR
-  
-        EXISTS (
-          SELECT 1
-          FROM discounts d3
-          WHERE d3.isActive = :isActive
-            AND d3.startsAt <= :now
-            AND d3.expiresAt >= :now
-  
-            AND NOT EXISTS (
-              SELECT 1
-              FROM discount_products dp3
-              WHERE dp3.discount_id = d3.id
-            )
-  
-            AND NOT EXISTS (
-              SELECT 1
-              FROM discount_categories dc3
-              WHERE dc3.discount_id = d3.id
-            )
-  
-            AND NOT EXISTS (
-              SELECT 1
-              FROM discount_users du3
-              WHERE du3.discount_id = d3.id
-            )
-        )
-        )
-        `,
+        `(
+          ${scope.productIds.length ? 'products.id IN (:...saleProductIds)' : '1 = 0'}
+          OR EXISTS (
+            SELECT 1
+            FROM product_categories pc
+            WHERE pc.product_id = products.id
+              AND ${scope.categoryIds.length ? 'pc.category_id IN (:...saleCategoryIds)' : '1 = 0'}
+          )
+        )`,
         {
-          isActive: true,
-          now,
+          saleProductIds: scope.productIds,
+          saleCategoryIds: scope.categoryIds,
         },
       );
 
@@ -1287,59 +1225,12 @@ export class ProductsService {
     };
   }
 
-  private calculateDiscountedPrice(price: number, discount: Discount) {
-    let discountAmount = 0;
-
-    if (discount.type === DiscountType.PERCENTAGE) {
-      discountAmount = (price * Number(discount.value)) / 100;
-    }
-
-    if (discount.type === DiscountType.FIXED) {
-      discountAmount = Number(discount.value);
-    }
-
-    if (discount.maxDiscountAmount != null) {
-      discountAmount = Math.min(
-        discountAmount,
-        Number(discount.maxDiscountAmount),
-      );
-    }
-
-    discountAmount = Math.min(discountAmount, price);
-
-    return Math.max(0, price - discountAmount);
-  }
-
   private async attachDiscounts(products: Product[]) {
     if (!products.length) {
       return products;
     }
 
-    const now = new Date();
-
-    const discounts = await this.discountRepo
-      .createQueryBuilder('discount')
-      .leftJoinAndSelect('discount.products', 'discountProduct')
-      .leftJoinAndSelect('discount.categories', 'discountCategory')
-      .where('discount.isActive = :isActive', {
-        isActive: true,
-      })
-      .andWhere('discount.startsAt <= :now', { now })
-      .andWhere('discount.expiresAt >= :now', { now })
-
-      // تخفیف‌های user-specific
-      .andWhere(qb => {
-        const subQuery = qb
-          .subQuery()
-          .select('1')
-          .from('discount_users', 'du')
-          .where('du.discount_id = discount.id')
-          .getQuery();
-
-        return `NOT EXISTS ${subQuery}`;
-      })
-
-      .getMany();
+    const sales = await this.discountsService.getActiveSales();
 
     for (const product of products) {
       const categoryIds =
@@ -1356,77 +1247,34 @@ export class ProductsService {
       // کمترین قیمت variant را قیمت پایه محصول در نظر می‌گیریم
       const originalPrice = Math.min(...variantPrices);
 
-      const applicableDiscounts = discounts.filter(discount => {
-        const discountProductIds = discount.products?.map(p => p.id) ?? [];
+      const best = this.discountsService.pickBestSale(
+        sales,
+        product.id,
+        categoryIds,
+        originalPrice,
+      );
 
-        const discountCategoryIds = discount.categories?.map(c => c.id) ?? [];
-
-        // تخفیف عمومی
-        if (!discountProductIds.length && !discountCategoryIds.length) {
-          return true;
-        }
-
-        // مستقیم روی محصول
-        if (discountProductIds.includes(product.id)) {
-          return true;
-        }
-
-        // روی دسته‌بندی محصول
-        if (
-          discountCategoryIds.some(categoryId =>
-            categoryIds.includes(categoryId),
-          )
-        ) {
-          return true;
-        }
-
-        return false;
-      });
-
-      if (!applicableDiscounts.length) {
+      if (!best) {
         (product as any).discount = null;
         continue;
       }
 
-      let bestDiscount = applicableDiscounts[0];
-      let bestDiscountAmount = 0;
-
-      for (const discount of applicableDiscounts) {
-        let discountAmount = 0;
-
-        if (discount.type === DiscountType.PERCENTAGE) {
-          discountAmount = (originalPrice * Number(discount.value)) / 100;
-        } else {
-          discountAmount = Number(discount.value);
-        }
-
-        if (discount.maxDiscountAmount !== null) {
-          discountAmount = Math.min(
-            discountAmount,
-            Number(discount.maxDiscountAmount),
-          );
-        }
-
-        discountAmount = Math.min(discountAmount, originalPrice);
-
-        if (discountAmount > bestDiscountAmount) {
-          bestDiscountAmount = discountAmount;
-          bestDiscount = discount;
-        }
-      }
+      const { discount, discountAmount, finalPrice } = best;
 
       (product as any).discount = {
-        id: bestDiscount.id,
-        code: bestDiscount.code,
-        type: bestDiscount.type,
-        value: Number(bestDiscount.value),
+        id: discount.id,
+        code: discount.code,
+        title: discount.title,
+        type: discount.type,
+        value: Number(discount.value),
         maxDiscountAmount:
-          bestDiscount.maxDiscountAmount !== null
-            ? Number(bestDiscount.maxDiscountAmount)
+          discount.maxDiscountAmount !== null
+            ? Number(discount.maxDiscountAmount)
             : null,
-        discountAmount: bestDiscountAmount,
+        discountAmount,
         originalPrice,
-        finalPrice: originalPrice - bestDiscountAmount,
+        finalPrice,
+        expiresAt: discount.expiresAt,
       };
     }
 

@@ -5,6 +5,7 @@ import {
   Column,
   CreateDateColumn,
   Entity,
+  Index,
   JoinTable,
   ManyToMany,
   OneToMany,
@@ -13,17 +14,24 @@ import {
 } from 'typeorm';
 
 import { DiscountUsage } from './discount-code-usage.entity';
+import { DiscountRedemption } from './discount-redemption.entity';
 
 export enum DiscountType {
   PERCENTAGE = 'percentage',
   FIXED = 'fixed',
 }
 
+export enum DiscountKind {
+  SALE = 'sale',
+  CODE = 'code',
+}
+
 export const OPENING_DISCOUNT_CODE = 'OPENING';
 
 export interface ProductDiscount {
   id: number;
-  code: string;
+  code: string | null;
+  title: string | null;
   type: DiscountType;
   value: number;
   maxDiscountAmount: number | null;
@@ -37,8 +45,25 @@ export class Discount {
   @PrimaryGeneratedColumn()
   id: number;
 
-  @Column({ unique: true, length: 100 })
-  code: string;
+  @Index()
+  @Column({
+    type: 'enum',
+    enum: DiscountKind,
+    default: DiscountKind.CODE,
+  })
+  kind: DiscountKind;
+
+  /**
+   * عنوان نمایشی (برای فروش ویژه)
+   */
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  title: string | null;
+
+  /**
+   * فقط برای kind = CODE الزامی است. فروش ویژه کد ندارد.
+   */
+  @Column({ type: 'varchar', unique: true, length: 100, nullable: true })
+  code: string | null;
 
   @Column({
     type: 'enum',
@@ -78,6 +103,15 @@ export class Discount {
     nullable: true,
   })
   minOrderAmount: number | null;
+
+  @Column({ type: 'int', nullable: true, default: 1 })
+  maxUsesPerUser: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  maxTotalUses: number | null;
+
+  @Column({ default: false })
+  excludeSaleItems: boolean;
 
   /**
    * فعال / غیرفعال بودن توسط ادمین
@@ -135,12 +169,6 @@ export class Discount {
   })
   products: Product[];
 
-  /**
-   * اگر خالی باشد => محدودیت دسته‌بندی نداریم.
-   *
-   * اگر دسته داشته باشیم:
-   * discount روی محصولات این دسته‌ها اعمال می‌شود.
-   */
   @ManyToMany(() => Category)
   @JoinTable({
     name: 'discount_categories',
@@ -155,8 +183,39 @@ export class Discount {
   })
   categories: Category[];
 
+  @ManyToMany(() => Product)
+  @JoinTable({
+    name: 'discount_excluded_products',
+    joinColumn: {
+      name: 'discount_id',
+      referencedColumnName: 'id',
+    },
+    inverseJoinColumn: {
+      name: 'product_id',
+      referencedColumnName: 'id',
+    },
+  })
+  excludedProducts: Product[];
+
+  @ManyToMany(() => Category)
+  @JoinTable({
+    name: 'discount_excluded_categories',
+    joinColumn: {
+      name: 'discount_id',
+      referencedColumnName: 'id',
+    },
+    inverseJoinColumn: {
+      name: 'category_id',
+      referencedColumnName: 'id',
+    },
+  })
+  excludedCategories: Category[];
+
   @OneToMany(() => DiscountUsage, usage => usage.discount)
   usages: DiscountUsage[];
+
+  @OneToMany(() => DiscountRedemption, redemption => redemption.discount)
+  redemptions: DiscountRedemption[];
 
   @CreateDateColumn()
   createdAt: Date;

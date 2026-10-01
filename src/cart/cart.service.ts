@@ -328,6 +328,7 @@ export class CartsService {
         (variant as any).discount = {
           id: result.discount.id,
           code: result.discount.code,
+          title: result.discount.title,
           type: result.discount.type,
           value: Number(result.discount.value),
           maxDiscountAmount:
