@@ -36,6 +36,7 @@ import { GamificationModule } from './gamification/gamification.module';
 import { WalletModule } from './wallet/wallet.module';
 import { ProductGuidesModule } from './product-guides/product-guides.module';
 import { TorobModule } from './torob/torob.module';
+import { ModaiModule } from './modai/modai.module';
 
 @Module({
   imports: [
@@ -84,6 +85,7 @@ import { TorobModule } from './torob/torob.module';
     WalletModule,
     ProductGuidesModule,
     TorobModule,
+    ModaiModule,
   ],
   controllers: [AppController],
   providers: [

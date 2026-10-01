@@ -1341,6 +1341,147 @@ export class ProductGuidesService {
     };
   }
 
+  async resolveGuidesForProducts(
+    products: Product[],
+  ): Promise<Map<number, ResolvedProductGuides>> {
+    const result = new Map<number, ResolvedProductGuides>();
+
+    const productIds = [
+      ...new Set((products ?? []).map(product => product?.id).filter(Boolean)),
+    ];
+
+    if (!productIds.length) {
+      return result;
+    }
+
+    const categoryIds = [
+      ...new Set(
+        products.flatMap(product =>
+          (product.categories ?? []).map(category => category.id),
+        ),
+      ),
+    ];
+
+    const [categorySettings, productSettings, overrides] = await Promise.all([
+      this.loadCategorySettings(categoryIds),
+      this.productSettingRepo.find({ where: { productId: In(productIds) } }),
+      this.overrideRepo.find({ where: { productId: In(productIds) } }),
+    ]);
+
+    const settingByProductId = new Map(
+      productSettings.map(setting => [setting.productId, setting]),
+    );
+
+    const overridesByProductId = new Map<number, ProductGuideOverride[]>();
+
+    for (const override of overrides) {
+      const list = overridesByProductId.get(override.productId) ?? [];
+
+      list.push(override);
+      overridesByProductId.set(override.productId, list);
+    }
+
+    /** راهنماهای کاندید: راهنمای دسته‌ها + انتخاب اختصاصی + راهنمای پایهٔ استثناها */
+    const candidateIds: Record<GuideType, Set<number>> = {
+      [GuideType.SIZE_TABLE]: new Set<number>(),
+      [GuideType.CARE_GUIDE]: new Set<number>(),
+      [GuideType.MEASUREMENT_GUIDE]: new Set<number>(),
+    };
+
+    for (const setting of categorySettings.values()) {
+      for (const type of Object.values(GuideType)) {
+        const guideId = this.guideIdOfSetting(type, setting);
+
+        if (guideId) candidateIds[type].add(guideId);
+      }
+    }
+
+    for (const setting of productSettings) {
+      for (const type of Object.values(GuideType)) {
+        if (this.modeOfSetting(type, setting) !== GuideMode.CUSTOM) continue;
+
+        const guideId = this.guideIdOfSetting(type, setting);
+
+        if (guideId) candidateIds[type].add(guideId);
+      }
+    }
+
+    for (const override of overrides) {
+      if (override.baseGuideId) {
+        candidateIds[override.guideType].add(override.baseGuideId);
+      }
+    }
+
+    const [sizeTables, careGuides, measurementGuides] = await Promise.all([
+      this.loadSizeTableDefinitions([...candidateIds[GuideType.SIZE_TABLE]]),
+      this.loadCareGuideDefinitions([...candidateIds[GuideType.CARE_GUIDE]]),
+      this.loadMeasurementGuideDefinitions([
+        ...candidateIds[GuideType.MEASUREMENT_GUIDE],
+      ]),
+    ]);
+
+    const replacementImageIds = overrides
+      .filter(
+        override =>
+          override.guideType === GuideType.MEASUREMENT_GUIDE &&
+          override.action === GuideOverrideAction.REPLACE_IMAGE &&
+          override.value,
+      )
+      .map(override => Number(override.value))
+      .filter(id => Number.isFinite(id));
+
+    const replacementImages = replacementImageIds.length
+      ? await this.measurementImageRepo.find({
+          where: { id: In(replacementImageIds) },
+        })
+      : [];
+
+    const measurementImages = replacementImages.map(image => ({
+      id: image.id,
+      file: image.file,
+      caption: image.caption,
+    }));
+
+    for (const product of products) {
+      if (!product?.id) continue;
+
+      const setting = settingByProductId.get(product.id) ?? null;
+
+      const productOverrides =
+        overridesByProductId.get(product.id)?.map(override => ({
+          id: override.id,
+          guideType: override.guideType,
+          action: override.action,
+          targetKey: override.targetKey,
+          value: override.value,
+          baseGuideId: override.baseGuideId,
+        })) ?? [];
+
+      const input: ResolveProductGuidesInput = {
+        categories: this.buildCategoryCandidates(product, categorySettings),
+        setting: setting
+          ? {
+              sizeTableMode: setting.sizeTableMode,
+              sizeTableId: setting.sizeTableId,
+              careGuideMode: setting.careGuideMode,
+              careGuideId: setting.careGuideId,
+              measurementGuideMode: setting.measurementGuideMode,
+              measurementGuideId: setting.measurementGuideId,
+            }
+          : null,
+        sizeTables,
+        careGuides,
+        measurementGuides,
+        measurementImages,
+        overrides: productOverrides,
+      };
+
+      result.set(product.id, resolveProductGuides(input));
+    }
+
+    return result;
+  }
+
   // ============================================================
   // حل راهنما برای یک محصول
   // ============================================================
