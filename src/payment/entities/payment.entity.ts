@@ -43,7 +43,10 @@ export class Payment {
   walletChargeId: number | null;
 
   @Column({ unique: true })
-  refId: string; // RefId دریافتی از درگاه
+  refId: string; // شناسهٔ اولیهٔ دریافتی از درگاه (مثلاً ticket یا authority)
+
+  @Column({ type: 'varchar', length: 100, nullable: true, unique: true })
+  providerId: string | null;
 
   @Column({ type: 'decimal', precision: 15, scale: 2 })
   amount: number;

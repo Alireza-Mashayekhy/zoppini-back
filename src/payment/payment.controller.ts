@@ -46,7 +46,7 @@ export class PaymentController {
 
   private redirect(
     res: Response,
-    status: 'success' | 'failed',
+    status: 'success' | 'failed' | 'pending',
     orderId?: number | string,
   ) {
     let url = `${process.env.FRONT_URL}/checkout/payment/result?status=${status}`;
@@ -312,36 +312,68 @@ export class PaymentController {
   //==============================================================
 
   @Post('callback/digipay')
-  async callbackDigipay(@Req() req, @Res() res) {
-    const { ticket, status } = req.body;
+  async callbackDigipay(@Req() req: Request, @Res() res: Response) {
+    /*
+     * طبق مستند UPG، دیجی‌پی نتیجه را با POST و این فیلدها می‌فرستد:
+     * amount, providerId, trackingCode, rrn, psp, isCredit, result, type
+     * (ticket/status که قبلاً اینجا خوانده می‌شد مربوط به قرارداد دیگری بود.)
+     */
+    const rawBody = req.body as Record<string, unknown> | undefined;
+    const rawPsp = rawBody?.psp;
+    const psp = rawPsp && typeof rawPsp === 'object' ? rawPsp : undefined;
+    const callback = {
+      amount: readCallbackFieldAny(req, ['amount', 'Amount']),
+      providerId: readCallbackFieldAny(req, ['providerId', 'ProviderId']),
+      trackingCode: readCallbackFieldAny(req, ['trackingCode', 'TrackingCode']),
+      rrn: readCallbackFieldAny(req, ['rrn', 'Rrn', 'RRN']),
+      psp,
+      isCredit: readCallbackFieldAny(req, ['isCredit', 'IsCredit']),
+      type: readCallbackFieldAny(req, ['type', 'Type']),
+      result: readCallbackFieldAny(req, ['result', 'Result']),
+    };
 
-    if (!ticket) {
+    const payment = callback.providerId
+      ? await this.digipayService.findPaymentByProviderId(callback.providerId)
+      : null;
+
+    if (!payment) {
+      this.logger.warn(
+        `callback دیجی‌پی برای providerId ناشناخته دریافت شد: ${
+          callback.providerId || 'خالی'
+        }`,
+      );
+
       return this.redirect(res, 'failed');
     }
 
-    if (status !== 'success') {
-      const payment = await this.digipayService.findPaymentByRefId(ticket);
+    const normalizedResult = callback.result.toUpperCase();
 
-      if (payment) {
-        await this.digipayService.failPayment(payment);
-        if (payment.purpose === PaymentPurpose.ORDER) {
-          await this.ordersService.failOrderPayment(payment.orderId!);
-        } else {
-          await this.walletChargeService.markChargeFailed(payment);
-        }
+    if (normalizedResult === 'FAILURE') {
+      const result = await this.digipayService.failPayment(
+        payment,
+        callback.result || 'FAILURE',
+        callback,
+      );
 
-        return this.redirect(res, 'failed', payment.orderId ?? undefined);
-      }
-
-      return this.redirect(res, 'failed');
+      return this.redirect(
+        res,
+        result.pending ? 'pending' : result.success ? 'success' : 'failed',
+        result.orderId ?? payment.orderId ?? undefined,
+      );
     }
 
-    const result = await this.digipayService.verifyPayment(ticket);
+    if (normalizedResult !== 'SUCCESS') {
+      await this.digipayService.recordCallback(payment, callback);
+
+      return this.redirect(res, 'pending', payment.orderId ?? undefined);
+    }
+
+    const result = await this.digipayService.verifyPayment(payment, callback);
 
     return this.redirect(
       res,
-      result.success ? 'success' : 'failed',
-      result.orderId,
+      result.pending ? 'pending' : result.success ? 'success' : 'failed',
+      result.orderId ?? payment.orderId ?? undefined,
     );
   }
 

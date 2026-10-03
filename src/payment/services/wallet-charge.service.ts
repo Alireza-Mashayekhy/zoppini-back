@@ -58,6 +58,7 @@ export class WalletChargeService {
 
     const charge = await this.chargeRepo.findOne({
       where: { id: payment.walletChargeId },
+      relations: { user: true },
     });
 
     if (!charge) {
