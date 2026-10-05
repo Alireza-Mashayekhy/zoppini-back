@@ -48,4 +48,9 @@ export class ProductsController {
       onlyInStock: true,
     });
   }
+
+  @Get('/search-suggestions')
+  searchSuggestions(@Query() query: QueryDto) {
+    return this.productsService.getSearchSuggestions(query.search, query.limit);
+  }
 }

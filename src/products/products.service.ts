@@ -9,13 +9,21 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { CategoriesService } from 'src/categories/categories.service';
-import { applySearch, getPagination, QueryDto } from 'src/common/query';
+import {
+  addSearchRelevanceOrder,
+  applyTokenizedSearch,
+  buildNormalizedColumnExpression,
+  getPagination,
+  ParsedSearchTerm,
+  parseSearchTerm,
+  QueryDto,
+} from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranProduct } from 'src/rahkaran/rahkaran-product-sync.service';
 import { SmsService } from 'src/sms/sms.service';
-import { DataSource, In, QueryRunner, Repository } from 'typeorm';
+import { Brackets, DataSource, In, QueryRunner, Repository } from 'typeorm';
 
 import {
   AddColorDto,
@@ -31,6 +39,19 @@ import { ProductColorImage } from './entities/product-color-image.entity';
 import { Size } from './entities/product-size.entity';
 import { Variant } from './entities/variant.entity';
 import { findInStockProductIds } from './utils/stock.util';
+
+/** ستون‌هایی که جست‌وجوی متنی روی آن‌ها انجام می‌شود */
+const SEARCH_FIELDS = [
+  'products.title',
+  'products.slug',
+  'products.productCode',
+];
+
+/** سقف تعداد پیشنهادها در پاسخ «پیشنهادهای جست‌وجو» */
+const MAX_SEARCH_SUGGESTIONS = 20;
+
+/** تعداد پیشنهادهای پیش‌فرض */
+const DEFAULT_SEARCH_SUGGESTIONS = 8;
 
 @Injectable()
 export class ProductsService {
@@ -405,11 +426,7 @@ export class ProductsService {
       });
     }
 
-    applySearch(qb, query.search, [
-      'products.title',
-      'products.slug',
-      'products.productCode',
-    ]);
+    applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
 
     if (query.sort) {
       const [field, order] = query.sort.split(':');
@@ -432,6 +449,11 @@ export class ProductsService {
           qb.orderBy('products.id', direction);
       }
     }
+
+    addSearchRelevanceOrder(qb, query.search, {
+      rankField: 'products.title',
+      primary: !query.sort,
+    });
 
     const { skip, take } = getPagination(page, limit);
 
@@ -1200,11 +1222,12 @@ export class ProductsService {
       qb.andWhere('variant.stock > 0');
     }
 
-    applySearch(qb, query.search, [
-      'products.title',
-      'products.slug',
-      'products.productCode',
-    ]);
+    applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
+
+    addSearchRelevanceOrder(qb, query.search, {
+      rankField: 'products.title',
+      primary: !query.sort,
+    });
 
     const { skip, take } = getPagination(page, limit);
 
@@ -1223,6 +1246,165 @@ export class ProductsService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  async getSearchSuggestions(search: unknown, limit?: number) {
+    const term = parseSearchTerm(search);
+    const take = this.normalizeSuggestionsLimit(limit);
+
+    const related = await this.findRelatedProducts(term, take);
+
+    const popular =
+      related.length < take
+        ? await this.findNewestInStockProducts(
+            take - related.length,
+            related.map(product => product.id),
+          )
+        : [];
+
+    const categories = await this.findRelatedCategories(term, 6);
+
+    return {
+      data: {
+        term: term.spaced,
+        related,
+        popular,
+        categories,
+      },
+    };
+  }
+
+  private normalizeSuggestionsLimit(limit?: number | string) {
+    const value = Number(limit);
+
+    if (!value || Number.isNaN(value)) {
+      return DEFAULT_SEARCH_SUGGESTIONS;
+    }
+
+    return Math.min(Math.max(Math.trunc(value), 1), MAX_SEARCH_SUGGESTIONS);
+  }
+
+  /**
+   * کوئری پایه‌ی محصولات (joinهای لازم برای نمایش کارت محصول).
+   */
+  private createListQuery() {
+    return this.productRepo
+      .createQueryBuilder('products')
+      .leftJoinAndSelect('products.variants', 'variant')
+      .leftJoinAndSelect('variant.color', 'color')
+      .leftJoinAndSelect('variant.size', 'size')
+      .leftJoinAndSelect('products.categories', 'category')
+      .leftJoinAndSelect('products.colorImages', 'colorImages')
+      .leftJoinAndSelect('colorImages.color', 'imageColor');
+  }
+
+  /**
+   * نزدیک‌ترین محصولات به عبارت جست‌وجو: هر محصولی که دست‌کم یکی از
+   * کلمه‌های عبارت را داشته باشد؛ امتیازدهی بر اساس تعداد کلمه‌های پیداشده.
+   */
+  private async findRelatedProducts(
+    term: ParsedSearchTerm,
+    limit: number,
+  ): Promise<Product[]> {
+    if (term.isEmpty || !term.tokens.length || limit <= 0) {
+      return [];
+    }
+
+    const qb = this.createListQuery();
+
+    qb.andWhere('variant.stock > 0');
+
+    // دست‌کم یکی از کلمه‌ها در یکی از ستون‌های متنی باشد
+    qb.andWhere(
+      new Brackets(anyTokenQb => {
+        term.tokens.forEach((token, index) => {
+          const param = `suggestToken${index}`;
+
+          SEARCH_FIELDS.forEach(field => {
+            anyTokenQb.orWhere(
+              `${buildNormalizedColumnExpression(field)} LIKE :${param}`,
+              { [param]: `%${token}%` },
+            );
+          });
+        });
+      }),
+    );
+
+    // امتیاز: تعداد کلمه‌هایی که در عنوان پیدا شده‌اند
+    const matchScoreExpression = term.tokens
+      .map(
+        (_, index) =>
+          `(CASE WHEN ${buildNormalizedColumnExpression(
+            'products.title',
+          )} LIKE :suggestScore${index} THEN 1 ELSE 0 END)`,
+      )
+      .join(' + ');
+
+    qb.addSelect(`(${matchScoreExpression})`, 'suggest_match_score');
+    qb.setParameters(
+      Object.fromEntries(
+        term.tokens.map((token, index) => [
+          `suggestScore${index}`,
+          `%${token}%`,
+        ]),
+      ),
+    );
+
+    qb.orderBy('suggest_match_score', 'DESC');
+
+    addSearchRelevanceOrder(qb, term.spaced, {
+      rankField: 'products.title',
+      alias: 'suggest_rank',
+      primary: false,
+    });
+
+    qb.take(limit);
+
+    const products = await qb.getMany();
+
+    await this.attachDiscounts(products);
+
+    return products;
+  }
+
+  /**
+   * جدیدترین محصولات موجود (برای پیشنهاد وقتی نتیجه‌ی جست‌وجو خالی است).
+   */
+  private async findNewestInStockProducts(
+    limit: number,
+    excludeIds: number[] = [],
+  ): Promise<Product[]> {
+    if (limit <= 0) {
+      return [];
+    }
+
+    const qb = this.createListQuery();
+
+    qb.andWhere('variant.stock > 0');
+
+    if (excludeIds.length) {
+      qb.andWhere('products.id NOT IN (:...excludeIds)', { excludeIds });
+    }
+
+    qb.orderBy('products.createdAt', 'DESC').addOrderBy('products.id', 'DESC');
+    qb.take(limit);
+
+    const products = await qb.getMany();
+
+    await this.attachDiscounts(products);
+
+    return products;
+  }
+
+  /**
+   * دسته‌بندی‌هایی که نامشان با عبارت جست‌وجو می‌خواند.
+   */
+  private async findRelatedCategories(term: ParsedSearchTerm, limit: number) {
+    if (term.isEmpty) {
+      return [];
+    }
+
+    return this.categoriesService.findMatchingNames(term.spaced, limit);
   }
 
   private async attachDiscounts(products: Product[]) {

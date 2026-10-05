@@ -1,13 +1,16 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
+  addSearchRelevanceOrder,
   applySearch,
   applySort,
+  buildNormalizedColumnExpression,
   getPagination,
+  parseSearchTerm,
   QueryDto,
 } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
-import { DataSource, In, Repository } from 'typeorm';
+import { Brackets, DataSource, In, Repository } from 'typeorm';
 
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { UpdateCategoryDto } from './dto/update-category.dto';
@@ -196,6 +199,43 @@ export class CategoriesService {
       where: { id },
     });
     return this.normalizeSecondImages(payload);
+  }
+
+  async findMatchingNames(search: unknown, limit = 6): Promise<Category[]> {
+    const term = parseSearchTerm(search);
+
+    if (term.isEmpty || !term.tokens.length) {
+      return [];
+    }
+
+    const qb = this.categoriesRepository.createQueryBuilder('category');
+
+    qb.andWhere('category.isActive = :isActive', { isActive: true });
+
+    qb.andWhere(
+      new Brackets(tokenQb => {
+        term.tokens.forEach((token, index) => {
+          const param = `categoryToken${index}`;
+
+          ['category.name', 'category.slug'].forEach(field => {
+            tokenQb.orWhere(
+              `${buildNormalizedColumnExpression(field)} LIKE :${param}`,
+              { [param]: `%${token}%` },
+            );
+          });
+        });
+      }),
+    );
+
+    addSearchRelevanceOrder(qb, term.spaced, { rankField: 'category.name' });
+
+    qb.take(limit);
+
+    const categories = await qb.getMany();
+
+    return categories.map(category =>
+      this.normalizeSecondImages(category),
+    ) as Category[];
   }
 
   async findOneBySlug(slug: string) {
