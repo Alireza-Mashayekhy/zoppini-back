@@ -106,7 +106,11 @@ export class BlogBlock {
   order: number;
 
   /** عنوان اختیاری بخش (مثلاً «سوالات متداول») */
-  @Column({ length: 150, nullable: true })
+  @Column({
+    type: 'varchar',
+    length: 150,
+    nullable: true,
+  })
   title: string | null;
 
   @Column({ type: 'json', nullable: true })
