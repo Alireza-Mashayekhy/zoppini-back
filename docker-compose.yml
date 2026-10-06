@@ -1,57 +1,63 @@
-version: "3.9"
-
 services:
-  # app:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.dev
+  mysql:
+    image: mysql:8.4
+    container_name: mysql_db
+    restart: unless-stopped
 
-  #   container_name: nest_app
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: zoppini_db
 
-  #   restart: unless-stopped
+    volumes:
+      - mysql_data:/var/lib/mysql
 
-  #   ports:
-  #     - "3000:3000"
-
-  #   depends_on:
-  #     - mysql
-  #     - redis
-
-  #   volumes:
-  #     - .:/app
-  #     - /app/node_modules
-
-  #   environment:
-  #     DATABASE_HOST: mysql
-  #     DATABASE_PORT: 3306
-  #     DATABASE_USERNAME: root
-  #     DATABASE_PASSWORD: root
-  #     DATABASE_NAME: nest_db
-
-  #     REDIS_HOST: redis
-  #     REDIS_PORT: 6379
-
-  #     CHOKIDAR_USEPOLLING: "true"
-  #     CHOKIDAR_INTERVAL: 100
-
-  # mysql:
-  #   image: mysql:8.4
-  #   container_name: mysql_db
-  #   restart: unless-stopped
-  #   ports:
-  #     - "3307:3306"
-  #   environment:
-  #     MYSQL_ROOT_PASSWORD: root
-  #     MYSQL_DATABASE: nest_db
-  #   volumes:
-  #     - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7
-    container_name: redis_cache_2
+    container_name: redis_cache
     restart: unless-stopped
+
+    volumes:
+      - redis_data:/data
+
+  app:
+    build:
+      context: .
+      dockerfile: dockerfile
+
+    container_name: nest_app
+    restart: unless-stopped
+
     ports:
-      - "6380:6379"
+      - "127.0.0.1:3000:3000"
+
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+    env_file:
+      - .env
+
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      DATABASE_HOST: mysql
+      DATABASE_PORT: 3306
+
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+    volumes:
+      - ./uploads:/app/uploads
 
 volumes:
   mysql_data:
+  redis_data:

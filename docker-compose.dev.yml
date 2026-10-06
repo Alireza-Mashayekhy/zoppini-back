@@ -1,0 +1,14 @@
+services:
+  redis:
+    image: redis:7
+    container_name: zoppini_redis_dev
+    restart: unless-stopped
+
+    ports:
+      - "6380:6379"
+
+    volumes:
+      - zoppini_redis_dev:/data
+
+volumes:
+  zoppini_redis_dev:
