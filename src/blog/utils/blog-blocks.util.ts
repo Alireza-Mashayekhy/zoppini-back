@@ -11,7 +11,8 @@ import {
 
 /** سقف‌های امنیتی برای جلوگیری از payloadهای عجیب */
 export const BLOCK_LIMITS = {
-  maxBlocks: 20,
+  maxBlocks: 50,
+  maxContentLength: 500000,
   maxItemsPerBlock: 50,
   maxTitleLength: 150,
   maxQuestionLength: 500,
@@ -32,6 +33,7 @@ const DEFAULT_BLOCK_TITLES: Record<BlogBlockType, string | undefined> = {
 };
 
 export interface BlockItemInput {
+  html?: string;
   question?: string;
   answer?: string;
   mediaType?: BlogMediaType;
@@ -129,6 +131,16 @@ function normalizeItem(
   type: BlogBlockType,
   item: BlockItemInput,
 ): BlogBlockItem | null {
+  if (type === BlogBlockType.Content) {
+    const html = cleanString(
+      item.html,
+      BLOCK_LIMITS.maxContentLength,
+      'متن بخش',
+    );
+
+    return html ? { html } : null;
+  }
+
   if (type === BlogBlockType.Faq) {
     const question = cleanString(
       item.question,
@@ -258,7 +270,7 @@ export function normalizeBlocksPayload(blocks: BlockInput[]): NormalizedBlock[] 
   }
 
   const normalized: NormalizedBlock[] = [];
-  const seenTypes = new Set<BlogBlockType>();
+  let hasContent = false;
 
   for (const block of blocks) {
     const type = block?.type;
@@ -267,12 +279,7 @@ export function normalizeBlocksPayload(blocks: BlockInput[]): NormalizedBlock[] 
       throw new BadRequestException('نوع بخش مقاله نامعتبر است');
     }
 
-    if (type === BlogBlockType.Content) {
-      if (seenTypes.has(BlogBlockType.Content)) {
-        throw new BadRequestException('فقط یک بخش متن اصلی در مقاله مجاز است');
-      }
-      seenTypes.add(BlogBlockType.Content);
-    }
+    if (type === BlogBlockType.Content) hasContent = true;
 
     const title =
       cleanString(block.title, BLOCK_LIMITS.maxTitleLength, 'عنوان بخش') ??
@@ -302,7 +309,7 @@ export function normalizeBlocksPayload(blocks: BlockInput[]): NormalizedBlock[] 
 
   // اگر بخش متن اصلی ارسال نشده باشد، به ابتدای مقاله اضافه می‌شود
   // (سازگار با مقالات قدیمی که بلوکی ندارند)
-  if (!seenTypes.has(BlogBlockType.Content)) {
+  if (!hasContent) {
     normalized.unshift({
       type: BlogBlockType.Content,
       order: 0,

@@ -92,13 +92,20 @@ describe('normalizeBlocksPayload', () => {
     ).toThrow(BadRequestException);
   });
 
-  it('دو بخش متن اصلی را قبول نمی‌کند', () => {
-    expect(() =>
-      normalizeBlocksPayload([
-        { type: BlogBlockType.Content },
-        { type: BlogBlockType.Content },
-      ]),
-    ).toThrow(BadRequestException);
+  it('چند بخش متن را برای چیدمان بین سایر بخش‌ها نگه می‌دارد', () => {
+    const blocks = normalizeBlocksPayload([
+      { type: BlogBlockType.Content, items: [{ html: '<p>بخش اول</p>' }] },
+      { type: BlogBlockType.Faq, items: [{ question: 'سوال', answer: 'جواب' }] },
+      { type: BlogBlockType.Content, items: [{ html: '<p>بخش دوم</p>' }] },
+    ]);
+
+    expect(blocks.map(block => block.type)).toEqual([
+      BlogBlockType.Content,
+      BlogBlockType.Faq,
+      BlogBlockType.Content,
+    ]);
+    expect(blocks[0].items[0]).toEqual({ html: '<p>بخش اول</p>' });
+    expect(blocks[2].items[0]).toEqual({ html: '<p>بخش دوم</p>' });
   });
 
   it('آیتم مدیا بدون فایل را رد و آدرس ناامن را مسدود می‌کند', () => {

@@ -56,6 +56,9 @@ export interface BlogSliderProduct {
  * شود؛ ترتیب همان ترتیب آرایه است.
  */
 export interface BlogBlockItem {
+  /** محتوای HTML یک بخش متن */
+  html?: string;
+
   /** سوالات متداول */
   question?: string;
   answer?: string;

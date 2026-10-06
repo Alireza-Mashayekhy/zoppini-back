@@ -16,6 +16,12 @@ import { BlogBlockType } from '../entities/blog-block.entity';
 import type { BlogMediaType } from '../entities/blog-block.entity';
 
 export class BlogBlockItemDto {
+  @ApiPropertyOptional({ description: 'محتوای HTML (بلوک متن)' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500000)
+  html?: string;
+
   @ApiPropertyOptional({ description: 'متن سوال (بلوک سوالات متداول)' })
   @IsOptional()
   @IsString()
