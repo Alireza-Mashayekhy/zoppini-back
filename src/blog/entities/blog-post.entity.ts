@@ -5,9 +5,12 @@ import {
   Entity,
   JoinColumn,
   ManyToOne,
+  OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+
+import { BlogBlock } from './blog-block.entity';
 
 @Entity()
 export class BlogPost {
@@ -50,4 +53,12 @@ export class BlogPost {
   @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'authorId' })
   author: User | null;
+
+  /**
+   * بخش‌های مقاله (اسلایدر محصولات، سوالات متداول، گالری عکس/فیلم، فهرست
+   * مطالب و جایگاه متن اصلی) — ترتیب نمایش با درگ‌دراپ در پنل ادمین تعیین
+   * می‌شود و در ستون order ذخیره می‌گردد.
+   */
+  @OneToMany(() => BlogBlock, block => block.post)
+  blocks: BlogBlock[];
 }

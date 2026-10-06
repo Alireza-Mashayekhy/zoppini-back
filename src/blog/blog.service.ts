@@ -7,17 +7,29 @@ import {
   QueryDto,
 } from 'src/common/query';
 import { FilesService } from 'src/files/files.service';
-import { Repository } from 'typeorm';
+import { Product } from 'src/products/entities/product.entity';
+import { In, Repository } from 'typeorm';
 
 import { CreateBlogPostDto } from './dto/create-blog-post.dto';
+import { SaveBlogBlocksDto } from './dto/save-blog-blocks.dto';
 import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
+import { BlogBlock, BlogBlockType } from './entities/blog-block.entity';
 import { BlogPost } from './entities/blog-post.entity';
+import {
+  hydrateBlocksWithProducts,
+  normalizeBlocksPayload,
+  ProductLike,
+} from './utils/blog-blocks.util';
 
 @Injectable()
 export class BlogService {
   constructor(
     @InjectRepository(BlogPost)
     private blogRepository: Repository<BlogPost>,
+    @InjectRepository(BlogBlock)
+    private blockRepository: Repository<BlogBlock>,
+    @InjectRepository(Product)
+    private productRepository: Repository<Product>,
     private readonly filesService: FilesService,
   ) {}
 
@@ -90,7 +102,7 @@ export class BlogService {
     };
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, options?: { withBlocks?: boolean }) {
     const post = await this.blogRepository.findOne({
       where: { id },
       relations: { author: true },
@@ -98,10 +110,17 @@ export class BlogService {
 
     if (!post) throw new NotFoundException('مقاله یافت نشد');
 
+    if (options?.withBlocks) {
+      post.blocks = await this.getBlocks(post.id);
+    }
+
     return post;
   }
 
-  async findOneBySlug(slug: string, options?: { publishedOnly?: boolean }) {
+  async findOneBySlug(
+    slug: string,
+    options?: { publishedOnly?: boolean; withBlocks?: boolean },
+  ) {
     const qb = this.blogRepository
       .createQueryBuilder('post')
       .leftJoinAndSelect('post.author', 'author')
@@ -115,7 +134,86 @@ export class BlogService {
 
     if (!post) throw new NotFoundException('مقاله یافت نشد');
 
+    if (options?.withBlocks) {
+      post.blocks = await this.getBlocks(post.id);
+    }
+
     return post;
+  }
+
+  // ───────────────────────── بخش‌های مقاله (بلوک‌ها) ─────────────────────────
+
+  /** بلوک‌های مقاله به ترتیب نمایش، با اطلاعات محصول برای اسلایدرها */
+  async getBlocks(postId: number): Promise<BlogBlock[]> {
+    const blocks = await this.blockRepository.find({
+      where: { postId },
+      order: { order: 'ASC', id: 'ASC' },
+    });
+
+    const products = await this.loadSliderProducts(blocks);
+
+    return hydrateBlocksWithProducts(blocks, products);
+  }
+
+  /**
+   * ذخیره‌ی کل بخش‌های مقاله.
+   *
+   * چون ترتیب نمایش کاملاً در پنل ادمین (درگ‌دراپ) تعیین می‌شود، هر بار
+   * کل لیست جایگزین می‌شود؛ هم atomically ساده‌تر است و هم امکان جاماندن
+   * بلوک حذف‌شده را از بین می‌برد.
+   */
+  async saveBlocks(postId: number, dto: SaveBlogBlocksDto): Promise<BlogBlock[]> {
+    await this.findOne(postId);
+
+    const normalized = normalizeBlocksPayload(dto?.blocks ?? []);
+
+    await this.blockRepository.manager.transaction(async manager => {
+      await manager.delete(BlogBlock, { postId });
+
+      const rows = normalized.map(block =>
+        manager.create(BlogBlock, {
+          postId,
+          type: block.type,
+          order: block.order,
+          title: block.title,
+          settings: block.settings,
+          items: block.items.length > 0 ? block.items : null,
+        }),
+      );
+
+      if (rows.length > 0) {
+        await manager.save(rows);
+      }
+    });
+
+    return this.getBlocks(postId);
+  }
+
+  /**
+   * بارگذاری محصولات ارجاع‌شده در اسلایدرها (یک کوئری برای همه)
+   */
+  private async loadSliderProducts(blocks: BlogBlock[]): Promise<Map<number, ProductLike>> {
+    const ids = new Set<number>();
+
+    for (const block of blocks) {
+      if (block.type !== BlogBlockType.Slider) continue;
+
+      for (const item of block.items ?? []) {
+        if (typeof item.productId === 'number') ids.add(item.productId);
+      }
+    }
+
+    if (ids.size === 0) return new Map();
+
+    const products = await this.productRepository.find({
+      where: { id: In([...ids]) },
+      relations: {
+        variants: { color: true },
+        colorImages: { color: true },
+      },
+    });
+
+    return new Map(products.map(product => [product.id, product]));
   }
 
   async update(

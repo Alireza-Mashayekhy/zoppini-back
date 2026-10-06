@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UploadedFile,
   UseGuards,
@@ -22,6 +23,7 @@ import { QueryDto } from 'src/common/query';
 
 import { BlogService } from './blog.service';
 import { CreateBlogPostDto } from './dto/create-blog-post.dto';
+import { SaveBlogBlocksDto } from './dto/save-blog-blocks.dto';
 import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
 
 @UseGuards(AuthGuard, RolesGuard)
@@ -42,6 +44,21 @@ export class BlogAdminController {
   @Get()
   findAll(@Query() query: QueryDto) {
     return this.blogService.findAll(query);
+  }
+
+  /** بخش‌های مقاله (سوالات متداول، اسلایدر محصولات، مدیا و فهرست مطالب) */
+  @Get(':id/blocks')
+  findBlocks(@Param('id') id: string) {
+    return this.blogService.getBlocks(+id);
+  }
+
+  /**
+   * ذخیره‌ی ترتیب و محتوای بخش‌ها.
+   * ترتیب آرایه در body همان ترتیب نمایش در مقاله است.
+   */
+  @Put(':id/blocks')
+  saveBlocks(@Param('id') id: string, @Body() dto: SaveBlogBlocksDto) {
+    return this.blogService.saveBlocks(+id, dto);
   }
 
   @Get(':id')

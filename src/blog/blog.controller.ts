@@ -20,12 +20,15 @@ export class BlogController {
 
   @Get('slug/:slug')
   findBySlug(@Param('slug') slug: string) {
-    return this.blogService.findOneBySlug(slug, { publishedOnly: true });
+    return this.blogService.findOneBySlug(slug, {
+      publishedOnly: true,
+      withBlocks: true,
+    });
   }
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
-    const post = await this.blogService.findOne(+id);
+    const post = await this.blogService.findOne(+id, { withBlocks: true });
     if (!post.isPublished) {
       throw new NotFoundException('مقاله یافت نشد');
     }
