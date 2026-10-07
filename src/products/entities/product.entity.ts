@@ -34,6 +34,20 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   description: string;
 
+  /**
+   * متا تایتل سئو؛ اگر مدیر آن را پر نکرده باشد، فرانت‌اند از نام
+   * محصول استفاده می‌کند.
+   */
+  @Column({ length: 255, nullable: true })
+  metaTitle: string | null;
+
+  /**
+   * متا دیسکریپشن سئو؛ اگر خالی باشد، فرانت‌اند از توضیحات محصول
+   * استفاده می‌کند.
+   */
+  @Column({ type: 'text', nullable: true })
+  metaDescription: string | null;
+
   @Column({ type: 'text', nullable: true })
   careInstructionsHtml: string;
 

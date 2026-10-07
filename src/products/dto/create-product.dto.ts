@@ -59,6 +59,18 @@ export class CreateProductDto {
   @IsOptional()
   description?: string;
 
+  /** متا تایتل سئو (اختیاری — در صورت خالی بودن، نام محصول استفاده می‌شود) */
+  @ApiProperty({ required: false })
+  @IsString()
+  @IsOptional()
+  metaTitle?: string;
+
+  /** متا دیسکریپشن سئو (اختیاری — در صورت خالی بودن، توضیحات محصول استفاده می‌شود) */
+  @ApiProperty({ required: false })
+  @IsString()
+  @IsOptional()
+  metaDescription?: string;
+
   @ApiProperty()
   @IsString()
   @IsOptional()

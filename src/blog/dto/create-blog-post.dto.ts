@@ -17,6 +17,18 @@ export class CreateBlogPostDto {
   @IsString()
   excerpt?: string;
 
+  /** متا تایتل سئو (اختیاری — در صورت خالی بودن، عنوان مقاله استفاده می‌شود) */
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  metaTitle?: string;
+
+  /** متا دیسکریپشن سئو (اختیاری — در صورت خالی بودن، خلاصه‌ی مقاله استفاده می‌شود) */
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  metaDescription?: string;
+
   @ApiProperty()
   @IsString()
   content: string;

@@ -26,6 +26,20 @@ export class BlogPost {
   @Column({ type: 'text', nullable: true })
   excerpt: string;
 
+  /**
+   * متا تایتل سئو؛ اگر مدیر آن را پر نکرده باشد، فرانت‌اند از عنوان
+   * مقاله استفاده می‌کند.
+   */
+  @Column({ length: 255, nullable: true })
+  metaTitle: string | null;
+
+  /**
+   * متا دیسکریپشن سئو؛ اگر خالی باشد، فرانت‌اند از خلاصه‌ی مقاله
+   * استفاده می‌کند.
+   */
+  @Column({ type: 'text', nullable: true })
+  metaDescription: string | null;
+
   @Column({ type: 'text' })
   content: string;
 

@@ -26,6 +26,7 @@ import { PaymentModule } from './payment/payment.module';
 import { ProductsModule } from './products/products.module';
 import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
+import { SeoModule } from './seo/seo.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
 import { UsersModule } from './users/users.module';
@@ -86,6 +87,7 @@ import { ModaiModule } from './modai/modai.module';
     ProductGuidesModule,
     TorobModule,
     ModaiModule,
+    SeoModule,
   ],
   controllers: [AppController],
   providers: [

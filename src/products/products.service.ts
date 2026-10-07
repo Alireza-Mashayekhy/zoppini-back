@@ -89,6 +89,8 @@ export class ProductsService {
       title,
       slug,
       description,
+      metaTitle,
+      metaDescription,
       careInstructionsHtml,
       categoryIds,
       variants,
@@ -105,6 +107,8 @@ export class ProductsService {
       title,
       slug,
       description,
+      metaTitle,
+      metaDescription,
       careInstructionsHtml,
       image,
     });
