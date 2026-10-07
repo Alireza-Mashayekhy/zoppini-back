@@ -22,11 +22,11 @@ export class PageSeo {
   path: string;
 
   /** نام نمایشی صفحه برای پنل مدیریت (مثل «درباره ما») */
-  @Column({ length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   label: string | null;
 
   /** متا تایتل صفحه؛ اگر خالی باشد، عنوان پیش‌فرض خود صفحه استفاده می‌شود */
-  @Column({ length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   metaTitle: string | null;
 
   /** متا دیسکریپشن صفحه؛ اگر خالی باشد، توضیحات پیش‌فرض خود صفحه استفاده می‌شود */
