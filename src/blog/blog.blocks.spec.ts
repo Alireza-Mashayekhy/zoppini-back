@@ -10,17 +10,17 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
+import { AuthGuard } from 'src/common/guards/auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
+import { ResponseInterceptor } from 'src/common/interceptors/response.interceptor';
+import { FilesService } from 'src/files/files.service';
 import { Product } from 'src/products/entities/product.entity';
 import request from 'supertest';
 
-import { BlogService } from './blog.service';
 import { BlogAdminController } from './blog.admin.controller';
+import { BlogService } from './blog.service';
 import { BlogBlock } from './entities/blog-block.entity';
 import { BlogPost } from './entities/blog-post.entity';
-import { FilesService } from 'src/files/files.service';
-import { ResponseInterceptor } from 'src/common/interceptors/response.interceptor';
-import { AuthGuard } from 'src/common/guards/auth.guard';
-import { RolesGuard } from 'src/common/guards/roles.guard';
 
 /**
  * تست یکپارچه‌ی API بخش‌های مقاله.
@@ -56,8 +56,12 @@ describe('Blog blocks API', () => {
   };
 
   const blockRepository = {
-    manager: { transaction: jest.fn(async (callback: any) => callback(managerMock)) },
-    find: jest.fn(async () => storedBlocks.map((row, index) => ({ id: index + 1, ...row }))),
+    manager: {
+      transaction: jest.fn(async (callback: any) => callback(managerMock)),
+    },
+    find: jest.fn(async () =>
+      storedBlocks.map((row, index) => ({ id: index + 1, ...row })),
+    ),
   };
 
   const blogRepository = {
@@ -74,10 +78,18 @@ describe('Blog blocks API', () => {
         slug: 'classic-suit',
         image: 'images/cover.webp',
         variants: [
-          { price: '9800000', stock: 2, colorId: 1, color: { id: 1, name: 'مشکی', hexCode: '#000' } },
+          {
+            price: '9800000',
+            stock: 2,
+            colorId: 1,
+            color: { id: 1, name: 'مشکی', hexCode: '#000' },
+          },
         ],
         colorImages: [
-          { url: 'images/black.webp', color: { id: 1, name: 'مشکی', hexCode: '#000' } },
+          {
+            url: 'images/black.webp',
+            color: { id: 1, name: 'مشکی', hexCode: '#000' },
+          },
         ],
       },
     ]),
@@ -119,12 +131,17 @@ describe('Blog blocks API', () => {
       .send({
         blocks: [
           { type: 'toc', title: 'فهرست این مطلب' },
-          { type: 'slider', items: [{ productId: 3, colorId: 1, badge: 'جدید' }] },
+          {
+            type: 'slider',
+            items: [{ productId: 3, colorId: 1, badge: 'جدید' }],
+          },
           { type: 'content' },
           {
             type: 'faq',
             title: 'سوالات پرتکرار',
-            items: [{ question: 'چطور سایز را انتخاب کنم؟', answer: 'جدول سایز...' }],
+            items: [
+              { question: 'چطور سایز را انتخاب کنم؟', answer: 'جدول سایز...' },
+            ],
           },
         ],
       })
@@ -164,7 +181,9 @@ describe('Blog blocks API', () => {
   it('اگر بخش متن اصلی فرستاده نشود، خودش به ابتدای مقاله اضافه می‌شود', async () => {
     const response = await request(app.getHttpServer())
       .put('/api/admin/blog/5/blocks')
-      .send({ blocks: [{ type: 'faq', items: [{ question: 'س؟', answer: 'ج' }] }] })
+      .send({
+        blocks: [{ type: 'faq', items: [{ question: 'س؟', answer: 'ج' }] }],
+      })
       .expect(200);
 
     expect(response.body.data.map((block: any) => block.type)).toEqual([
@@ -193,8 +212,12 @@ describe('Blog blocks API', () => {
 
     const blocks = response.body.data;
 
-    expect(blocks.find((block: any) => block.type === 'faq').items).toHaveLength(1);
-    expect(blocks.find((block: any) => block.type === 'slider').items).toEqual([]);
+    expect(
+      blocks.find((block: any) => block.type === 'faq').items,
+    ).toHaveLength(1);
+    expect(blocks.find((block: any) => block.type === 'slider').items).toEqual(
+      [],
+    );
   });
 
   it('سوال بدون پاسخ را با خطای ۴۰۰ رد می‌کند', async () => {
@@ -206,16 +229,34 @@ describe('Blog blocks API', () => {
     expect(response.body.message).toContain('سوال و پاسخ');
   });
 
-  it('نوع بخش ناشناخته و دومین بخش متن اصلی را رد می‌کند', async () => {
+  it('نوع بخش ناشناخته را رد می‌کند', async () => {
     await request(app.getHttpServer())
       .put('/api/admin/blog/5/blocks')
       .send({ blocks: [{ type: 'gallery' }] })
       .expect(400);
+  });
 
-    await request(app.getHttpServer())
+  /**
+   * چند بخش متن مجاز است: مقاله می‌تواند بین اسلایدر/گالری/FAQ تکه‌تکه
+   * نوشته شود (همان چیدمانی که ادیتور یکپارچه در HTML می‌سازد).
+   */
+  it('چند بخش متن را برای چیدمان بین سایر بخش‌ها می‌پذیرد', async () => {
+    const response = await request(app.getHttpServer())
       .put('/api/admin/blog/5/blocks')
-      .send({ blocks: [{ type: 'content' }, { type: 'content' }] })
-      .expect(400);
+      .send({
+        blocks: [
+          { type: 'content', items: [{ html: '<p>قبل</p>' }] },
+          { type: 'toc' },
+          { type: 'content', items: [{ html: '<p>بعد</p>' }] },
+        ],
+      })
+      .expect(200);
+
+    expect(response.body.data.map((block: any) => block.type)).toEqual([
+      'content',
+      'toc',
+      'content',
+    ]);
   });
 
   it('مقاله‌ی ناموجود را ۴۰۴ برمی‌گرداند', async () => {
@@ -241,7 +282,9 @@ describe('Blog blocks API', () => {
         order: 1,
         title: null,
         settings: null,
-        items: [{ mediaType: 'video', url: 'videos/a.mp4', poster: 'images/p.webp' }],
+        items: [
+          { mediaType: 'video', url: 'videos/a.mp4', poster: 'images/p.webp' },
+        ],
       },
     ];
 

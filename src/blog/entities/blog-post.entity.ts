@@ -40,7 +40,16 @@ export class BlogPost {
   @Column({ type: 'text', nullable: true })
   metaDescription: string | null;
 
-  @Column({ type: 'text' })
+  /**
+   * کل محتوای مقاله به‌شکل HTML.
+   *
+   * از نسخه‌ی ادیتور یکپارچه به بعد، متن مقاله و همه‌ی بلوک‌های ویژه
+   * (اسلایدر محصولات، گالری، سوالات متداول و فهرست مطالب) در همین یک
+   * ستون ذخیره می‌شوند؛ بلوک‌ها به‌شکل
+   * `<div data-zp-block="…" data-zp-config="…">` داخل HTML می‌نشینند.
+   * longtext چون یک مقاله‌ی بلند با چند گالری از سقف ۶۴KB عبور می‌کند.
+   */
+  @Column({ type: 'longtext' })
   content: string;
 
   @Column({ nullable: true })

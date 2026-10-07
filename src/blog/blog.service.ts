@@ -16,10 +16,15 @@ import { UpdateBlogPostDto } from './dto/update-blog-post.dto';
 import { BlogBlock, BlogBlockType } from './entities/blog-block.entity';
 import { BlogPost } from './entities/blog-post.entity';
 import {
+  HydratableBlock,
   hydrateBlocksWithProducts,
   normalizeBlocksPayload,
   ProductLike,
 } from './utils/blog-blocks.util';
+import {
+  hasEditorBlocks,
+  resolveBlocksFromContent,
+} from './utils/blog-content.util';
 
 @Injectable()
 export class BlogService {
@@ -111,7 +116,7 @@ export class BlogService {
     if (!post) throw new NotFoundException('مقاله یافت نشد');
 
     if (options?.withBlocks) {
-      post.blocks = await this.getBlocks(post.id);
+      post.blocks = await this.resolveBlocks(post);
     }
 
     return post;
@@ -135,13 +140,38 @@ export class BlogService {
     if (!post) throw new NotFoundException('مقاله یافت نشد');
 
     if (options?.withBlocks) {
-      post.blocks = await this.getBlocks(post.id);
+      post.blocks = await this.resolveBlocks(post);
     }
 
     return post;
   }
 
   // ───────────────────────── بخش‌های مقاله (بلوک‌ها) ─────────────────────────
+
+  /**
+   * بخش‌های نمایشی یک مقاله.
+   *
+   * منبع اصلی، خود HTML مقاله است: ادیتور یکپارچه اسلایدر/گالری/FAQ/فهرست
+   * را به‌شکل `<div data-zp-block>` داخل content ذخیره می‌کند و اینجا به
+   * همان ساختار بخش‌ها ترجمه می‌شود تا ترتیب دقیقاً همان چیزی باشد که
+   * ادمین چیده است.
+   *
+   * مقاله‌های قدیمی که این نشانه را ندارند، مثل قبل از جدول blog_blocks
+   * خوانده می‌شوند (بدون نیاز به اسکریپت مهاجرت).
+   */
+  private async resolveBlocks(post: BlogPost): Promise<BlogBlock[]> {
+    if (!hasEditorBlocks(post.content)) {
+      return this.getBlocks(post.id);
+    }
+
+    const blocks = resolveBlocksFromContent(post.content) as HydratableBlock[];
+    const products = await this.loadSliderProducts(blocks);
+
+    return hydrateBlocksWithProducts(
+      blocks,
+      products,
+    ) as unknown as BlogBlock[];
+  }
 
   /** بلوک‌های مقاله به ترتیب نمایش، با اطلاعات محصول برای اسلایدرها */
   async getBlocks(postId: number): Promise<BlogBlock[]> {
@@ -162,7 +192,10 @@ export class BlogService {
    * کل لیست جایگزین می‌شود؛ هم atomically ساده‌تر است و هم امکان جاماندن
    * بلوک حذف‌شده را از بین می‌برد.
    */
-  async saveBlocks(postId: number, dto: SaveBlogBlocksDto): Promise<BlogBlock[]> {
+  async saveBlocks(
+    postId: number,
+    dto: SaveBlogBlocksDto,
+  ): Promise<BlogBlock[]> {
     await this.findOne(postId);
 
     const normalized = normalizeBlocksPayload(dto?.blocks ?? []);
@@ -192,7 +225,9 @@ export class BlogService {
   /**
    * بارگذاری محصولات ارجاع‌شده در اسلایدرها (یک کوئری برای همه)
    */
-  private async loadSliderProducts(blocks: BlogBlock[]): Promise<Map<number, ProductLike>> {
+  private async loadSliderProducts(
+    blocks: HydratableBlock[],
+  ): Promise<Map<number, ProductLike>> {
     const ids = new Set<number>();
 
     for (const block of blocks) {
