@@ -12,7 +12,7 @@ import {
 /** سقف‌های امنیتی برای جلوگیری از payloadهای عجیب */
 export const BLOCK_LIMITS = {
   maxBlocks: 50,
-  maxContentLength: 500000,
+  maxContentLength: 2000000,
   maxItemsPerBlock: 50,
   maxTitleLength: 150,
   maxQuestionLength: 500,
@@ -64,7 +64,7 @@ export interface NormalizedBlock {
 }
 
 /** رشته‌ی تمیزشده یا undefined (رشته‌ی خالی حذف می‌شود) */
-function cleanString(
+export function cleanString(
   value: unknown,
   maxLength: number,
   label: string,
@@ -127,7 +127,7 @@ function validProductId(value: unknown): number | undefined {
   return parsed;
 }
 
-function normalizeItem(
+export function normalizeItem(
   type: BlogBlockType,
   item: BlockItemInput,
 ): BlogBlockItem | null {
@@ -237,7 +237,7 @@ function normalizeItem(
   return null;
 }
 
-function normalizeSettings(
+export function normalizeSettings(
   type: BlogBlockType,
   settings: BlogBlockSettings | undefined,
 ): BlogBlockSettings | null {
@@ -463,7 +463,8 @@ export function buildSliderProduct(
 }
 
 export interface HydratableBlock {
-  id: number;
+  /** بلوک‌های ساخته‌شده از HTML مقاله هنوز رکورد دیتابیس (و id) ندارند */
+  id?: number;
   type: BlogBlockType;
   order: number;
   title: string | null;
