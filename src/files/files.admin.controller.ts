@@ -162,7 +162,7 @@ export class FilesAdminController {
 
   /**
    * خروجی یکسان برای همه‌ی آپلودها:
-   * `url` و `filename` اولین فایل (چون ادیتور nilfam فقط یک url می‌خواند)
+   * `url` و `filename` اولین فایل (چون ادیتور متن برای هر آپلود یک url می‌خواند)
    * و لیست کامل در `urls` / `filenames` / `files`.
    */
   private buildResponse(files: UploadedFileResult[]) {
