@@ -5,8 +5,8 @@ services:
     restart: unless-stopped
 
     ports:
-      - "127.0.0.1:3307:3306"
-      
+      - "3307:3306"
+
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: zoppini_db
