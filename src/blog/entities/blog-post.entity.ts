@@ -30,7 +30,7 @@ export class BlogPost {
    * متا تایتل سئو؛ اگر مدیر آن را پر نکرده باشد، فرانت‌اند از عنوان
    * مقاله استفاده می‌کند.
    */
-  @Column({ length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   metaTitle: string | null;
 
   /**

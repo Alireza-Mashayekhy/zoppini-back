@@ -38,7 +38,7 @@ export class Product {
    * متا تایتل سئو؛ اگر مدیر آن را پر نکرده باشد، فرانت‌اند از نام
    * محصول استفاده می‌کند.
    */
-  @Column({ length: 255, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true })
   metaTitle: string | null;
 
   /**

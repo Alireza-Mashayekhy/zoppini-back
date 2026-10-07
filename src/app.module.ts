@@ -13,31 +13,31 @@ import { AuthModule } from './auth/auth.module';
 import { B2bRequestModule } from './b2b-request/b2b-request.module';
 import { BlogModule } from './blog/blog.module';
 import { CartsModule } from './cart/cart.module';
+import { CatalogModule } from './catalog/catalog.module';
 import { CategoriesModule } from './categories/categories.module';
 import { ClubModule } from './club/club.module';
 import { TypeOrmConfigService } from './common/config/typeorm.config';
 import { ContactModule } from './contact/contact.module';
 import { DiscountsModule } from './discounts/discounts.module';
 import { FilesModule } from './files/files.module';
+import { GamificationModule } from './gamification/gamification.module';
 import { LocationsModule } from './locations/locations.module';
+import { ModaiModule } from './modai/modai.module';
 import { OrdersModule } from './order/order.module';
 import { OtpModule } from './otp/otp.module';
 import { PaymentModule } from './payment/payment.module';
+import { ProductGuidesModule } from './product-guides/product-guides.module';
 import { ProductsModule } from './products/products.module';
 import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
 import { SeoModule } from './seo/seo.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
+import { TorobModule } from './torob/torob.module';
 import { UsersModule } from './users/users.module';
 import { VisitsModule } from './visits/visits.module';
-import { WishlistModule } from './wishlist/wishlist.module';
-import { CatalogModule } from './catalog/catalog.module';
-import { GamificationModule } from './gamification/gamification.module';
 import { WalletModule } from './wallet/wallet.module';
-import { ProductGuidesModule } from './product-guides/product-guides.module';
-import { TorobModule } from './torob/torob.module';
-import { ModaiModule } from './modai/modai.module';
+import { WishlistModule } from './wishlist/wishlist.module';
 
 @Module({
   imports: [
