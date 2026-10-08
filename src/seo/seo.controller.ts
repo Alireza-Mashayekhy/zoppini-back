@@ -44,4 +44,23 @@ export class SeoController {
   findAll() {
     return this.seoService.findAll({ all: true, page: 1, limit: 500 });
   }
+
+  /**
+   * ریدایرکت 301 ثبت‌شده برای یک مسیر.
+   * اگر ریدایرکتی ثبت نشده باشد، `data` برابر `null` است.
+   */
+  @Get('redirect')
+  findRedirect(@Query('path') path?: string) {
+    if (!path) {
+      throw new BadRequestException('پارامتر path الزامی است');
+    }
+
+    return this.seoService.findRedirectByPath(path);
+  }
+
+  /** همه‌ی ریدایرکت‌های 301 ثبت‌شده (برای proxy فرانت‌اند) */
+  @Get('redirects')
+  findAllRedirects() {
+    return this.seoService.findAllRedirects();
+  }
 }

@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { BlogPost } from 'src/blog/entities/blog-post.entity';
 import { Category } from 'src/categories/entities/category.entity';
 import { Product } from 'src/products/entities/product.entity';
+import { SeoService } from 'src/seo/seo.service';
 import { Repository } from 'typeorm';
 
 import { SitemapItemDto } from './dto/sitemap-item.dto';
@@ -17,6 +18,7 @@ export class SitemapService {
     private productRepo: Repository<Product>,
     @InjectRepository(BlogPost)
     private blogRepo: Repository<BlogPost>,
+    private seoService: SeoService,
   ) {}
 
   async getSitemapData(): Promise<{
@@ -24,6 +26,10 @@ export class SitemapService {
     products: SitemapItemDto[];
     blogPosts: SitemapItemDto[];
   }> {
+    // مسیرهایی که در پنل سئو، noindex یا ریدایرکت 301 گرفته‌اند
+    // نباید در نقشه‌ی سایت بیایند.
+    const excludedPaths = new Set(await this.seoService.getExcludedPaths());
+
     const categories = await this.categoryRepo.find({
       select: { name: true, slug: true, updatedAt: true },
       where: { isActive: true },
@@ -50,9 +56,15 @@ export class SitemapService {
     });
 
     return {
-      categories: categories.map(c => ({ name: c.name, slug: c.slug })),
-      products: products.map(p => ({ name: p.title, slug: p.slug })),
-      blogPosts: blogPosts.map(b => ({ name: b.title, slug: b.slug })),
+      categories: categories
+        .filter(c => !excludedPaths.has(`/product-category/${c.slug}`))
+        .map(c => ({ name: c.name, slug: c.slug })),
+      products: products
+        .filter(p => !excludedPaths.has(`/product/${p.slug}`))
+        .map(p => ({ name: p.title, slug: p.slug })),
+      blogPosts: blogPosts
+        .filter(b => !excludedPaths.has(`/blog/${b.slug}`))
+        .map(b => ({ name: b.title, slug: b.slug })),
     };
   }
 }
