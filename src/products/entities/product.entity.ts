@@ -48,6 +48,20 @@ export class Product {
   @Column({ type: 'text', nullable: true })
   metaDescription: string | null;
 
+  /**
+   * آیا صفحه‌ی محصول در نتایج جستجو ایندکس شود؟
+   * `false` یعنی تگ `noindex` روی صفحه می‌آید و از نقشه‌ی سایت هم حذف می‌شود.
+   */
+  @Column({ type: 'boolean', default: true })
+  indexable: boolean;
+
+  /**
+   * آیا خزنده‌ها لینک‌های صفحه‌ی محصول را دنبال (follow) کنند؟
+   * `false` یعنی تگ `nofollow` روی صفحه اعمال می‌شود.
+   */
+  @Column({ type: 'boolean', default: true })
+  followable: boolean;
+
   @Column({ type: 'text', nullable: true })
   careInstructionsHtml: string;
 

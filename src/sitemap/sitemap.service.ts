@@ -48,11 +48,14 @@ export class SitemapService {
             AND v.stock > 0
         )`,
       )
+      // محصولات noindex شده در پنل محصول، در نقشه‌ی سایت نمی‌آیند
+      .andWhere('product.indexable = 1')
       .getRawMany<{ title: string; slug: string }>();
 
     const blogPosts = await this.blogRepo.find({
       select: { title: true, slug: true, updatedAt: true },
-      where: { isPublished: true },
+      // مقاله‌های منتشرشده و ایندکس‌شونده در نقشه‌ی سایت می‌آیند
+      where: { isPublished: true, indexable: true },
     });
 
     return {

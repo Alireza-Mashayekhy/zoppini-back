@@ -91,6 +91,8 @@ export class ProductsService {
       description,
       metaTitle,
       metaDescription,
+      indexable,
+      followable,
       careInstructionsHtml,
       categoryIds,
       variants,
@@ -109,6 +111,8 @@ export class ProductsService {
       description,
       metaTitle,
       metaDescription,
+      indexable: indexable ?? true,
+      followable: followable ?? true,
       careInstructionsHtml,
       image,
     });

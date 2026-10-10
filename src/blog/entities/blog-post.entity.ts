@@ -41,6 +41,20 @@ export class BlogPost {
   metaDescription: string | null;
 
   /**
+   * آیا صفحه‌ی مقاله در نتایج جستجو ایندکس شود؟
+   * `false` یعنی تگ `noindex` روی صفحه می‌آید و از نقشه‌ی سایت هم حذف می‌شود.
+   */
+  @Column({ type: 'boolean', default: true })
+  indexable: boolean;
+
+  /**
+   * آیا خزنده‌ها لینک‌های صفحه‌ی مقاله را دنبال (follow) کنند؟
+   * `false` یعنی تگ `nofollow` روی صفحه اعمال می‌شود.
+   */
+  @Column({ type: 'boolean', default: true })
+  followable: boolean;
+
+  /**
    * کل محتوای مقاله به‌شکل HTML.
    *
    * از نسخه‌ی ادیتور یکپارچه به بعد، متن مقاله و همه‌ی بلوک‌های ویژه

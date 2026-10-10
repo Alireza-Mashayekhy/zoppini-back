@@ -2,6 +2,7 @@ import { ApiProperty } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -9,6 +10,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
+import { coerceOptionalBoolean } from 'src/common/utils/coerce-optional-boolean';
 
 class CreateVariantDto {
   @ApiProperty()
@@ -70,6 +72,28 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   metaDescription?: string;
+
+  /** ایندکس شدن صفحه‌ی محصول در گوگل (پیش‌فرض: بله) */
+  @ApiProperty({
+    required: false,
+    default: true,
+    description: 'false یعنی صفحه‌ی محصول با تگ noindex منتشر می‌شود',
+  })
+  @IsOptional()
+  @Transform(({ value }) => coerceOptionalBoolean(value))
+  @IsBoolean()
+  indexable?: boolean;
+
+  /** دنبال شدن لینک‌های صفحه‌ی محصول توسط خزنده‌ها (پیش‌فرض: بله) */
+  @ApiProperty({
+    required: false,
+    default: true,
+    description: 'false یعنی تگ nofollow روی صفحه‌ی محصول اعمال می‌شود',
+  })
+  @IsOptional()
+  @Transform(({ value }) => coerceOptionalBoolean(value))
+  @IsBoolean()
+  followable?: boolean;
 
   @ApiProperty()
   @IsString()
