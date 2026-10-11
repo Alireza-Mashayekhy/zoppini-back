@@ -10,13 +10,6 @@ import {
   UploadKind,
 } from './upload-presets';
 
-/** پوشه‌ی هر نوع فایل داخل uploads (برای مرتب ماندن فایل‌ها) */
-const KIND_FOLDERS: Record<UploadKind, string> = {
-  image: 'images',
-  video: 'videos',
-  audio: 'audios',
-};
-
 export interface SavedFile {
   filename: string;
   url: string;
@@ -67,7 +60,7 @@ export class FilesService {
     const filename = `${uuidv4()}${ext}`;
 
     // مسیر کامل دایرکتوری uploads (در ریشه پروژه)
-    const uploadDir = path.join(process.cwd(), 'uploads', KIND_FOLDERS[kind]);
+    const uploadDir = path.join(process.cwd(), 'uploads');
 
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
@@ -78,7 +71,7 @@ export class FilesService {
     return {
       filename,
       /** مسیر نسبی از ریشه‌ی uploads — همان چیزی که در دیتابیس ذخیره می‌شود */
-      url: `${KIND_FOLDERS[kind]}/${filename}`,
+      url: filename,
       kind,
       size: file.size,
     };
