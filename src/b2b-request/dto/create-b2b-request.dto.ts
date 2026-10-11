@@ -28,10 +28,10 @@ export class CreateB2BRequestDto {
   @MaxLength(20)
   phone: string;
 
+  @IsOptional()
   @IsEmail()
-  @IsNotEmpty()
   @MaxLength(100)
-  email: string;
+  email?: string;
 
   @IsString()
   @IsNotEmpty()
