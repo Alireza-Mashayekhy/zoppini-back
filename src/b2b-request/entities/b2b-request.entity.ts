@@ -24,7 +24,7 @@ export class B2BRequest {
   @Column({ length: 20 })
   phone: string;
 
-  @Column({ length: 100 })
+  @Column({ length: 100, nullable: true })
   email: string;
 
   @Column({ length: 200 })
