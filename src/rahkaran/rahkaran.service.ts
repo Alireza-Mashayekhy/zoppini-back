@@ -67,6 +67,73 @@ interface RahkaranResponse<T> {
   };
 }
 
+/**
+ * انبار خرده‌فروشی (انبار قبلی سایت)
+ *
+ * RAHKARAN_STOCK_STORE_ID نام قدیمی این تنظیم است
+ * و هنوز به عنوان fallback پشتیبانی می‌شود.
+ */
+export const RETAIL_WAREHOUSE_ID = Number(
+  process.env.RAHKARAN_RETAIL_STORE_ID ||
+    process.env.RAHKARAN_STOCK_STORE_ID ||
+    20,
+);
+
+/**
+ * انبار هدیش مال (انبار جدید)
+ */
+export const HADISH_MALL_WAREHOUSE_ID = Number(
+  process.env.RAHKARAN_HADISH_MALL_STORE_ID || 23,
+);
+
+export interface RahkaranWarehouseStock {
+  storeId: number;
+  storeName: string | null;
+  quantity: number;
+}
+
+/**
+ * موجودی یک محصول را به تفکیک انبار استخراج می‌کند.
+ *
+ * اگر انباری در پاسخ راهکاران نباشد، موجودی آن صفر در نظر گرفته می‌شود.
+ */
+export function extractWarehouseStock(
+  stocks: RahkaranRemainingQuantity[] | null | undefined,
+  storeId: number,
+): RahkaranWarehouseStock {
+  const store = (stocks ?? []).find(
+    item => Number(item.StoreID) === Number(storeId),
+  );
+
+  const quantity = Number(store?.RemainingQuantity ?? 0);
+
+  return {
+    storeId: Number(storeId),
+    storeName: store?.StoreName ?? null,
+    quantity: Number.isFinite(quantity) ? quantity : 0,
+  };
+}
+
+/**
+ * موجودی هر دو انبار را برمی‌گرداند.
+ */
+export function extractBothWarehouseStocks(
+  stocks: RahkaranRemainingQuantity[] | null | undefined,
+): {
+  hadishMall: RahkaranWarehouseStock;
+  retail: RahkaranWarehouseStock;
+  total: number;
+} {
+  const hadishMall = extractWarehouseStock(stocks, HADISH_MALL_WAREHOUSE_ID);
+  const retail = extractWarehouseStock(stocks, RETAIL_WAREHOUSE_ID);
+
+  return {
+    hadishMall,
+    retail,
+    total: hadishMall.quantity + retail.quantity,
+  };
+}
+
 interface RahkaranCustomer {
   id: number;
   mobile: string;
@@ -91,6 +158,13 @@ export interface CreateRahkaranInvoiceItem {
   quantity: number;
   fee: number;
   price: number;
+
+  /**
+   * انباری که این آیتم از آن ثبت می‌شود.
+   *
+   * اگر ارسال نشود از انبار پیش‌فرض (خرده‌فروشی) استفاده می‌شود.
+   */
+  inventoryId?: number;
 }
 
 export interface CreateRahkaranInvoiceInput {
@@ -951,7 +1025,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
   async getRemainingQuantityForStore(
     productId: number,
-    storeId = 20,
+    storeId = RETAIL_WAREHOUSE_ID,
   ): Promise<number | null> {
     const result = await this.getRemainingQuantityInfo(productId);
 
@@ -1095,7 +1169,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    const inventoryId = 20;
+    const inventoryId = input.inventoryId ?? RETAIL_WAREHOUSE_ID;
 
     const settlementPolicyId = 18;
 
@@ -1104,7 +1178,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     const items = input.items.map(item => ({
       Id: 0,
 
-      inventoryId,
+      /**
+       * هر آیتم می‌تواند از انبار متفاوتی ثبت شود.
+       *
+       * مثلاً بخشی از انبار هدیش مال و
+       * باقی از انبار خرده‌فروشی.
+       */
+      inventoryId: item.inventoryId ?? inventoryId,
 
       settlementPolicyId,
 
@@ -1293,23 +1373,72 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      invoiceItems.push({
-        productId: Number(rahkaranProduct.productId),
+      const quantity = Number(item.quantity);
 
-        unitId: Number(unitId),
+      // =====================================================
+      // موجودی هر دو انبار
+      // =====================================================
 
-        quantity: Number(item.quantity),
+      const remainingQuantityInfo = await this.getRemainingQuantityInfo(
+        rahkaranProduct.productId,
+      );
 
-        // قیمت پایه خود Rahkaran
-        fee: rahkaranFee,
+      const { hadishMall, retail, total } = extractBothWarehouseStocks(
+        remainingQuantityInfo,
+      );
 
-        // قیمت فروش ثبت‌شده در Order
-        price: Number(item.price),
-      });
+      // =====================================================
+      // بررسی کفایت موجودی (هدیش مال + خرده‌فروشی)
+      // =====================================================
+
+      if (total < quantity) {
+        throw new BadRequestException(
+          `موجودی کافی برای محصول ${rahkaranProduct.productName} ` +
+            `(SKU=${sku}) در انبارهای راهکاران وجود ندارد. ` +
+            `لازم: ${quantity} | ` +
+            `هدیش مال: ${hadishMall.quantity} | ` +
+            `خرده‌فروشی: ${retail.quantity}`,
+        );
+      }
+
+      // =====================================================
+      // تقسیم بین انبارها:
+      //
+      // اول انبار هدیش مال،
+      // اگر کافی نبود هرچقدر بود از هدیش مال،
+      // باقی از انبار خرده‌فروشی.
+      // =====================================================
+
+      const fromHadishMall = Math.min(quantity, hadishMall.quantity);
+
+      const fromRetail = quantity - fromHadishMall;
+
+      if (fromHadishMall > 0) {
+        invoiceItems.push({
+          productId: Number(rahkaranProduct.productId),
+          unitId: Number(unitId),
+          quantity: fromHadishMall,
+          fee: rahkaranFee,
+          price: Number(item.price),
+          inventoryId: HADISH_MALL_WAREHOUSE_ID,
+        });
+      }
+
+      if (fromRetail > 0) {
+        invoiceItems.push({
+          productId: Number(rahkaranProduct.productId),
+          unitId: Number(unitId),
+          quantity: fromRetail,
+          fee: rahkaranFee,
+          price: Number(item.price),
+          inventoryId: RETAIL_WAREHOUSE_ID,
+        });
+      }
 
       this.logger.log(
         `🛒 Order ${order.id} -> ` +
-          `SKU ${sku} -> Rahkaran Product ${rahkaranProduct.productId}`,
+          `SKU ${sku} -> Rahkaran Product ${rahkaranProduct.productId} | ` +
+          `QTY ${quantity} = هدیش مال ${fromHadishMall} + خرده‌فروشی ${fromRetail}`,
       );
     }
 
@@ -1321,14 +1450,6 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       customerId,
 
       items: invoiceItems,
-
-      inventoryId: 3,
-
-      settlementPolicyId: 61,
-
-      documentPatternId: 1,
-
-      salesAgentId: 4,
 
       receiptAmount: Number(order.finalPrice) * 10,
 

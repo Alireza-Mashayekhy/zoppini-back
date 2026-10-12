@@ -24,6 +24,22 @@ export class Variant {
   @Column({ default: 0 })
   stock: number;
 
+  /**
+   * موجودی انبار خرده‌فروشی (StoreID = 20)
+   *
+   * با Sync از راهکاران به‌روز می‌شود.
+   */
+  @Column({ name: 'stock_retail', default: 0 })
+  stockRetail: number;
+
+  /**
+   * موجودی انبار هدیش مال (StoreID = 23)
+   *
+   * با Sync از راهکاران به‌روز می‌شود.
+   */
+  @Column({ name: 'stock_hadish_mall', default: 0 })
+  stockHadishMall: number;
+
   @Column({ type: 'varchar', length: 255, nullable: true, unique: true })
   sku: string | null;
 

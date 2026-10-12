@@ -21,6 +21,7 @@ import {
 import { DiscountService } from 'src/discounts/discounts.service';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
+import { extractBothWarehouseStocks } from 'src/rahkaran/rahkaran.service';
 import { RahkaranProduct } from 'src/rahkaran/rahkaran-product-sync.service';
 import { SmsService } from 'src/sms/sms.service';
 import { Brackets, DataSource, In, QueryRunner, Repository } from 'typeorm';
@@ -1478,8 +1479,67 @@ export class ProductsService {
       count,
     );
 
+    // ============================================================
+    // دریافت موجودی هر دو انبار برای هر محصول صفحه
+    //
+    // برای نمایش تب انبارها در پنل ادمین
+    // ============================================================
+
+    const STOCK_CONCURRENCY = 5;
+
+    const productsWithStock: Array<
+      RahkaranProduct & {
+        stockHadishMall: number | null;
+        stockRetail: number | null;
+      }
+    > = [];
+
+    await this.runWithConcurrency(
+      products,
+      STOCK_CONCURRENCY,
+      async product => {
+        try {
+          const remainingQuantity =
+            await this.rahkaranService.getRemainingQuantityInfo(
+              product.productId,
+            );
+
+          const { hadishMall, retail } =
+            extractBothWarehouseStocks(remainingQuantity);
+
+          productsWithStock.push({
+            ...product,
+            stockHadishMall: hadishMall.quantity,
+            stockRetail: retail.quantity,
+          });
+        } catch (error) {
+          this.logger.warn(
+            `⚠️ دریافت موجودی انبارها برای محصول راهکاران ` +
+              `${product.productId} ناموفق بود.`,
+            error instanceof Error ? error.message : String(error),
+          );
+
+          productsWithStock.push({
+            ...product,
+            stockHadishMall: null,
+            stockRetail: null,
+          });
+        }
+      },
+    );
+
+    // ترتیب اولیه محصولات حفظ شود
+    const orderMap = new Map(
+      products.map((product, index) => [product.productId, index]),
+    );
+
+    productsWithStock.sort(
+      (a, b) =>
+        (orderMap.get(a.productId) ?? 0) - (orderMap.get(b.productId) ?? 0),
+    );
+
     return {
-      data: products,
+      data: productsWithStock,
       pagination: {
         page,
         count,
@@ -1559,7 +1619,7 @@ export class ProductsService {
         }
 
         // ==========================================================
-        // 3. دریافت موجودی از StoreService
+        // 3. دریافت موجودی هر دو انبار از StoreService
         // ==========================================================
 
         const remainingQuantity =
@@ -1567,20 +1627,19 @@ export class ProductsService {
             productIdRahkaran,
           );
 
-        const store = remainingQuantity.find(
-          item => Number(item.StoreID) === 20,
-        );
-
-        if (!store) {
+        if (!remainingQuantity?.length) {
           this.logger.warn(
-            `⚠️ انبار StoreID=20 برای SKU=${sku} ` +
-              `و RahkaranProductID=${productIdRahkaran} پیدا نشد.`,
+            `⚠️ هیچ اطلاعاتی از انبارها برای SKU=${sku} ` +
+              `و RahkaranProductID=${productIdRahkaran} دریافت نشد.`,
           );
 
           continue;
         }
 
-        const newStock = Number(store.RemainingQuantity);
+        const { hadishMall, retail, total } =
+          extractBothWarehouseStocks(remainingQuantity);
+
+        const newStock = total;
 
         // ==========================================================
         // 4. اعتبارسنجی موجودی
@@ -1589,7 +1648,7 @@ export class ProductsService {
         if (!Number.isFinite(newStock)) {
           this.logger.error(
             `❌ موجودی نامعتبر | SKU=${sku} | ` +
-              `RemainingQuantity=${JSON.stringify(store.RemainingQuantity)}`,
+              `هدیش مال=${hadishMall.quantity} | خرده‌فروشی=${retail.quantity}`,
           );
 
           continue;
@@ -1610,6 +1669,8 @@ export class ProductsService {
 
         variant.price = newPrice;
         variant.stock = newStock;
+        variant.stockRetail = retail.quantity;
+        variant.stockHadishMall = hadishMall.quantity;
 
         variantsToUpdate.push(variant);
 
@@ -1618,7 +1679,7 @@ export class ProductsService {
             `SKU=${sku} | ` +
             `RahkaranProductID=${productIdRahkaran} | ` +
             `Price=${newPrice} | ` +
-            `Stock=${newStock}`,
+            `Stock=${newStock} (هدیش مال=${hadishMall.quantity} + خرده‌فروشی=${retail.quantity})`,
         );
       } catch (error) {
         this.logger.error(
@@ -1659,11 +1720,6 @@ export class ProductsService {
      * تعداد Variantهایی که در هر save ذخیره می‌شوند.
      */
     const SAVE_CHUNK_SIZE = 100;
-
-    /**
-     * انبار فروشگاه
-     */
-    const STORE_ID = 20;
 
     let page = 1;
 
@@ -1925,7 +1981,7 @@ export class ProductsService {
               // ====================================================
               // دریافت موجودی
               //
-              // فقط StoreID = 20
+              // هر دو انبار: هدیش مال (23) + خرده‌فروشی (20)
               // ====================================================
 
               totalQuantityRequests++;
@@ -1935,31 +1991,31 @@ export class ProductsService {
                   rahkaranProductId,
                 );
 
-              const storeInfo = quantityInfo.find(
-                item => Number(item.StoreID) === STORE_ID,
-              );
-
               // ====================================================
-              // انبار پیدا نشد
+              // هیچ اطلاعاتی از انبارها دریافت نشد
               // ====================================================
 
-              if (!storeInfo) {
+              if (!quantityInfo?.length) {
                 totalSkipped++;
 
                 this.logger.warn(
-                  `⚠️ انبار StoreID=${STORE_ID} ` +
-                    `برای SKU=${sku} پیدا نشد. ` +
-                    `RahkaranProductID=${rahkaranProductId}`,
+                  `⚠️ هیچ اطلاعاتی از انبارها برای SKU=${sku} ` +
+                    `دریافت نشد. RahkaranProductID=${rahkaranProductId}`,
                 );
 
                 return;
               }
 
+              const { hadishMall, retail, total } =
+                extractBothWarehouseStocks(quantityInfo);
+
               // ====================================================
               // Stock
+              //
+              // موجودی قابل فروش سایت = جمع هر دو انبار
               // ====================================================
 
-              const newStock = Number(storeInfo.RemainingQuantity);
+              const newStock = total;
 
               if (!Number.isFinite(newStock)) {
                 totalFailed++;
@@ -1967,9 +2023,8 @@ export class ProductsService {
                 this.logger.error(
                   `❌ موجودی نامعتبر | ` +
                     `SKU=${sku} | ` +
-                    `RemainingQuantity=${JSON.stringify(
-                      storeInfo.RemainingQuantity,
-                    )}`,
+                    `هدیش مال=${hadishMall.quantity} | ` +
+                    `خرده‌فروشی=${retail.quantity}`,
                 );
 
                 return;
@@ -2021,13 +2076,18 @@ export class ProductsService {
 
               variant.stock = newStock;
 
+              variant.stockRetail = retail.quantity;
+
+              variant.stockHadishMall = hadishMall.quantity;
+
               variantsToUpdate.push(variant);
 
               this.logger.debug(
                 `🔄 تغییر Variant | ` +
                   `SKU=${sku} | ` +
                   `Price=${oldPrice}->${newPrice} | ` +
-                  `Stock=${oldStock}->${newStock}`,
+                  `Stock=${oldStock}->${newStock} ` +
+                  `(هدیش مال=${hadishMall.quantity} + خرده‌فروشی=${retail.quantity})`,
               );
             } catch (error) {
               // ====================================================

@@ -1,15 +1,11 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 import { Product } from '../products/entities/product.entity';
 import { Variant } from '../products/entities/variant.entity';
 import { RahkaranService } from './rahkaran.service';
+import { extractBothWarehouseStocks } from './rahkaran.service';
 
 export interface RahkaranProduct {
   productId: number;
@@ -49,8 +45,6 @@ interface SyncResult {
 export class RahkaranProductSyncService {
   private readonly logger = new Logger(RahkaranProductSyncService.name);
 
-  private readonly stockStoreId: number;
-
   /**
    * حداکثر تعداد request همزمان برای گرفتن موجودی
    *
@@ -66,13 +60,7 @@ export class RahkaranProductSyncService {
 
     @InjectRepository(Variant)
     private readonly variantRepo: Repository<Variant>,
-  ) {
-    this.stockStoreId = Number(process.env.RAHKARAN_STOCK_STORE_ID || 0);
-
-    if (!this.stockStoreId) {
-      this.logger.warn('RAHKARAN_STOCK_STORE_ID تنظیم نشده است.');
-    }
-  }
+  ) {}
 
   // ============================================================
   // 1. Sync ALL Products
@@ -280,7 +268,9 @@ export class RahkaranProductSyncService {
 
       const newPrice = Number(rahkaranProduct.fee ?? 0) / 10;
 
-      const newStock = this.extractStock(stockResult);
+      const stock = this.extractStock(stockResult);
+
+      const newStock = stock.total;
 
       const oldPrice = Number(variant.price);
       const oldStock = Number(variant.stock);
@@ -292,6 +282,8 @@ export class RahkaranProductSyncService {
       } else {
         variant.price = newPrice;
         variant.stock = newStock;
+        variant.stockRetail = stock.retail;
+        variant.stockHadishMall = stock.hadishMall;
 
         variantsToSave.push(variant);
 
@@ -447,29 +439,32 @@ export class RahkaranProductSyncService {
   // Extract Stock
   // ============================================================
 
+  /**
+   * موجودی هر دو انبار را از پاسخ راهکاران استخراج می‌کند.
+   *
+   * موجودی قابل فروش سایت = جمع هدیش مال + خرده‌فروشی
+   */
   private extractStock(
     stocks: Awaited<ReturnType<RahkaranService['getRemainingQuantityInfo']>>,
-  ): number {
+  ): {
+    total: number;
+    retail: number;
+    hadishMall: number;
+  } {
     if (!stocks?.length) {
-      return 0;
+      return {
+        total: 0,
+        retail: 0,
+        hadishMall: 0,
+      };
     }
 
-    if (!this.stockStoreId) {
-      throw new BadRequestException('RAHKARAN_STOCK_STORE_ID تنظیم نشده است.');
-    }
+    const { hadishMall, retail, total } = extractBothWarehouseStocks(stocks);
 
-    const store = stocks.find(
-      item => Number(item.StoreID) === this.stockStoreId,
-    );
-
-    if (!store) {
-      return 0;
-    }
-
-    /**
-     * RemainingQuantity همان موجودی قابل فروش است
-     * که مستندات راهکاران برای موجودی محصول برمی‌گرداند.
-     */
-    return Number(store.RemainingQuantity ?? 0);
+    return {
+      total,
+      retail: retail.quantity,
+      hadishMall: hadishMall.quantity,
+    };
   }
 }
