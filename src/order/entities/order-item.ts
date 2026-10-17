@@ -18,9 +18,12 @@ export class OrderItem {
   @JoinColumn({ name: 'order_id' })
   order: Order;
 
-  @ManyToOne(() => Variant, { onDelete: 'CASCADE' })
+  @Column({ name: 'variant_id', nullable: true })
+  variantId: number | null;
+
+  @ManyToOne(() => Variant, { onDelete: 'SET NULL', nullable: true })
   @JoinColumn({ name: 'variant_id' })
-  variant: Variant;
+  variant: Variant | null;
 
   @Column({ type: 'int' })
   quantity: number;

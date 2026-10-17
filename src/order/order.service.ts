@@ -346,6 +346,10 @@ export class OrdersService {
       // =========================================================
 
       for (const item of order.items) {
+        if (!item.variant) {
+          continue;
+        }
+
         const variant = await queryRunner.manager.findOne(Variant, {
           where: {
             id: item.variant.id,
