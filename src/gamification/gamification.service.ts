@@ -277,6 +277,23 @@ export class GamificationService {
       );
     }
 
+    // فیلتر بازه تاریخ (از - تا)
+    if (query.from) {
+      const fromDate = new Date(query.from);
+      if (!Number.isNaN(fromDate.getTime())) {
+        qb.andWhere('participation.createdAt >= :fromDate', { fromDate });
+      }
+    }
+
+    if (query.to) {
+      const toDate = new Date(query.to);
+      if (!Number.isNaN(toDate.getTime())) {
+        // تا انتهای روز انتخاب‌شده
+        toDate.setHours(23, 59, 59, 999);
+        qb.andWhere('participation.createdAt <= :toDate', { toDate });
+      }
+    }
+
     if (query.sort) {
       applySort(qb, query.sort, 'participation');
     } else {
@@ -286,10 +303,12 @@ export class GamificationService {
       );
     }
 
+    const isAll = query.all === 'true' || query.all === true;
+
     let data: GamificationParticipation[];
     let total: number;
 
-    if (query.all) {
+    if (isAll) {
       data = await qb.getMany();
       total = data.length;
     } else {

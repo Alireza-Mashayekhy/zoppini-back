@@ -110,10 +110,21 @@ export class VisitsService {
 
     qb.orderBy('visit.createdAt', 'DESC').addOrderBy('visit.id', 'DESC');
 
-    const { skip, take } = getPagination(page, limit);
-    qb.skip(skip).take(take);
+    // حالت «همه رکوردها» برای خروجی CSV (بدون صفحه‌بندی)
+    const isAll = query.all === 'true' || query.all === true;
 
-    const [data, total] = await qb.getManyAndCount();
+    let data: Visit[];
+    let total: number;
+
+    if (isAll) {
+      data = await qb.getMany();
+      total = data.length;
+    } else {
+      const { skip, take } = getPagination(page, limit);
+      qb.skip(skip).take(take);
+
+      [data, total] = await qb.getManyAndCount();
+    }
 
     return {
       data,
