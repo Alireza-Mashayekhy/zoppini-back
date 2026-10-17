@@ -39,6 +39,106 @@ export interface DiatechCustomer {
   StateName?: string | null;
   CityName?: string | null;
   Address?: string | null;
+  RegisterDate?: string | null;
+  Coupons?: DiatechCoupon[];
+  ExtendedProperties?: Array<{ Name: string; Value: string }>;
+  Categories?: string[];
+  Tags?: string[];
+  Wallets?: DiatechCustomerWallet[];
+}
+
+export interface DiatechCustomerWallet {
+  Id: number;
+  OfficeId?: number | null;
+  WalletId?: number | null;
+  AvailableCredit: number;
+}
+
+export interface DiatechCoupon {
+  Id: number;
+  /** 1 = عمومی، 2 = خصوصی */
+  CouponTypeIndex: number;
+  Title: string;
+  Code: string;
+  IsActive: boolean;
+  IsSystem: boolean;
+  CouponPrice: number;
+  SerialNumber?: number | null;
+  /** 1 = درصدی، 2 = مبلغی */
+  DiscountTypeIndex: number;
+  DiscountValue: number;
+  /** 1 = بازه زمانی، 2 = تعداد روز بعد از تخصیص */
+  ExpireTypeIndex: number;
+  StartDate?: string | null;
+  ExpireDate?: string | null;
+  ExpireDaysAfterAssignment?: number | null;
+  MaximumDiscountPrice?: number | null;
+  MinimumOrderPrice?: number | null;
+  NumberOfUse?: number | null;
+  NumberOfUsePerCustomer?: number | null;
+  IsUseAlone: boolean;
+  OfficeId?: number | null;
+  IsUsed: boolean;
+  CreateDate?: string;
+}
+
+export interface DiatechWalletWithOffice {
+  Wallet?: string | null;
+  Office?: string | null;
+}
+
+export interface DiatechLoyaltyHistory {
+  Id: number;
+  Date: string;
+  PersianDate?: string;
+  ProgramTypeIndex: number;
+  ProgramType?: string;
+  Point?: number | null;
+  PersianPoint?: string | null;
+  Credit?: number | null;
+  PersianCredit?: string | null;
+  PriceListId?: number | null;
+  PriceListName?: string | null;
+  CouponId?: number | null;
+  CouponName?: string | null;
+  LuckyWheelHistoryId?: number | null;
+  Description?: string | null;
+  CustomerId?: number | null;
+  CustomerFullName?: string | null;
+  OfficeId?: number | null;
+  OfficeName?: string | null;
+  WalletWithOfficeName?: DiatechWalletWithOffice | null;
+  RelatedCustomerActivityId?: number | null;
+  RelatedActivity?: string | null;
+  CustomerRemainingCredit?: number | null;
+  PersianCustomerRemainingCredit?: string | null;
+  CreditExpireDate?: string | null;
+  PersianCreditExpireDate?: string | null;
+  IsExpireCredit?: boolean;
+}
+
+export interface DiatechLoyaltyLevel {
+  Id: number;
+  Title: string;
+  FromPoint?: number | null;
+  ToPoint?: number | null;
+  /** غلط املایی موجود در مستند دایاتک */
+  Prioprity?: number;
+  Description?: string | null;
+}
+
+export interface DiatechWalletTransaction {
+  Id: number;
+  CustomerWalletId?: number;
+  /** فیلدهای این DTO در مستند دایاتک جدول ندارند؛ به‌صورت منعطف مصرف می‌شود */
+  [key: string]: unknown;
+}
+
+export interface DiatechPayment {
+  Id: number;
+  CustomerId?: number;
+  /** فیلدهای این DTO در مستند دایاتک جدول ندارند؛ به‌صورت منعطف مصرف می‌شود */
+  [key: string]: unknown;
 }
 
 export interface DiatechInvoiceDetail {
@@ -320,6 +420,125 @@ export class ClubService {
     this.checkResponse(response, 'دریافت مشتری از باشگاه دایاتک');
 
     return response.Payload;
+  }
+
+  // ============================================================
+  // Customer Wallets
+  // ============================================================
+
+  /**
+   * دریافت کیف پول‌های مشتری
+   *
+   * GET /api/v1/customers/{customerCode}/wallets
+   * GET /api/v1/customers/{customerCode}/wallets/office/{officeId}
+   */
+  async getCustomerWallets(
+    customerCode: string,
+    officeId?: number,
+  ): Promise<DiatechCustomerWallet[]> {
+    const encodedCustomerCode = encodeURIComponent(customerCode);
+
+    const url =
+      officeId != null
+        ? `/api/v1/customers/${encodedCustomerCode}/wallets/office/${officeId}`
+        : `/api/v1/customers/${encodedCustomerCode}/wallets`;
+
+    const response = await this.request<
+      DiatechResponse<DiatechCustomerWallet[]>
+    >({
+      method: 'GET',
+      url,
+    });
+
+    this.checkResponse(response, 'دریافت کیف پول‌های مشتری از باشگاه دایاتک');
+
+    return response.Payload ?? [];
+  }
+
+  /**
+   * دریافت تراکنش‌های کیف پول مشتری
+   *
+   * GET /api/v1/wallet-transactions/customer-wallet/{customerWalletId}
+   */
+  async getCustomerWalletTransactions(
+    customerWalletId: number,
+  ): Promise<DiatechWalletTransaction[]> {
+    const response = await this.request<
+      DiatechResponse<DiatechWalletTransaction[]>
+    >({
+      method: 'GET',
+      url: `/api/v1/wallet-transactions/customer-wallet/${customerWalletId}`,
+    });
+
+    this.checkResponse(response, 'دریافت تراکنش‌های کیف پول از باشگاه دایاتک');
+
+    return response.Payload ?? [];
+  }
+
+  // ============================================================
+  // Loyalty
+  // ============================================================
+
+  /**
+   * دریافت تاریخچه وفاداری مشتری (امتیاز / اعتبار / بن)
+   *
+   * GET /api/v1/loyalty/{customerCode}/Histories
+   */
+  async getCustomerLoyaltyHistories(
+    customerCode: string,
+  ): Promise<DiatechLoyaltyHistory[]> {
+    const encodedCustomerCode = encodeURIComponent(customerCode);
+
+    const response = await this.request<
+      DiatechResponse<DiatechLoyaltyHistory[]>
+    >({
+      method: 'GET',
+      url: `/api/v1/loyalty/${encodedCustomerCode}/Histories`,
+    });
+
+    this.checkResponse(response, 'دریافت تاریخچه وفاداری از باشگاه دایاتک');
+
+    return response.Payload ?? [];
+  }
+
+  /**
+   * دریافت سطوح وفاداری
+   *
+   * GET /api/v1/loyalty/levels
+   */
+  async getLoyaltyLevels(): Promise<DiatechLoyaltyLevel[]> {
+    const response = await this.request<DiatechResponse<DiatechLoyaltyLevel[]>>(
+      {
+        method: 'GET',
+        url: '/api/v1/loyalty/levels',
+      },
+    );
+
+    this.checkResponse(response, 'دریافت سطوح وفاداری از باشگاه دایاتک');
+
+    return response.Payload ?? [];
+  }
+
+  // ============================================================
+  // Payments
+  // ============================================================
+
+  /**
+   * دریافت پرداختی‌ها و دریافتی‌های مشتری
+   *
+   * GET /api/v1/payments/customer/{customerCode}
+   */
+  async getCustomerPayments(customerCode: string): Promise<DiatechPayment[]> {
+    const encodedCustomerCode = encodeURIComponent(customerCode);
+
+    const response = await this.request<DiatechResponse<DiatechPayment[]>>({
+      method: 'GET',
+      url: `/api/v1/payments/customer/${encodedCustomerCode}`,
+    });
+
+    this.checkResponse(response, 'دریافت پرداختی‌های مشتری از باشگاه دایاتک');
+
+    return response.Payload ?? [];
   }
 
   // ============================================================
