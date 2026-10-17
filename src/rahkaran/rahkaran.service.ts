@@ -1320,7 +1320,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       price: number;
       variant: {
         sku: string | null;
-      };
+      } | null;
     }>;
   }) {
     await this.ensureAuthenticated();
