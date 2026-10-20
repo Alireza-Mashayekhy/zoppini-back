@@ -28,7 +28,7 @@ export class AdminUsersController {
 
   @Post()
   create(@Body() createUserDto: CreateUserDto) {
-    return this.usersService.create(createUserDto);
+    return this.usersService.createAdminUser(createUserDto);
   }
 
   @Get()
@@ -37,8 +37,8 @@ export class AdminUsersController {
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.usersService.findOne(+id);
+  async findOne(@Param('id') id: string) {
+    return this.usersService.toSafeUser(await this.usersService.findOne(+id));
   }
 
   @Patch(':id')

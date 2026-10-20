@@ -12,6 +12,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { B2bRequestModule } from './b2b-request/b2b-request.module';
 import { BlogModule } from './blog/blog.module';
+import { BotModule } from './bot/bot.module';
 import { CartsModule } from './cart/cart.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { CategoriesModule } from './categories/categories.module';
@@ -66,6 +67,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     OtpModule,
     CategoriesModule,
     BlogModule,
+    BotModule,
     ProductsModule,
     CartsModule,
     OrdersModule,

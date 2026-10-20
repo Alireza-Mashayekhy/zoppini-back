@@ -19,9 +19,9 @@ export class UsersController {
 
   @UseGuards(AuthGuard)
   @Get(':id')
-  findOne(@Req() req, @Param('id') id: string) {
-    if (req.user.id === id) {
-      return this.usersService.findOne(+id);
+  async findOne(@Req() req, @Param('id') id: string) {
+    if (String(req.user.id) === String(id)) {
+      return this.usersService.toSafeUser(await this.usersService.findOne(+id));
     } else {
       throw new NotFoundException('کاربر یافت نشد');
     }

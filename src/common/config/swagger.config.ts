@@ -6,6 +6,15 @@ export function setupSwagger(app: INestApplication) {
     .setTitle('zoppini-backend')
     .setDescription('door online shop')
     .setVersion('1.0.0')
+    .addApiKey(
+      {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-bot-api-key',
+        description: 'کلید سرویس‌به‌سرویس ربات؛ فقط برای /api/bot/v1',
+      },
+      'bot-api-key',
+    )
     .build();
 
   const documents = SwaggerModule.createDocument(app, swaggerOptions);
