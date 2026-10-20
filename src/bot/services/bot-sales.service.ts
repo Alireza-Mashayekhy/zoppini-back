@@ -198,6 +198,8 @@ export class BotSalesService {
         amount: cancellations.amount,
         // مبلغ سفارش لغوشده لزوماً پول پرداخت‌شده نیست.
         amountIsPaidRevenue: false,
+        basis: 'order.createdAt',
+        cancelledAtStored: false,
       },
       refunds: {
         walletRefundTransactionCount: refunds.transactionCount,
