@@ -230,7 +230,6 @@ export class AuthService {
         password: hashedPassword,
       },
       user,
-      { passwordAlreadyHashed: true },
     );
 
     return {

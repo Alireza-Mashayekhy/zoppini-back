@@ -1,12 +1,10 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import * as bcrypt from 'bcrypt';
 import {
   applySearch,
   applySort,
@@ -29,46 +27,6 @@ export class UsersService {
     const user = this.usersRepository.create(createUserDto);
 
     return await this.usersRepository.save(user);
-  }
-
-  /**
-   * مسیر ساخت کاربر از پنل مدیر قبلاً رمز را بدون hash ذخیره می‌کرد.
-   * این متد مخصوص همان مسیر است و همیشه رمز را با bcrypt هش می‌کند.
-   *
-   * مسیر sign-up عمومی رمز را از قبل هش می‌کند و از create() استفاده
-   * می‌کند؛ بنابراین behavior آن تغییر نکرده است.
-   */
-  async createAdminUser(createUserDto: CreateUserDto) {
-    const { code: _code, password, ...rest } = createUserDto;
-
-    if (!password) {
-      throw new BadRequestException('رمز عبور الزامی است');
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const user = this.usersRepository.create({
-      ...rest,
-      password: hashedPassword,
-    });
-
-    const savedUser = await this.usersRepository.save(user);
-
-    return this.toSafeUser(savedUser);
-  }
-
-  /**
-   * فیلد hash رمز هرگز نباید در پاسخ API برگردد.
-   * nationalCode و تلفن برای پنل مدیر لازم‌اند و حذف نمی‌شوند.
-   */
-  toSafeUser(user: User | null): Omit<User, 'password'> | null {
-    if (!user) {
-      return null;
-    }
-
-    const { password: _password, ...safeUser } = user;
-
-    return safeUser;
   }
 
   async findWithPhone(phone: string) {
@@ -101,7 +59,7 @@ export class UsersService {
     const [data, total] = await qb.getManyAndCount();
 
     return {
-      data: data.map(user => this.toSafeUser(user)),
+      data,
       pagination: {
         page: page,
         limit: limit,
@@ -118,12 +76,7 @@ export class UsersService {
     return payload;
   }
 
-  async updateUser(
-    id: number,
-    updateUserDto: UpdateUserDto,
-    user: any,
-    options: { passwordAlreadyHashed?: boolean } = {},
-  ) {
+  async updateUser(id: number, updateUserDto: UpdateUserDto, user: any) {
     if (user.id !== id && !user.roles.includes('admin')) {
       throw new ForbiddenException('access denied');
     }
@@ -146,19 +99,9 @@ export class UsersService {
       }
     }
 
-    const { password, code: _code, ...rest } = updateUserDto;
+    Object.assign(userEntity, updateUserDto);
 
-    Object.assign(userEntity, rest);
-
-    if (password) {
-      userEntity.password = options.passwordAlreadyHashed
-        ? password
-        : await bcrypt.hash(password, 10);
-    }
-
-    const savedUser = await this.usersRepository.save(userEntity);
-
-    return this.toSafeUser(savedUser);
+    return this.usersRepository.save(userEntity);
   }
 
   async update(id: number, data: Partial<User>): Promise<User> {
