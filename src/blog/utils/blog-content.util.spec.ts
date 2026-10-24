@@ -18,7 +18,12 @@ import {
 
 /** ساخت HTML یک بلوک، هم‌شکل با فرانت (فرار کردن " ' & < >) */
 function blockHtml(kind: string, config: Record<string, unknown>): string {
-  const encoded = JSON.stringify(config).replace(
+  return `<div class="zp-block" data-zp-block="${kind}" data-zp-config="${escapeEntities(JSON.stringify(config))}"></div>`;
+}
+
+/** یک بار فرار کردن entityها (همان کاری که فرانت برای ساخت HTML می‌کند) */
+function escapeEntities(value: string): string {
+  return value.replace(
     /[&<>"']/g,
     character =>
       ({
@@ -29,6 +34,22 @@ function blockHtml(kind: string, config: Record<string, unknown>): string {
         "'": '&#39;',
       })[character] as string,
   );
+}
+
+/**
+ * همان HTML بلوک، ولی با «فرار دوباره».
+ *
+ * این دقیقاً چیزی است که نسخه‌های قبلی ادیتور در ستون content ذخیره
+ * می‌کردند: ادیتور JSON را دستی فرار می‌کرد و مرورگر هم موقع ساختن HTML
+ * یک بار دیگر `&` را فرار می‌کرد، پس در دیتابیس `&amp;quot;` می‌نشست.
+ * چنین مقاله‌هایی باید بدون مهاجرت داده درست نمایش داده شوند، وگرنه
+ * اسلایدر/گالری/FAQ در صفحه‌ی مقاله غیب می‌شوند.
+ */
+function doubleEscapedBlockHtml(
+  kind: string,
+  config: Record<string, unknown>,
+): string {
+  const encoded = escapeEntities(escapeEntities(JSON.stringify(config)));
 
   return `<div class="zp-block" data-zp-block="${kind}" data-zp-config="${encoded}"></div>`;
 }
@@ -268,6 +289,153 @@ describe('blog content → blocks', () => {
     );
 
     expect(blocks[0].items[0]).toMatchObject({ productId: 31, colorId: 4 });
+  });
+
+  it('مقاله‌های ذخیره‌شده با فرار دوباره (خروجی ادیتور قبلی) درست خوانده می‌شوند', () => {
+    // همان محتوایی که در دیتابیس مقاله‌های فعلی هست
+    const html = [
+      '<p>متن مقاله</p>',
+      doubleEscapedBlockHtml('slider', {
+        title: 'محصولات مرتبط',
+        autoplay: false,
+        items: [{ productId: 12, colorId: 3, badge: 'جدید' }],
+      }),
+      doubleEscapedBlockHtml('faq', {
+        title: 'سوالات متداول',
+        items: [{ question: 'سایز چطور است؟', answer: 'استاندارد' }],
+      }),
+      doubleEscapedBlockHtml('media', {
+        items: [{ mediaType: 'image', url: 'images/look.webp' }],
+      }),
+    ].join('');
+
+    expect(html).toContain('&amp;quot;');
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks.map(block => block.type)).toEqual([
+      BlogBlockType.Content,
+      BlogBlockType.Slider,
+      BlogBlockType.Faq,
+      BlogBlockType.Media,
+    ]);
+
+    expect(blocks[1].title).toBe('محصولات مرتبط');
+    expect(blocks[1].settings).toEqual({ autoplay: false });
+    expect(blocks[1].items[0]).toMatchObject({
+      productId: 12,
+      colorId: 3,
+      badge: 'جدید',
+    });
+
+    expect(blocks[2].items[0]).toMatchObject({
+      question: 'سایز چطور است؟',
+      answer: 'استاندارد',
+    });
+
+    expect(blocks[3].items[0]).toMatchObject({ url: 'images/look.webp' });
+  });
+
+  it('متن حاوی & و < و > در هر دو نسل محتوا سالم می‌ماند', () => {
+    const config = {
+      items: [{ question: 'A & B؟', answer: 'از <b> و "کوتیشن" استفاده کنید' }],
+    };
+
+    for (const build of [blockHtml, doubleEscapedBlockHtml]) {
+      const blocks = resolveBlocksFromContent(build('faq', config));
+
+      expect(blocks[0].items[0]).toEqual({
+        question: 'A & B؟',
+        answer: 'از <b> و "کوتیشن" استفاده کنید',
+      });
+    }
+  });
+
+  it('ردیف نیمه‌کاره‌ی FAQ فقط خودش حذف می‌شود، نه کل بلوک را', () => {
+    const html = blockHtml('faq', {
+      items: [
+        { question: 'سوال بی‌پاسخ' },
+        { question: 'سوال کامل؟', answer: 'پاسخ کامل' },
+        { question: '', answer: '' },
+      ],
+    });
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].items).toEqual([
+      { question: 'سوال کامل؟', answer: 'پاسخ کامل' },
+    ]);
+  });
+
+  it('متن بلندتر از سقف، کوتاه می‌شود تا بلوک از دست نرود', () => {
+    const html = blockHtml('faq', {
+      title: 'ع'.repeat(400),
+      items: [{ question: 'س' + 'ا'.repeat(900), answer: 'پاسخ' }],
+    });
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].title).toHaveLength(150);
+    expect(blocks[0].items[0]?.question).toHaveLength(500);
+  });
+
+  it('شناسه‌ی محصول نامعتبر فقط همان اسلاید را حذف می‌کند', () => {
+    const html = blockHtml('slider', {
+      items: [{ productId: -4 }, { productId: 12.5 }, { productId: 9 }],
+    });
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].items).toEqual([{ productId: 9 }]);
+  });
+
+  it('بلوکی که «>» خام داخل مقدار صفتش دارد هم تشخیص داده می‌شود', () => {
+    // وقتی ادمین کد HTML را دستی می‌نویسد، ممکن است JSON را فرار نکند
+    const config = `{"items":[{"question":"a > b؟","answer":"ب"}]}`;
+
+    const html =
+      '<p>متن</p>' +
+      `<div class="zp-block" data-zp-block="faq" data-zp-config='${config}'></div>`;
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks.map(block => block.type)).toEqual([
+      BlogBlockType.Content,
+      BlogBlockType.Faq,
+    ]);
+    expect(blocks[1].items[0]).toEqual({ question: 'a > b؟', answer: 'ب' });
+  });
+
+  it('آدرس مدیا با فاصله‌ی اضافه هم پذیرفته می‌شود (trim پیش از بررسی امنیتی)', () => {
+    const html = blockHtml('media', {
+      items: [
+        {
+          mediaType: 'image',
+          url: '  images/look.webp  ',
+          caption: '  کت تک  ',
+        },
+        {
+          mediaType: 'video',
+          url: ' https://example.com/show.mp4 ',
+          linkUrl: ' /look ',
+        },
+      ],
+    });
+
+    const blocks = resolveBlocksFromContent(html);
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].items).toEqual([
+      { mediaType: 'image', url: 'images/look.webp', caption: 'کت تک' },
+      {
+        mediaType: 'video',
+        url: 'https://example.com/show.mp4',
+        linkUrl: '/look',
+      },
+    ]);
   });
 
   it('مقاله‌ی پر‌بلوک از سقف تعداد بخش‌ها بیشتر نمی‌شود', () => {

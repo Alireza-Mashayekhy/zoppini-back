@@ -105,7 +105,7 @@ export function isSafeMediaReference(value: string): boolean {
 }
 
 /** لینک‌های مجاز: http(s) یا مسیر داخلی سایت */
-function isSafeLink(value: string): boolean {
+export function isSafeLink(value: string): boolean {
   if (!value || value.length > BLOCK_LIMITS.maxUrlLength) return false;
 
   if (/^https?:\/\/\S+$/i.test(value)) return true;

@@ -3,6 +3,8 @@ import {
   BLOCK_LIMITS,
   BlockInput,
   BlockItemInput,
+  isSafeLink,
+  isSafeMediaReference,
   normalizeBlocksPayload,
   NormalizedBlock,
 } from './blog-blocks.util';
@@ -20,18 +22,45 @@ import {
  * هرچیزی که بیرون این div‌هاست، متن خود مقاله است و به بخش‌های content
  * تبدیل می‌شود. مقدار `data-zp-config` با entity escaping پروسی‌میرور
  * ذخیره شده (`"` → `&quot;`) پس پیش از JSON.parse باید برگردانده شود.
+ * مقاله‌های قدیمی‌تر یک لایه فرار اضافه هم دارند (`&amp;quot;`)؛ چون
+ * ادیتور پیش از مرورگر مقدار را فرار می‌کرد. هر دو حالت اینجا خوانده
+ * می‌شود تا آن مقاله‌ها بدون مهاجرت داده درست نمایش داده شوند.
  *
  * نکته‌ی مهم: این ماژول برای مسیر «خواندن» مقاله است، پس هیچ داده‌ی
  * خرابی نباید باعث خطای ۵۰۰ یا از دست رفتن کل مقاله شود — بلوک نامعتبر
  * نادیده گرفته می‌شود و بقیه نمایش داده می‌شوند.
  */
 
+/**
+ * بدنه‌ی یک تگ باز: متن معمولی یا یک مقدار داخل کوتیشن.
+ *
+ * مقدارهای کوتیشن‌دار جدا تشخیص داده می‌شوند تا `>` یا `<` داخل یک صفت
+ * (مثلاً JSON که ادمین در نمای کد HTML دستی نوشته) تگ را زودتر از موعد
+ * تمام نکند و بلوک نادیده گرفته نشود.
+ */
+const ATTRIBUTE_RUN = String.raw`(?:[^>"'<]|"[^"]*"|'[^']*')*`;
+
 /** یک div بلوک ویژه، همراه با متن قبل از آن */
-const BLOCK_TAG_REGEX =
-  /<div\b[^>]*data-zp-block\s*=\s*(["'])([^"']+)\1[^>]*>\s*<\/div>/gi;
+const BLOCK_TAG_REGEX = new RegExp(
+  String.raw`<div\b` +
+    ATTRIBUTE_RUN +
+    String.raw`data-zp-block\s*=\s*(["'])([^"']+)\1` +
+    ATTRIBUTE_RUN +
+    String.raw`>\s*</div>`,
+  'gi',
+);
 
 const CONFIG_REGEX = /data-zp-config\s*=\s*"([^"]*)"/i;
 const CONFIG_REGEX_SINGLE = /data-zp-config\s*=\s*'([^']*)'/i;
+
+/**
+ * حداکثر لایه‌های entity که برای خواندن تنظیمات باز می‌شوند.
+ *
+ * حالت درست یک لایه است (`&quot;`)؛ مقاله‌هایی که با نسخه‌های قبلی ادیتور
+ * ذخیره شده‌اند دو لایه دارند (`&amp;quot;`) چون خود ادیتور هم پیش از
+ * مرورگر مقدار را فرار می‌کرد.
+ */
+const MAX_ENTITY_DECODE_PASSES = 3;
 
 /** تگ‌هایی که حتی بدون متن، محتوای معنادار دارند (عکس، جدول، خط جداکننده) */
 const NON_TEXT_TAG_REGEX =
@@ -73,15 +102,35 @@ export function decodeBlockConfig(openTag: string): Record<string, unknown> {
 
   if (!raw) return {};
 
-  try {
-    const parsed = JSON.parse(decodeHtmlEntities(raw));
+  /**
+   * لایه‌های entity یکی‌یکی باز می‌شوند تا JSON درست شود.
+   *
+   * اگر همان لایه‌ی اول کافی باشد (حالت درست) هیچ تغییر دیگری روی مقدار
+   * انجام نمی‌شود؛ پس متن‌هایی که خودشان `&` دارند (`A &amp; B`) سالم
+   * می‌مانند. فقط وقتی JSON نامعتبر است لایه‌ی بعدی باز می‌شود، یعنی
+   * مقاله‌های ذخیره‌شده با فرار دوباره هم بدون نیاز به مهاجرت داده
+   * درست نمایش داده می‌شوند.
+   */
+  let value = raw;
 
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : {};
-  } catch {
-    return {};
+  for (let pass = 0; pass < MAX_ENTITY_DECODE_PASSES; pass += 1) {
+    try {
+      const parsed = JSON.parse(value);
+
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      const decoded = decodeHtmlEntities(value);
+
+      // هیچ چیز دیگری برای باز کردن نمانده؛ تنظیمات واقعاً خراب است
+      if (decoded === value) return {};
+
+      value = decoded;
+    }
   }
+
+  return {};
 }
 
 /** متن خالص یک تکه HTML (برای تشخیص اینکه آیا خالی است یا نه) */
@@ -116,13 +165,30 @@ function readItems(config: Record<string, unknown>): Record<string, unknown>[] {
     .map(item => item as Record<string, unknown>);
 }
 
+/**
+ * مقدار متنی یک فیلد.
+ *
+ * متن trim و در صورت نیاز «کوتاه» می‌شود تا یک فیلد بد (مثلاً آدرسی که
+ * با فاصله پیست شده یا متنی بلندتر از سقف) کل بلوک را از بین نبرد؛
+ * اعتبارسنجی سخت‌گیرانه‌ی مسیر ذخیره‌ی ادمین سر جای خودش است.
+ *
+ * trim دقیقاً همان چیزی است که `cleanString` هم انجام می‌دهد، پس مقدار
+ * نهایی عوض نمی‌شود و بررسی‌های امنیتی روی همان متن واقعی انجام می‌شوند.
+ */
 function readString(
   item: Record<string, unknown>,
   key: string,
+  maxLength: number = BLOCK_LIMITS.maxUrlLength,
 ): string | undefined {
   const value = item[key];
 
-  return typeof value === 'string' && value.trim() ? value : undefined;
+  if (typeof value !== 'string') return undefined;
+
+  const trimmed = value.trim();
+
+  if (!trimmed) return undefined;
+
+  return trimmed.slice(0, maxLength);
 }
 
 function readNumber(
@@ -140,6 +206,18 @@ function readNumber(
   return undefined;
 }
 
+/** شناسه‌ی عددیِ معتبر (محصول/رنگ)؛ هر مقدار دیگری یعنی «ندارد» */
+function readPositiveId(
+  item: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = readNumber(item, key);
+
+  return value !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
 /**
  * تبدیل تنظیمات ذخیره‌شده در HTML به ورودی استاندارد بخش‌های مقاله.
  *
@@ -154,28 +232,38 @@ export function toBlockInput(
 
   if (!SUPPORTED_BLOCK_TYPES.includes(type)) return null;
 
-  const title = readString(config, 'title');
+  const title = readString(config, 'title', BLOCK_LIMITS.maxTitleLength);
 
   if (type === BlogBlockType.Toc) {
     return { type, title };
   }
 
   if (type === BlogBlockType.Faq) {
-    const items: BlockItemInput[] = readItems(config).map(item => ({
-      question: readString(item, 'question'),
-      answer: readString(item, 'answer'),
-    }));
+    const items: BlockItemInput[] = readItems(config)
+      .map(item => ({
+        question: readString(item, 'question', BLOCK_LIMITS.maxQuestionLength),
+        answer: readString(item, 'answer', BLOCK_LIMITS.maxAnswerLength),
+      }))
+      /**
+       * ردیف خالی یا نیمه‌کاره (فقط سوال، بدون پاسخ) در سایت نمایش داده
+       * نمی‌شود. اگر همین‌جا حذف نشود، اعتبارسنجی کل بلوک را رد می‌کند و
+       * بقیه‌ی سوال‌های سالم هم از صفحه‌ی مقاله می‌افتند.
+       */
+      .filter(item => item.question && item.answer);
 
     return { type, title, items };
   }
 
   if (type === BlogBlockType.Slider) {
-    const items: BlockItemInput[] = readItems(config).map(item => ({
-      productId: readNumber(item, 'productId'),
-      colorId: readNumber(item, 'colorId'),
-      badge: readString(item, 'badge'),
-      caption: readString(item, 'caption'),
-    }));
+    const items: BlockItemInput[] = readItems(config)
+      .map(item => ({
+        productId: readPositiveId(item, 'productId'),
+        colorId: readPositiveId(item, 'colorId'),
+        badge: readString(item, 'badge', BLOCK_LIMITS.maxBadgeLength),
+        caption: readString(item, 'caption', BLOCK_LIMITS.maxCaptionLength),
+      }))
+      // اسلاید بدون محصول معتبر چیزی برای نمایش ندارد
+      .filter(item => item.productId !== undefined);
 
     return {
       type,
@@ -186,14 +274,23 @@ export function toBlockInput(
   }
 
   // media
-  const items: BlockItemInput[] = readItems(config).map(item => ({
-    mediaType: readString(item, 'mediaType') === 'video' ? 'video' : 'image',
-    url: readString(item, 'url'),
-    poster: readString(item, 'poster'),
-    alt: readString(item, 'alt'),
-    caption: readString(item, 'caption'),
-    linkUrl: readString(item, 'linkUrl'),
-  }));
+  const items: BlockItemInput[] = readItems(config)
+    .map(item => ({
+      mediaType: readString(item, 'mediaType') === 'video' ? 'video' : 'image',
+      url: readString(item, 'url', BLOCK_LIMITS.maxUrlLength),
+      poster: readString(item, 'poster', BLOCK_LIMITS.maxUrlLength),
+      alt: readString(item, 'alt', BLOCK_LIMITS.maxAltLength),
+      caption: readString(item, 'caption', BLOCK_LIMITS.maxCaptionLength),
+      linkUrl: readString(item, 'linkUrl', BLOCK_LIMITS.maxUrlLength),
+    }))
+    // یک آیتم با آدرس نامعتبر نباید کل گالری را از بین ببرد
+    .filter(
+      item =>
+        !!item.url &&
+        isSafeMediaReference(item.url) &&
+        (!item.poster || isSafeMediaReference(item.poster)) &&
+        (!item.linkUrl || isSafeLink(item.linkUrl)),
+    );
 
   return { type, title, items };
 }
