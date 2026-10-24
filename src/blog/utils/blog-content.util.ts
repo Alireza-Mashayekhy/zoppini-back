@@ -276,7 +276,10 @@ export function toBlockInput(
   // media
   const items: BlockItemInput[] = readItems(config)
     .map(item => ({
-      mediaType: readString(item, 'mediaType') === 'video' ? 'video' : 'image',
+      mediaType:
+        readString(item, 'mediaType') === 'video'
+          ? ('video' as const)
+          : ('image' as const),
       url: readString(item, 'url', BLOCK_LIMITS.maxUrlLength),
       poster: readString(item, 'poster', BLOCK_LIMITS.maxUrlLength),
       alt: readString(item, 'alt', BLOCK_LIMITS.maxAltLength),
