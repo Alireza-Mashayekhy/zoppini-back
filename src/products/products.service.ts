@@ -6,8 +6,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import {
+  BotEventsService,
+  VariantStockChangeInput,
+} from 'src/bot-reports/bot-events.service';
 import { CategoriesService } from 'src/categories/categories.service';
 import {
   addSearchRelevanceOrder,
@@ -79,6 +84,8 @@ export class ProductsService {
     @Inject(forwardRef(() => RahkaranService))
     private readonly rahkaranService: RahkaranService,
     private readonly smsService: SmsService,
+    @Optional()
+    private readonly botEventsService?: BotEventsService,
   ) {}
 
   async create(
@@ -878,6 +885,12 @@ export class ProductsService {
     const finalColorId = colorIds[0];
 
     // پردازش واریانت‌ها
+    const stockTransitions: Array<{
+      variant: Variant;
+      oldStock: number;
+      newStock: number;
+    }> = [];
+
     for (const dto of newVariantsDto) {
       const variantId =
         dto.id !== undefined && dto.id !== null ? Number(dto.id) : undefined;
@@ -891,6 +904,7 @@ export class ProductsService {
       // واریانت موجود
       if (variantId !== undefined && existingMap.has(variantId)) {
         const existing = existingMap.get(variantId)!;
+        const oldStock = Number(existing.stock ?? 0);
 
         existing.colorId = colorId;
         existing.sizeId = sizeId;
@@ -899,6 +913,11 @@ export class ProductsService {
         existing.sku = sku;
 
         toSave.push(existing);
+        stockTransitions.push({
+          variant: existing,
+          oldStock,
+          newStock: stock,
+        });
 
         // این واریانت هنوز وجود دارد
         existingMap.delete(variantId);
@@ -927,6 +946,42 @@ export class ProductsService {
     // ذخیره واریانت‌ها
     if (toSave.length > 0) {
       await queryRunner.manager.save(Variant, toSave);
+
+      if (stockTransitions.length > 0 && this.botEventsService) {
+        const productEntity = await queryRunner.manager.findOne(Product, {
+          where: { id: productId },
+          select: { id: true, title: true },
+        });
+        const savedVariantIds = stockTransitions
+          .map(item => item.variant.id)
+          .filter(Boolean);
+        const hydrated = savedVariantIds.length
+          ? await queryRunner.manager.find(Variant, {
+              where: { id: In(savedVariantIds) },
+              relations: { color: true, size: true },
+            })
+          : [];
+        const hydratedMap = new Map(hydrated.map(v => [v.id, v]));
+
+        await this.botEventsService.evaluateVariantStockTransitions(
+          stockTransitions.map(item => {
+            const full = hydratedMap.get(item.variant.id);
+            const labelParts = [full?.color?.name, full?.size?.name]
+              .map(part => String(part ?? '').trim())
+              .filter(Boolean);
+
+            return {
+              variantId: item.variant.id,
+              productTitle: productEntity?.title ?? `محصول ${productId}`,
+              variantLabel: labelParts.length ? labelParts.join(' / ') : null,
+              sku: item.variant.sku ?? null,
+              oldStock: item.oldStock,
+              newStock: item.newStock,
+            };
+          }),
+          queryRunner.manager,
+        );
+      }
     }
 
     // =====================================================
@@ -1556,7 +1611,10 @@ export class ProductsService {
     const product = await this.productRepo.findOne({
       where: { id: productId },
       relations: {
-        variants: true,
+        variants: {
+          color: true,
+          size: true,
+        },
       },
     });
 
@@ -1571,6 +1629,7 @@ export class ProductsService {
     }
 
     const variantsToUpdate: Variant[] = [];
+    const stockChanges: VariantStockChangeInput[] = [];
 
     for (const variant of variants) {
       const sku = variant.sku?.trim();
@@ -1667,12 +1726,26 @@ export class ProductsService {
         // 5. Update
         // ==========================================================
 
+        const oldStock = Number(variant.stock ?? 0);
         variant.price = newPrice;
         variant.stock = newStock;
         variant.stockRetail = retail.quantity;
         variant.stockHadishMall = hadishMall.quantity;
 
         variantsToUpdate.push(variant);
+
+        const labelParts = [variant.color?.name, variant.size?.name]
+          .map(part => String(part ?? '').trim())
+          .filter(Boolean);
+        stockChanges.push({
+          variantId: variant.id,
+          productTitle: product.title,
+          variantLabel: labelParts.length ? labelParts.join(' / ') : null,
+          sku: variant.sku ?? null,
+          oldStock,
+          newStock,
+          syncedAt: new Date(),
+        });
 
         this.logger.log(
           `✅ Sync Variant | ` +
@@ -1695,6 +1768,9 @@ export class ProductsService {
 
     if (variantsToUpdate.length) {
       await this.variantRepo.save(variantsToUpdate);
+      await this.botEventsService?.evaluateVariantStockTransitions(
+        stockChanges,
+      );
     }
 
     return variantsToUpdate;
@@ -1741,9 +1817,20 @@ export class ProductsService {
 
     let totalQuantityRequests = 0;
 
+    let abortedPageError: unknown = null;
+
+    const allStockChanges: Array<{
+      variantId: number;
+      sku: string | null;
+      oldStock: number;
+      newStock: number;
+    }> = [];
+
     const startedAt = Date.now();
 
     try {
+      await this.botEventsService?.recordSyncStarted();
+
       // ==========================================================
       // Authentication
       // ==========================================================
@@ -1774,6 +1861,8 @@ export class ProductsService {
             PAGE_SIZE,
           );
         } catch (error) {
+          abortedPageError = error;
+
           this.logger.error(
             `❌ دریافت Page=${page} از راهکاران ناموفق بود.`,
             error instanceof Error ? error.stack : String(error),
@@ -2082,6 +2171,15 @@ export class ProductsService {
 
               variantsToUpdate.push(variant);
 
+              if (stockChanged) {
+                allStockChanges.push({
+                  variantId: variant.id,
+                  sku: variant.sku ?? null,
+                  oldStock,
+                  newStock,
+                });
+              }
+
               this.logger.debug(
                 `🔄 تغییر Variant | ` +
                   `SKU=${sku} | ` +
@@ -2235,10 +2333,10 @@ export class ProductsService {
       this.logger.log(`==================================================`);
 
       // ============================================================
-      // اطلاع‌رسانی پایان سینک به ادمین (در پس‌زمینه — blocking نیست)
+      // ثبت نتیجهٔ واقعی سینک و Transitionهای موجودی برای ربات بله
       // ============================================================
 
-      this.notifyAdminOfRahkaranSync({
+      const syncStatsSnapshot = {
         received: totalRahkaranProducts,
         matched: totalMatched,
         updated: totalUpdated,
@@ -2246,7 +2344,29 @@ export class ProductsService {
         skipped: totalSkipped,
         failed: totalFailed,
         durationSeconds,
-      });
+      };
+
+      if (abortedPageError) {
+        await this.botEventsService?.recordSyncFailed(
+          abortedPageError,
+          syncStatsSnapshot,
+        );
+      } else {
+        await this.botEventsService?.recordSyncSucceeded(syncStatsSnapshot);
+      }
+
+      if (allStockChanges.length > 0 && this.botEventsService) {
+        await this.emitSyncedVariantTransitions(allStockChanges);
+      }
+
+      // ============================================================
+      // اطلاع‌رسانی پایان سینک به ادمین (در پس‌زمینه — blocking نیست)
+      // ============================================================
+
+      this.notifyAdminOfRahkaranSync(
+        syncStatsSnapshot,
+        abortedPageError ?? undefined,
+      );
     } catch (error) {
       // ==========================================================
       // خطای کلی
@@ -2257,21 +2377,70 @@ export class ProductsService {
         error instanceof Error ? error.stack : String(error),
       );
 
+      const failedSnapshot = {
+        received: totalRahkaranProducts,
+        matched: totalMatched,
+        updated: totalUpdated,
+        unchanged: totalUnchanged,
+        skipped: totalSkipped,
+        failed: totalFailed,
+        durationSeconds: Math.round((Date.now() - startedAt) / 1000),
+      };
+
+      await this.botEventsService?.recordSyncFailed(error, failedSnapshot);
+
       // اطلاع‌رسانی خطا به ادمین (در پس‌زمینه)
-      this.notifyAdminOfRahkaranSync(
-        {
-          received: totalRahkaranProducts,
-          matched: totalMatched,
-          updated: totalUpdated,
-          unchanged: totalUnchanged,
-          skipped: totalSkipped,
-          failed: totalFailed,
-          durationSeconds: Math.round((Date.now() - startedAt) / 1000),
-        },
-        error,
-      );
+      this.notifyAdminOfRahkaranSync(failedSnapshot, error);
 
       throw error;
+    }
+  }
+
+  private async emitSyncedVariantTransitions(
+    changes: Array<{
+      variantId: number;
+      sku: string | null;
+      oldStock: number;
+      newStock: number;
+    }>,
+  ): Promise<void> {
+    if (!this.botEventsService || !changes.length) {
+      return;
+    }
+
+    try {
+      const ids = [...new Set(changes.map(c => c.variantId))];
+      const hydrated = await this.variantRepo.find({
+        where: { id: In(ids) },
+        relations: { product: true, color: true, size: true },
+      });
+      const byId = new Map(hydrated.map(v => [v.id, v]));
+      const syncedAt = new Date();
+
+      await this.botEventsService.evaluateVariantStockTransitions(
+        changes.map(c => {
+          const full = byId.get(c.variantId);
+          const parts = [full?.color?.name, full?.size?.name]
+            .map(p => String(p ?? '').trim())
+            .filter(Boolean);
+
+          return {
+            variantId: c.variantId,
+            productTitle:
+              full?.product?.title ?? `محصول ${full?.productId ?? c.variantId}`,
+            variantLabel: parts.length ? parts.join(' / ') : null,
+            sku: c.sku,
+            oldStock: c.oldStock,
+            newStock: c.newStock,
+            syncedAt,
+          };
+        }),
+      );
+    } catch (error) {
+      this.logger.error(
+        '❌ ثبت transitionهای موجودی برای ربات ناموفق بود.',
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 

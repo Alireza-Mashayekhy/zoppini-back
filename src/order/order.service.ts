@@ -4,9 +4,14 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
+import {
+  BotEventsService,
+  VariantStockChangeInput,
+} from 'src/bot-reports/bot-events.service';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubService } from 'src/club/club.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
@@ -65,6 +70,9 @@ export class OrdersService {
     private readonly walletService: WalletService,
 
     private readonly dataSource: DataSource,
+
+    @Optional()
+    private readonly botEventsService?: BotEventsService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -269,10 +277,17 @@ export class OrdersService {
     });
 
     // =====================================================
-    // 9. ذخیره سفارش
+    // 9. ذخیره سفارش + ثبت اتمیک رویداد Outbox در یک تراکنش
     // =====================================================
 
-    const savedOrder = await this.orderRepo.save(order);
+    const savedOrder = await this.dataSource.transaction(async manager => {
+      const persisted = await manager.save(Order, order);
+      await this.botEventsService?.recordOrderCreatedInTransaction(
+        manager,
+        persisted,
+      );
+      return persisted;
+    });
 
     // =====================================================
     // 10. سبد خرید فعلاً پاک نمی‌شود
@@ -345,6 +360,8 @@ export class OrdersService {
       // 1. کاهش موجودی
       // =========================================================
 
+      const stockChanges: VariantStockChangeInput[] = [];
+
       for (const item of order.items) {
         if (!item.variant) {
           continue;
@@ -356,6 +373,8 @@ export class OrdersService {
           },
           relations: {
             product: true,
+            color: true,
+            size: true,
           },
         });
 
@@ -368,6 +387,21 @@ export class OrdersService {
             `موجودی کافی نیست برای ${variant.product?.title || 'محصول'}`,
           );
         }
+
+        const oldStock = Number(variant.stock) || 0;
+        const newStock = oldStock - Number(item.quantity);
+        const variantParts = [variant.color?.name, variant.size?.name]
+          .map(v => String(v ?? '').trim())
+          .filter(Boolean);
+
+        stockChanges.push({
+          variantId: variant.id,
+          productTitle: variant.product?.title || `محصول ${variant.productId}`,
+          variantLabel: variantParts.length ? variantParts.join(' / ') : null,
+          sku: variant.sku ?? null,
+          oldStock,
+          newStock,
+        });
 
         await queryRunner.manager.update(
           Variant,
@@ -412,12 +446,21 @@ export class OrdersService {
       }
 
       // =========================================================
-      // 4. تغییر وضعیت سفارش
+      // 4. تغییر وضعیت سفارش + ثبت رویداد Outbox پرداخت و موجودی
       // =========================================================
 
       order.status = OrderStatus.PAID;
 
       await queryRunner.manager.save(Order, order);
+
+      await this.botEventsService?.recordOrderPaidInTransaction(
+        queryRunner.manager,
+        order,
+      );
+      await this.botEventsService?.evaluateVariantStockTransitions(
+        stockChanges,
+        queryRunner.manager,
+      );
 
       // =========================================================
       // 5. Commit
@@ -493,14 +536,26 @@ export class OrdersService {
 
   // لغو سفارش به دلیل عدم موفقیت پرداخت (بدون تغییر موجودی)
   async failOrderPayment(orderId: number): Promise<Order> {
-    const order = await this.orderRepo.findOne({ where: { id: orderId } });
+    const order = await this.orderRepo.findOne({
+      where: { id: orderId },
+      relations: { user: true },
+    });
     if (!order) throw new NotFoundException('سفارش یافت نشد');
     if (order.status !== OrderStatus.PENDING) {
       throw new BadRequestException('فقط سفارشات در انتظار قابل لغو هستند');
     }
 
-    order.status = OrderStatus.CANCELLED;
-    await this.orderRepo.save(order);
+    const previousStatus = order.status;
+    await this.dataSource.transaction(async manager => {
+      order.status = OrderStatus.CANCELLED;
+      await manager.save(Order, order);
+      await this.botEventsService?.recordOrderStatusTransitionInTransaction(
+        manager,
+        order,
+        previousStatus,
+        'payment_failed',
+      );
+    });
 
     await this.refundWalletPaymentForOrder(order);
 
@@ -550,6 +605,13 @@ export class OrdersService {
         transactionKey: `wallet-order-${order.id}-refund`,
         description: `عودت کیف پول به دلیل لغو سفارش ${order.orderNumber}`,
         meta: { orderId: order.id, orderNumber: order.orderNumber },
+      });
+
+      await this.botEventsService?.recordOrderWalletRefund({
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        refundedAmount: walletPayment,
+        transactionKey: `wallet-order-${order.id}-refund`,
       });
 
       this.logger.log(
@@ -662,8 +724,15 @@ export class OrdersService {
     await queryRunner.startTransaction();
 
     try {
+      const previousStatus = order.status;
       order.status = OrderStatus.CANCELLED;
       await queryRunner.manager.save(order);
+      await this.botEventsService?.recordOrderStatusTransitionInTransaction(
+        queryRunner.manager,
+        order,
+        previousStatus,
+        'customer',
+      );
 
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -688,10 +757,19 @@ export class OrdersService {
       throw new NotFoundException('سفارش یافت نشد');
     }
 
-    const wasCancelled = order.status === OrderStatus.CANCELLED;
+    const previousStatus = order.status;
+    const wasCancelled = previousStatus === OrderStatus.CANCELLED;
 
-    order.status = status;
-    await this.orderRepo.save(order);
+    await this.dataSource.transaction(async manager => {
+      order.status = status;
+      await manager.save(Order, order);
+      await this.botEventsService?.recordOrderStatusTransitionInTransaction(
+        manager,
+        order,
+        previousStatus,
+        'admin',
+      );
+    });
 
     if (status === OrderStatus.CANCELLED && !wasCancelled) {
       await this.refundWalletPaymentForOrder(order);
@@ -913,6 +991,7 @@ export class OrdersService {
     await queryRunner.startTransaction();
 
     try {
+      const previousStatus = order.status;
       order.status = OrderStatus.CANCELLED;
       // می‌توانید دلیل لغو را در فیلدی مثل `note` ذخیره کنید
       if (reason) {
@@ -921,6 +1000,12 @@ export class OrdersService {
           : `دلیل لغو توسط ادمین: ${reason}`;
       }
       await queryRunner.manager.save(order);
+      await this.botEventsService?.recordOrderStatusTransitionInTransaction(
+        queryRunner.manager,
+        order,
+        previousStatus,
+        'admin',
+      );
 
       await queryRunner.commitTransaction();
     } catch (error) {

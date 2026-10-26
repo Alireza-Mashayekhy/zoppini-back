@@ -1,6 +1,12 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { BotEventsService } from 'src/bot-reports/bot-events.service';
+import { In, Repository } from 'typeorm';
 
 import { Product } from '../products/entities/product.entity';
 import { Variant } from '../products/entities/variant.entity';
@@ -60,6 +66,9 @@ export class RahkaranProductSyncService {
 
     @InjectRepository(Variant)
     private readonly variantRepo: Repository<Variant>,
+
+    @Optional()
+    private readonly botEventsService?: BotEventsService,
   ) {}
 
   // ============================================================
@@ -315,6 +324,39 @@ export class RahkaranProductSyncService {
           chunk: chunkSize,
           transaction: true,
         });
+      }
+
+      if (this.botEventsService) {
+        const changedStockItems = result.variants.filter(
+          item => item.changed && item.oldStock !== item.newStock,
+        );
+
+        if (changedStockItems.length > 0) {
+          const hydrated = await this.variantRepo.find({
+            where: { id: In(changedStockItems.map(item => item.variantId)) },
+            relations: { product: true, color: true, size: true },
+          });
+          const byId = new Map(hydrated.map(v => [v.id, v]));
+
+          await this.botEventsService.evaluateVariantStockTransitions(
+            changedStockItems.map(item => {
+              const full = byId.get(item.variantId);
+              const parts = [full?.color?.name, full?.size?.name]
+                .map(p => String(p ?? '').trim())
+                .filter(Boolean);
+
+              return {
+                variantId: item.variantId,
+                productTitle: full?.product?.title ?? `محصول ${item.variantId}`,
+                variantLabel: parts.length ? parts.join(' / ') : null,
+                sku: item.sku ?? null,
+                oldStock: item.oldStock,
+                newStock: item.newStock,
+                syncedAt: new Date(),
+              };
+            }),
+          );
+        }
       }
     }
 

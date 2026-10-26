@@ -2,6 +2,7 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
+import { BotReportsModule } from 'src/bot-reports/bot-reports.module';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubModule } from 'src/club/club.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
@@ -38,6 +39,7 @@ import { OrdersService } from './order.service';
     DiscountsModule,
     ClubModule,
     WalletModule,
+    BotReportsModule,
   ],
   controllers: [OrdersController, AdminOrdersController],
   providers: [OrdersService],

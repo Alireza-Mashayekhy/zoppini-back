@@ -1,5 +1,6 @@
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BotReportsModule } from 'src/bot-reports/bot-reports.module';
 import { CategoriesModule } from 'src/categories/categories.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
@@ -44,6 +45,7 @@ import { StyleService } from './style.service';
     forwardRef(() => RahkaranModule),
     DiscountsModule,
     SmsModule,
+    BotReportsModule,
   ],
   controllers: [
     ProductsController,

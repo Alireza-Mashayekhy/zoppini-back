@@ -3,6 +3,7 @@ import { HttpModule } from '@nestjs/axios';
 import { forwardRef, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { BotReportsModule } from 'src/bot-reports/bot-reports.module';
 import { Product } from 'src/products/entities/product.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 
@@ -29,6 +30,7 @@ import { RahkaranProductSyncService } from './rahkaran-product-sync.service';
     forwardRef(() => UsersModule),
     forwardRef(() => ProductsModule),
     forwardRef(() => OrdersModule),
+    BotReportsModule,
   ],
   providers: [RahkaranService, RahkaranProductSyncService],
   controllers: [RahkaranController],
