@@ -52,6 +52,7 @@
     "dotenv": "^17.4.2",
     "eslint-plugin-simple-import-sort": "^13.0.0",
     "eslint-plugin-unused-imports": "^4.4.1",
+    "express": "^5.3.0",
     "graphql": "^16.11.0",
     "graphql-request": "^7.4.0",
     "helmet": "^8.3.0",
