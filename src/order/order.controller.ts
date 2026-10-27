@@ -1,3 +1,4 @@
+import { AnalyticsService } from 'src/analytics/analytics.service';
 // src/orders/orders.controller.ts
 import {
   Body,
@@ -19,7 +20,10 @@ import { OrdersService } from './order.service';
 @Controller('orders')
 @UseGuards(AuthGuard)
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly analyticsService: AnalyticsService,
+  ) {}
 
   @Get()
   async findAll(@Request() req, @Query() query: QueryDto) {
@@ -46,8 +50,13 @@ export class OrdersController {
   }
 
   @Post(':id/confirm-from-wallet')
-  confirmFromWallet(@Param('id') id: number, @Request() req) {
+  async confirmFromWallet(@Param('id') id: number, @Request() req) {
     const userId = req.user.id;
+    await this.analyticsService.checkout(
+      id,
+      userId,
+      String(req.headers['x-analytics-context'] ?? ''),
+    );
     return this.ordersService.confirmOrderFromWallet(id, userId);
   }
 }

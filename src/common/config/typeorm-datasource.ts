@@ -1,3 +1,4 @@
+import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
 import 'dotenv/config';
 
 import { BotInventoryAlertState } from 'src/bot-reports/entities/bot-inventory-alert-state.entity';
@@ -15,6 +16,9 @@ export default new DataSource({
   password: process.env.DATABASE_PASSWORD ?? '',
   database: process.env.DATABASE_NAME ?? 'zoppini_db',
   entities: [BotSetting, BotOperator, BotOutboxEvent, BotInventoryAlertState],
-  migrations: [CreateBotManagementTables1761465600000],
+  migrations: [
+    CreateBotManagementTables1761465600000,
+    CookieAnalytics1793059200000,
+  ],
   synchronize: false,
 });

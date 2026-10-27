@@ -1,3 +1,4 @@
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -42,6 +43,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
 
 @Module({
   imports: [
+    AnalyticsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       cache: true,

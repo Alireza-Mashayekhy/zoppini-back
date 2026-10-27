@@ -1,3 +1,4 @@
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -19,6 +20,7 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 
 @Module({
   imports: [
+    AnalyticsModule,
     TypeOrmModule.forFeature([Payment, WalletCharge]),
     HttpModule,
     OrdersModule,

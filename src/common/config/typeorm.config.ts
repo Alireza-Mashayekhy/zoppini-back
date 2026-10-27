@@ -1,3 +1,4 @@
+import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions, TypeOrmOptionsFactory } from '@nestjs/typeorm';
@@ -15,7 +16,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
     );
 
     const synchronize =
-      syncOverride !== undefined ? syncOverride === 'true' : !isProd;
+      !isProd && (syncOverride !== undefined ? syncOverride === 'true' : true);
     const migrationsRun =
       migrationsRunOverride !== undefined
         ? migrationsRunOverride === 'true'
@@ -30,7 +31,10 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
       database: this.configService.get('DATABASE_NAME'),
       autoLoadEntities: true,
       synchronize,
-      migrations: [CreateBotManagementTables1761465600000],
+      migrations: [
+        CreateBotManagementTables1761465600000,
+        CookieAnalytics1793059200000,
+      ],
       migrationsRun,
 
       retryAttempts: 20,

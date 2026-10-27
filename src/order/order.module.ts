@@ -1,3 +1,4 @@
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 // src/order/order.module.ts
 import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -23,6 +24,7 @@ import { OrdersService } from './order.service';
 
 @Module({
   imports: [
+    AnalyticsModule,
     TypeOrmModule.forFeature([
       Order,
       OrderItem,

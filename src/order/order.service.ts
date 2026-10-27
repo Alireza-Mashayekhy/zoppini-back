@@ -1,3 +1,4 @@
+import { AnalyticsService } from 'src/analytics/analytics.service';
 // src/orders/orders.service.ts
 import {
   BadRequestException,
@@ -70,6 +71,7 @@ export class OrdersService {
     private readonly walletService: WalletService,
 
     private readonly dataSource: DataSource,
+    private readonly analyticsService: AnalyticsService,
 
     @Optional()
     private readonly botEventsService?: BotEventsService,
@@ -452,6 +454,7 @@ export class OrdersService {
       order.status = OrderStatus.PAID;
 
       await queryRunner.manager.save(Order, order);
+      await this.analyticsService.purchase(queryRunner.manager, order.id);
 
       await this.botEventsService?.recordOrderPaidInTransaction(
         queryRunner.manager,

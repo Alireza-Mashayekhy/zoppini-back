@@ -1,3 +1,4 @@
+import { AnalyticsService } from 'src/analytics/analytics.service';
 import {
   All,
   BadRequestException,
@@ -41,6 +42,7 @@ export class PaymentController {
     private readonly digipayService: DigipayPaymentService,
     private readonly taraService: TaraPaymentService,
     private readonly ordersService: OrdersService,
+    private readonly analyticsService: AnalyticsService,
     private readonly walletChargeService: WalletChargeService,
   ) {}
 
@@ -75,6 +77,12 @@ export class PaymentController {
   ) {
     // فقط مالک سفارش می‌تواند برای آن درخواست پرداخت بدهد
     const { id: userId } = req.user;
+
+    await this.analyticsService.checkout(
+      dto.orderId,
+      userId,
+      String(req.headers['x-analytics-context'] ?? ''),
+    );
 
     switch (dto.gateway) {
       case PaymentGateway.MELLAT:

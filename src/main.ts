@@ -2,6 +2,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
+import { json } from 'express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { join } from 'path';
@@ -48,6 +49,7 @@ async function bootstrap() {
     }),
   );
 
+  app.use('/api/privacy', json({ limit: '4kb' }));
   app.use(compression());
   app.use(cookieParser());
 
@@ -74,7 +76,12 @@ async function bootstrap() {
 
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
 
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Guest-ID'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Guest-ID',
+      'X-Analytics-Context',
+    ],
   });
 
   await app.listen(process.env.PORT ?? 3000);
