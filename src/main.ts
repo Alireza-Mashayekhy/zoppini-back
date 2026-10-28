@@ -2,12 +2,12 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
-import { json } from 'express';
 import cookieParser from 'cookie-parser';
 import helmet from 'helmet';
 import { join } from 'path';
 
 import { AppModule } from './app.module';
+import { setupBodyParsers } from './common/config/body-parser.config';
 import { setupSwagger } from './common/config/swagger.config';
 import { ResponseInterceptor } from './common/interceptors/response.interceptor';
 
@@ -49,7 +49,8 @@ async function bootstrap() {
     }),
   );
 
-  app.use('/api/privacy', json({ limit: '4kb' }));
+  // پارس بدنه با تحمل Content-Type های رایج (JSON، +json و text/plain) و فرم‌ها.
+  setupBodyParsers(app);
   app.use(compression());
   app.use(cookieParser());
 

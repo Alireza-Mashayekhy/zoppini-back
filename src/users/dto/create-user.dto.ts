@@ -6,16 +6,14 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { IsIranMobileField } from 'src/common/decorators/is-iran-mobile.decorator';
 
 export class CreateUserDto {
   @ApiProperty()
   @IsString()
   fullName: string;
 
-  @ApiProperty()
-  @IsString()
-  @MaxLength(11)
-  @MinLength(11)
+  @IsIranMobileField()
   phone: string;
 
   @ApiProperty()
@@ -24,8 +22,8 @@ export class CreateUserDto {
 
   @ApiProperty()
   @IsString()
-  @MaxLength(5)
   @MinLength(5)
+  @MaxLength(5)
   code: string;
 
   @ApiProperty()

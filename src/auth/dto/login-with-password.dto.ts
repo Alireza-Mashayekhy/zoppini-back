@@ -1,11 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty } from 'class-validator';
+import { IsIranMobileField } from 'src/common/decorators/is-iran-mobile.decorator';
 
 export class LoginWithPasswordDto {
-  @ApiProperty()
-  @IsNotEmpty()
-  @MaxLength(11)
-  @MinLength(11)
+  @IsIranMobileField()
   phone: string;
 
   @ApiProperty()
