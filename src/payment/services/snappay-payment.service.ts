@@ -320,13 +320,14 @@ export class SnappayPaymentService {
       );
     }
 
-    const mobile = String(normalizeIranMobile(order.user?.phone ?? ''));
+    const localMobile = String(normalizeIranMobile(order.user?.phone ?? ''));
 
-    if (!isIranMobile(mobile)) {
-      throw new BadRequestException(
-        'شماره همراه معتبری برای پرداخت اسنپ‌پی ثبت نشده است',
-      );
+    if (!isIranMobile(localMobile)) {
+      throw new BadRequestException('شماره همراه معتبری برای پرداخت اسنپ‌پی ثبت نشده است');
     }
+
+    // اسنپ‌پی شماره را با قالب بین‌المللی می‌خواهد: +989xxxxxxxxx
+    const mobile = `+98${localMobile.slice(1)}`;
 
     const methods = this.getPaymentMethodTypes();
 
