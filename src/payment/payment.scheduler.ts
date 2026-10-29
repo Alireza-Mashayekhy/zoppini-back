@@ -3,6 +3,7 @@ import { Cron } from '@nestjs/schedule';
 
 import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
+import { SnappayPaymentService } from './services/snappay-payment.service';
 import { TaraPaymentService } from './services/tara-payment.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 
@@ -17,6 +18,7 @@ export class PaymentScheduler {
     private readonly taraService: TaraPaymentService,
     private readonly zarinpalService: ZarinpalPaymentService,
     private readonly digipayService: DigipayPaymentService,
+    private readonly snappayService: SnappayPaymentService,
   ) {}
 
   /** هر ۳ دقیقه */
@@ -66,6 +68,17 @@ export class PaymentScheduler {
     } catch (error) {
       this.logger.error(
         '❌ همسان‌سازی پرداخت‌های دیجی‌پی خطا خورد.',
+        error instanceof Error ? error.stack : String(error),
+      );
+    } finally {
+      this.running = false;
+    }
+
+    try {
+      await this.snappayService.reconcilePendingPayments();
+    } catch (error) {
+      this.logger.error(
+        '❌ همسان‌سازی پرداخت‌های اسنپ‌پی خطا خورد.',
         error instanceof Error ? error.stack : String(error),
       );
     } finally {

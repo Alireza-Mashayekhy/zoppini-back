@@ -19,6 +19,7 @@ export enum PaymentGateway {
   ZARINPAL = 'zarinpal',
   DIGIPAY = 'digipay',
   TARA = 'tara',
+  SNAPPAY = 'snappay',
 }
 
 export enum PaymentPurpose {

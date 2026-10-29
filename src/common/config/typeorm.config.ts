@@ -1,8 +1,9 @@
-import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModuleOptions, TypeOrmOptionsFactory } from '@nestjs/typeorm';
 import { CreateBotManagementTables1761465600000 } from 'src/migrations/1761465600000-CreateBotManagementTables';
+import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
+import { AddSnappayGateway1794000000000 } from 'src/migrations/1794000000000-AddSnappayGateway';
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
@@ -34,6 +35,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
       migrations: [
         CreateBotManagementTables1761465600000,
         CookieAnalytics1793059200000,
+        AddSnappayGateway1794000000000,
       ],
       migrationsRun,
 

@@ -1,4 +1,3 @@
-import { AnalyticsService } from 'src/analytics/analytics.service';
 import {
   All,
   BadRequestException,
@@ -6,6 +5,8 @@ import {
   Controller,
   Get,
   Logger,
+  Param,
+  ParseIntPipe,
   Post,
   Query,
   Req,
@@ -13,14 +14,24 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { AnalyticsService } from 'src/analytics/analytics.service';
+import { Roles } from 'src/common/decorators/roles.decorator';
+import { Role } from 'src/common/enum/role.enum';
 import { AuthGuard } from 'src/common/guards/auth.guard';
+import { RolesGuard } from 'src/common/guards/roles.guard';
 import { OrdersService } from 'src/order/order.service';
 
 import { RequestPaymentDto } from './dto/request-payment.dto';
+import {
+  SnappayAdminCancelDto,
+  SnappayAdminUpdateDto,
+} from './dto/snappay-admin.dto';
+import { SnappayEligibilityDto } from './dto/snappay-eligibility.dto';
 import { StartWalletChargeDto } from './dto/start-wallet-charge.dto';
 import { PaymentGateway, PaymentPurpose } from './entities/payment.entity';
 import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
+import { SnappayPaymentService } from './services/snappay-payment.service';
 import { TaraPaymentService } from './services/tara-payment.service';
 import { WalletChargeService } from './services/wallet-charge.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
@@ -41,6 +52,7 @@ export class PaymentController {
     private readonly zarinpalService: ZarinpalPaymentService,
     private readonly digipayService: DigipayPaymentService,
     private readonly taraService: TaraPaymentService,
+    private readonly snappayService: SnappayPaymentService,
     private readonly ordersService: OrdersService,
     private readonly analyticsService: AnalyticsService,
     private readonly walletChargeService: WalletChargeService,
@@ -101,9 +113,27 @@ export class PaymentController {
           getClientIp(req),
         );
 
+      case PaymentGateway.SNAPPAY:
+        return this.snappayService.requestPayment(dto.orderId, userId);
+
       default:
         throw new BadRequestException('درگاه پشتیبانی نمی‌شود');
     }
+  }
+
+  /**
+   * بررسی امکان پرداخت اسنپ‌پی برای نمایش در چک‌اوت.
+   * عنوان و توضیح پاسخ دقیقاً همان مقادیر داینامیک اسنپ‌پی است و با هر
+   * تغییر مبلغ باید دوباره فراخوانی شود؛ در صورت eligible=false این روش
+   * پرداخت نباید نمایش داده شود.
+   */
+  @Get('snappay/eligibility')
+  @UseGuards(AuthGuard)
+  async snappayEligibility(
+    @Req() req: AuthenticatedRequest,
+    @Query() dto: SnappayEligibilityDto,
+  ) {
+    return this.snappayService.getEligibility(req.user.id, dto);
   }
 
   @Post('start-wallet-charge')
@@ -113,6 +143,13 @@ export class PaymentController {
     @Body() dto: StartWalletChargeDto,
   ) {
     const { id: userId } = req.user;
+
+    // اسنپ‌پی اعتبار خرید کالاست و برای شارژ کیف پول استفاده نمی‌شود
+    if (dto.gateway === PaymentGateway.SNAPPAY) {
+      throw new BadRequestException(
+        'شارژ کیف پول با اسنپ‌پی امکان‌پذیر نیست؛ اسنپ‌پی فقط برای پرداخت سفارش است',
+      );
+    }
 
     const charge = await this.walletChargeService.createPendingCharge(
       userId,
@@ -496,5 +533,110 @@ export class PaymentController {
 
       return this.redirect(res, 'failed', payment.orderId ?? undefined);
     }
+  }
+
+  //==============================================================
+  // SnappPay
+  //==============================================================
+
+  /**
+   * نتیجهٔ پرداخت اسنپ‌پی طبق مستند با POST فرم و این پارامترها به
+   * returnURL برمی‌گردد: transactionId, state (OK/FAILED), amount (ریال)
+   *
+   * برای اطمینان از گم نشدن callback، مثل تارا هر دو متد و هر دو منبع
+   * (بدنه/query) خوانده می‌شود؛ امنیت نهایی با تطبیق مبلغ و فراخوانی
+   * سمت سرور verify/settle/status برقرار است، نه با خود این درخواست.
+   * callback تکراری هم بی‌خطر است و verify دوم ساخته نمی‌شود.
+   */
+  @All('callback/snappay')
+  async callbackSnappay(@Req() req: Request, @Res() res: Response) {
+    const transactionId = readCallbackFieldAny(req, [
+      'transactionId',
+      'TransactionId',
+      'transaction_id',
+    ]);
+    const state = readCallbackFieldAny(req, ['state', 'State']);
+    const amount = readCallbackFieldAny(req, ['amount', 'Amount']);
+
+    if (!transactionId) {
+      this.logger.warn('callback اسنپ‌پی بدون transactionId دریافت شد.');
+
+      return this.redirect(res, 'failed');
+    }
+
+    const payment =
+      await this.snappayService.findPaymentByTransactionId(transactionId);
+
+    if (!payment) {
+      this.logger.warn(
+        `callback اسنپ‌پی برای transactionId ناشناخته: ${transactionId}`,
+      );
+
+      return this.redirect(res, 'failed');
+    }
+
+    try {
+      const result = await this.snappayService.handleCallback(payment, {
+        transactionId,
+        state,
+        amount,
+      });
+
+      return this.redirect(
+        res,
+        result.pending ? 'pending' : result.success ? 'success' : 'failed',
+        result.orderId ?? payment.orderId ?? undefined,
+      );
+    } catch (error) {
+      /*
+       * خطای پیش‌بینی‌نشده: ممکن است وجه در اسنپ‌پی پرداخت شده باشد، پس
+       * کاربر صفحهٔ «در حال بررسی» را می‌بیند و scheduler با استعلام
+       * وضعیت تکلیف تراکنش را روشن می‌کند.
+       */
+      this.logger.error(
+        `❌ خطا در پردازش callback اسنپ‌پی (پرداخت ${payment.id})`,
+        error instanceof Error ? error.stack : String(error),
+      );
+
+      return this.redirect(res, 'pending', payment.orderId ?? undefined);
+    }
+  }
+
+  /**
+   * لغو کامل تراکنش settle‌شدهٔ اسنپ‌پی توسط ادمین (برگشت‌ناپذیر).
+   * بدنه: { "confirm": true, "cancelOrder": true, "reason": "..." }
+   */
+  @Post('snappay/admin/payments/:paymentId/cancel')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async snappayAdminCancel(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: SnappayAdminCancelDto,
+  ) {
+    return this.snappayService.adminCancelPayment(paymentId, dto);
+  }
+
+  /**
+   * کم کردن مبلغ/اقلام تراکنش settle‌شدهٔ اسنپ‌پی توسط ادمین
+   * (برگشت‌ناپذیر). بدنه: { "confirm": true, "items": [{ "orderItemId": 1, "count": 0 }] }
+   */
+  @Post('snappay/admin/payments/:paymentId/update')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async snappayAdminUpdate(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+    @Body() dto: SnappayAdminUpdateDto,
+  ) {
+    return this.snappayService.adminUpdatePayment(paymentId, dto);
+  }
+
+  /** استعلام و پیش‌برد دستی یک پرداخت اسنپ‌پی (همان مسیری که cron می‌رود) */
+  @Post('snappay/admin/payments/:paymentId/reconcile')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async snappayAdminReconcile(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+  ) {
+    return this.snappayService.adminReconcilePayment(paymentId);
   }
 }

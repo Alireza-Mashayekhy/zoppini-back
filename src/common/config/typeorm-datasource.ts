@@ -1,4 +1,3 @@
-import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
 import 'dotenv/config';
 
 import { BotInventoryAlertState } from 'src/bot-reports/entities/bot-inventory-alert-state.entity';
@@ -6,6 +5,8 @@ import { BotOperator } from 'src/bot-reports/entities/bot-operator.entity';
 import { BotOutboxEvent } from 'src/bot-reports/entities/bot-outbox-event.entity';
 import { BotSetting } from 'src/bot-reports/entities/bot-setting.entity';
 import { CreateBotManagementTables1761465600000 } from 'src/migrations/1761465600000-CreateBotManagementTables';
+import { CookieAnalytics1793059200000 } from 'src/migrations/1793059200000-CookieAnalytics';
+import { AddSnappayGateway1794000000000 } from 'src/migrations/1794000000000-AddSnappayGateway';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -19,6 +20,7 @@ export default new DataSource({
   migrations: [
     CreateBotManagementTables1761465600000,
     CookieAnalytics1793059200000,
+    AddSnappayGateway1794000000000,
   ],
   synchronize: false,
 });

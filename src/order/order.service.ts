@@ -1,4 +1,3 @@
-import { AnalyticsService } from 'src/analytics/analytics.service';
 // src/orders/orders.service.ts
 import {
   BadRequestException,
@@ -9,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
+import { AnalyticsService } from 'src/analytics/analytics.service';
 import {
   BotEventsService,
   VariantStockChangeInput,
@@ -1102,6 +1102,8 @@ export class OrdersService {
         return 'دیجی‌پی';
       case PaymentGateway.TARA:
         return 'تارا';
+      case PaymentGateway.SNAPPAY:
+        return 'اسنپ‌پی';
       default:
         return String(gateway);
     }

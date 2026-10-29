@@ -1,7 +1,9 @@
 /**
- * SnappPay REST API v2.1 transport only. This client is intentionally not
- * registered with PaymentModule: accepting payments also requires a durable,
- * idempotent order/settlement workflow (see SNAPPAY_INTEGRATION.md).
+ * SnappPay REST API v2.1 transport only.
+ *
+ * منطق سفارش، ذخیره‌سازی ماندگار تراکنش و چرخهٔ verify/settle در
+ * `SnappayPaymentService` است؛ این کلاس فقط قرارداد HTTP اسنپ‌پی را
+ * پیاده می‌کند (به `SNAPPAY_INTEGRATION.md` مراجعه شود).
  */
 export type SnappPayMethod = 'POSTPAID' | 'INSTALLMENT' | 'FINANCING';
 export type SnappPayStatus =
@@ -208,8 +210,16 @@ export class SnappPayClient {
       this.expiresAt = 0;
     }
     if (!ok || data?.successful === false) {
+      // پیام خطای خود اسنپ‌پی برای لاگ سمت سرور نگه داشته می‌شود تا هنگام
+      // پیگیری با پشتیبانی (ارسال curl و کد خطا طبق مستند) قابل ردیابی باشد؛
+      // این متن هرگز مستقیم به کاربر نمایش داده نمی‌شود.
+      const providerMessage =
+        typeof data?.errorData?.message === 'string' &&
+        data.errorData.message.trim()
+          ? `: ${data.errorData.message.trim()}`
+          : '';
       throw new SnappPayError(
-        'درخواست اسنپ‌پی ناموفق بود',
+        `درخواست اسنپ‌پی ناموفق بود${providerMessage}`,
         'provider',
         status,
         data?.errorData?.errorCode == null
@@ -307,7 +317,7 @@ export class SnappPayClient {
   }
 
   private async operation(
-    name: 'verify' | 'settle' | 'cancel' | 'update',
+    name: 'verify' | 'settle' | 'cancel' | 'update' | 'revert',
     body: object,
   ): Promise<{ transactionId: string }> {
     const response = await this.call(
@@ -329,6 +339,13 @@ export class SnappPayClient {
   }
   cancel(paymentToken: string) {
     return this.operation('cancel', { paymentToken });
+  }
+  /**
+   * برگشت وجه تراکنشی که هنوز settle نشده است (مثلاً callback ناموفق،
+   * ناموجود شدن کالا یا پرداخت تکراری یک سفارش در دو تب).
+   */
+  revert(paymentToken: string) {
+    return this.operation('revert', { paymentToken });
   }
   update(update: SnappPayUpdate) {
     return this.operation('update', update);
