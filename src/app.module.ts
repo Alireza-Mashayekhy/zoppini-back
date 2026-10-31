@@ -32,6 +32,7 @@ import { ProductGuidesModule } from './product-guides/product-guides.module';
 import { ProductsModule } from './products/products.module';
 import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
+import { ReportsModule } from './reports/reports.module';
 import { SeoModule } from './seo/seo.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
@@ -66,6 +67,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     UsersModule,
     AuthModule,
     RedisModule,
+    ReportsModule,
     OtpModule,
     CategoriesModule,
     BlogModule,

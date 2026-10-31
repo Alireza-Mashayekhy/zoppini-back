@@ -72,12 +72,39 @@ export class Order {
   @Column({ type: 'enum', enum: OrderStatus, default: OrderStatus.PENDING })
   status: OrderStatus;
 
+  // Integration-only fields are never selected in the customer/admin order APIs.
+  @Column({
+    name: 'torob_clid',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    select: false,
+  })
+  torobClid: string | null;
+
+  @Column({
+    name: 'torob_grant_id',
+    type: 'varchar',
+    length: 36,
+    nullable: true,
+    select: false,
+  })
+  torobGrantId: string | null;
+
+  @Column({
+    name: 'torob_was_paid',
+    type: 'boolean',
+    default: false,
+    select: false,
+  })
+  torobWasPaid: boolean;
+
   @Column({ name: 'address_id', nullable: true })
-  addressId: number;
+  addressId: number | null;
 
   @ManyToOne(() => Address, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'address_id' })
-  address: Address;
+  address: Address | null;
 
   @Column({
     type: 'varchar',

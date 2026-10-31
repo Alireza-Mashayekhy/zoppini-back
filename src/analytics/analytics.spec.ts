@@ -105,6 +105,39 @@ describe('privacy analytics boundaries (no database/network)', () => {
       validate({ id, name: 'page_view', device: 'mobile' }, EventDto),
     ).resolves.toBeInstanceOf(EventDto);
   });
+  it('records category views only for active categories with an active consent grant', async () => {
+    const event = {
+      id,
+      name: 'category_view',
+      device: 'mobile',
+      category: 42,
+    } as EventDto;
+    await expect(validate(event, EventDto)).resolves.toBeInstanceOf(EventDto);
+    await expect(service.event(event, '')).rejects.toThrow(
+      UnauthorizedException,
+    );
+    expect(query).not.toHaveBeenCalled();
+    query.mockResolvedValueOnce([]);
+    await expect(service.event(event, token())).rejects.toThrow(
+      BadRequestException,
+    );
+    query.mockReset();
+    query.mockResolvedValueOnce([{ id: 42 }]).mockResolvedValueOnce([]);
+    await expect(service.event(event, token())).rejects.toThrow(
+      UnauthorizedException,
+    );
+    expect(query).toHaveBeenCalledTimes(2);
+    query.mockReset();
+    query
+      .mockResolvedValueOnce([{ id: 42 }])
+      .mockResolvedValueOnce([{ visitor }])
+      .mockResolvedValueOnce({});
+    await service.event(event, token());
+    expect(query.mock.calls[2][0]).toContain(
+      'INSERT IGNORE INTO analytics_events',
+    );
+    expect(query.mock.calls[2][1].at(-1)).toBe(42);
+  });
   it('drops non-allowlisted campaign data and uses deduplication', async () => {
     query.mockResolvedValueOnce([{ visitor }]).mockResolvedValueOnce({});
     await service.event(

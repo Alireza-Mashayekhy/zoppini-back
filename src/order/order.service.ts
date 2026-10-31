@@ -27,12 +27,17 @@ import {
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
+import {
+  TOROB_CLICK_WINDOW_MS,
+  TorobAttribution,
+} from 'src/torob/torob-attribution.util';
 import { User } from 'src/users/entities/user.entity';
 import { WalletService } from 'src/wallet/wallet.service';
 import { DataSource, In, Not, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
+import { OrderItem } from './entities/order-item';
 
 @Injectable()
 export class OrdersService {
@@ -87,7 +92,12 @@ export class OrdersService {
     return `${prefix}-${timestamp}-${random}`;
   }
 
-  async createOrder(userId: number, dto: CreateOrderDto) {
+  async createOrder(
+    userId: number,
+    dto: CreateOrderDto,
+    attribution: TorobAttribution | null = null,
+    analyticsContext = '',
+  ) {
     // =====================================================
     // 1. User
     // =====================================================
@@ -106,16 +116,16 @@ export class OrdersService {
     // 2. Address
     // =====================================================
 
-    const address = await this.addressRepo.findOne({
-      where: {
-        id: dto.addressId,
-        user: {
-          id: userId,
-        },
-      },
-    });
-
-    if (!address) {
+    // Pickup does not require a delivery address. If one is supplied, still
+    // check ownership; never attach another customer's address.
+    let address: Address | null = null;
+    if (dto.addressId !== undefined) {
+      address = await this.addressRepo.findOne({
+        where: { id: dto.addressId, user: { id: userId } },
+      });
+      if (!address)
+        throw new BadRequestException('آدرس انتخاب‌شده معتبر نیست.');
+    } else if (dto.shippingMethod !== ShippingMethod.PICKUP) {
       throw new BadRequestException('آدرس انتخاب‌شده معتبر نیست.');
     }
 
@@ -267,7 +277,7 @@ export class OrdersService {
 
       discountCode,
 
-      addressId: address.id,
+      addressId: address?.id ?? null,
 
       address,
 
@@ -283,7 +293,34 @@ export class OrdersService {
     // =====================================================
 
     const savedOrder = await this.dataSource.transaction(async manager => {
+      // Lock the consent grant in the same transaction as the order attribution.
+      // A concurrent revocation either wins first or removes the saved attribution.
+      let allowed = false;
+      if (
+        attribution &&
+        Date.now() - attribution.clickedAt < TOROB_CLICK_WINDOW_MS
+      ) {
+        const grants = await manager.query(
+          'SELECT id FROM torob_attribution_grants WHERE id = ? AND active = 1 AND expires_at > UTC_TIMESTAMP(3) FOR UPDATE',
+          [attribution.grantId],
+        );
+        allowed = grants.length > 0;
+      }
       const persisted = await manager.save(Order, order);
+      const persistedItems = await manager.count(OrderItem, {
+        where: { order: { id: persisted.id } },
+      });
+      if (persistedItems !== orderItems.length) {
+        throw new Error(
+          'Order items were not persisted; the order transaction has been rolled back',
+        );
+      }
+      if (allowed && attribution) {
+        await manager.update(Order, persisted.id, {
+          torobClid: attribution.clid,
+          torobGrantId: attribution.grantId,
+        });
+      }
       await this.botEventsService?.recordOrderCreatedInTransaction(
         manager,
         persisted,
@@ -299,6 +336,17 @@ export class OrdersService {
     //
     // await this.cartService.clearCart(userId);
 
+    if (analyticsContext) {
+      try {
+        await this.analyticsService.checkout(
+          savedOrder.id,
+          userId,
+          analyticsContext,
+        );
+      } catch {
+        this.logger.warn('Analytics checkout context could not be stored');
+      }
+    }
     if (dto.useWallet && walletPayment >= finalPrice) {
       try {
         return await this.confirmOrderPayment(savedOrder.id);
@@ -452,6 +500,7 @@ export class OrdersService {
       // =========================================================
 
       order.status = OrderStatus.PAID;
+      order.torobWasPaid = true;
 
       await queryRunner.manager.save(Order, order);
       await this.analyticsService.purchase(queryRunner.manager, order.id);
@@ -765,6 +814,12 @@ export class OrdersService {
 
     await this.dataSource.transaction(async manager => {
       order.status = status;
+      if (
+        [OrderStatus.PAID, OrderStatus.SHIPPED, OrderStatus.DELIVERED].includes(
+          status,
+        )
+      )
+        order.torobWasPaid = true;
       await manager.save(Order, order);
       await this.botEventsService?.recordOrderStatusTransitionInTransaction(
         manager,
@@ -1035,6 +1090,7 @@ export class OrdersService {
       case ShippingMethod.POST:
         return 170000;
 
+      case ShippingMethod.PICKUP:
       case ShippingMethod.COURIER:
       case ShippingMethod.TIBAX:
       default:

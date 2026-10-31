@@ -88,6 +88,7 @@ function parseJsonSegment<T>(segment: string, label: string): T {
 export function verifyTorobToken(
   token: string,
   expectedAudience: string | null,
+  options: { clockSkewSeconds?: number; requireNbf?: boolean } = {},
 ): TorobVerifiedToken {
   if (!token || typeof token !== 'string') {
     throw new TorobTokenError('X-Torob-Token header is missing');
@@ -136,19 +137,28 @@ export function verifyTorobToken(
   );
 
   const now = Math.floor(Date.now() / 1000);
+  const skew = options.clockSkewSeconds ?? TOROB_CLOCK_SKEW_SECONDS;
 
-  if (typeof payload.exp !== 'number') {
+  if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
     throw new TorobTokenError('token exp claim is missing');
   }
 
-  if (payload.exp + TOROB_CLOCK_SKEW_SECONDS < now) {
+  if (
+    options.clockSkewSeconds === 0
+      ? payload.exp <= now
+      : payload.exp + skew < now
+  ) {
     throw new TorobTokenError('token is expired');
   }
 
   if (
-    typeof payload.nbf === 'number' &&
-    payload.nbf - TOROB_CLOCK_SKEW_SECONDS > now
+    options.requireNbf &&
+    (typeof payload.nbf !== 'number' || !Number.isFinite(payload.nbf))
   ) {
+    throw new TorobTokenError('token nbf claim is missing');
+  }
+
+  if (typeof payload.nbf === 'number' && payload.nbf - skew > now) {
     throw new TorobTokenError('token is not active yet');
   }
 

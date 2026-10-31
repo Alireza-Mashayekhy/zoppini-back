@@ -82,6 +82,7 @@ async function bootstrap() {
       'Authorization',
       'X-Guest-ID',
       'X-Analytics-Context',
+      'X-Torob-Attribution',
     ],
   });
 

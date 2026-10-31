@@ -13,11 +13,13 @@ export class ProductsController {
     @Query('categoryIds') categoryIds?: string,
     @Query('colorIds') colorIds?: string,
     @Query('sizeIds') sizeIds?: string,
+    @Query('directCategory') directCategory?: string,
   ) {
     const filters = {
       categoryIds: categoryIds ? categoryIds.split(',').map(Number) : undefined,
       colorIds: colorIds ? colorIds.split(',').map(Number) : undefined,
       sizeIds: sizeIds ? sizeIds.split(',').map(Number) : undefined,
+      directCategory: directCategory === 'true',
     };
 
     return this.productsService.findAll(query, filters, {

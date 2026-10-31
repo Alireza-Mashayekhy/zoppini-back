@@ -9,7 +9,7 @@ import { DataSource, EntityManager } from 'typeorm';
 
 import { ConsentDto, EventDto, ReportDto } from './analytics.dto';
 
-export const POLICY = '2026-10-27.2';
+export const POLICY = '2026-10-31.2';
 const CATEGORY_VERSION = 'necessary,preferences,analytics,marketing';
 @Injectable()
 export class AnalyticsService {
@@ -108,6 +108,14 @@ export class AnalyticsService {
     ] as const) {
       if (d[key] && !allowed.split(',').includes(d[key])) d[key] = undefined;
     }
+    if (d.name === 'category_view') {
+      if (!d.category) throw new BadRequestException();
+      const categories = await this.db.query(
+        'SELECT id FROM category WHERE id = ? AND isActive = 1 LIMIT 1',
+        [d.category],
+      );
+      if (!categories.length) throw new BadRequestException();
+    } else d.category = undefined;
     if (d.variant) {
       const variants = await this.db.query(
         'SELECT product_id AS productId FROM variant WHERE id=? LIMIT 1',
@@ -123,7 +131,7 @@ export class AnalyticsService {
       );
       if (!grants.length) throw new UnauthorizedException();
       await m.query(
-        `INSERT IGNORE INTO analytics_events (id,name,visitor,session,created_at,product,variant,source,medium,campaign,referrer,device) VALUES (?,?,?,?,UTC_TIMESTAMP(3),?,?,?,?,?,?,?)`,
+        `INSERT IGNORE INTO analytics_events (id,name,visitor,session,created_at,product,variant,source,medium,campaign,referrer,device,category) VALUES (?,?,?,?,UTC_TIMESTAMP(3),?,?,?,?,?,?,?,?)`,
         [
           d.id,
           d.name,
@@ -136,6 +144,7 @@ export class AnalyticsService {
           d.campaign ?? null,
           d.referrer ?? null,
           d.device,
+          d.category ?? null,
         ],
       );
     });

@@ -112,7 +112,7 @@ dependencies:
     version: 1.13.2
   typeorm:
     specifier: ^1.0.0
-    version: 1.1.1(mysql2@3.24.5)(redis@5.12.1)(ts-node@10.9.2)
+    version: 1.1.1(mysql2@3.24.5)(redis@5.12.1)(sql.js@1.15.2)(ts-node@10.9.2)
   uuid:
     specifier: ^14.0.1
     version: 14.0.2
@@ -154,6 +154,9 @@ devDependencies:
   '@types/node':
     specifier: ^24.12.4
     version: 24.19.1
+  '@types/sql.js':
+    specifier: ^1.4.11
+    version: 1.4.11
   '@types/supertest':
     specifier: ^7.0.0
     version: 7.2.1
@@ -178,6 +181,9 @@ devDependencies:
   source-map-support:
     specifier: ^0.5.21
     version: 0.5.21
+  sql.js:
+    specifier: ^1.15.2
+    version: 1.15.2
   supertest:
     specifier: ^7.0.0
     version: 7.3.1
@@ -1650,7 +1656,7 @@ packages:
       '@nestjs/core': 11.2.7(@nestjs/common@11.2.7)(@nestjs/platform-express@11.2.7)(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
       rxjs: 7.8.2
-      typeorm: 1.1.1(mysql2@3.24.5)(redis@5.12.1)(ts-node@10.9.2)
+      typeorm: 1.1.1(mysql2@3.24.5)(redis@5.12.1)(sql.js@1.15.2)(ts-node@10.9.2)
     dev: false
 
   /@noble/hashes@1.8.0:
@@ -1987,6 +1993,10 @@ packages:
     resolution: {integrity: sha512-he+DHOWReW0nghN24E1WUqM0efK4kI9oTqDm6XmK8ZPe2djZ90BSNdGnIyCLzCPw7/pogPlGbzI2wHGGmi4O/Q==}
     dev: true
 
+  /@types/emscripten@1.41.6:
+    resolution: {integrity: sha512-uN+9i8bFT5CUcZfyIEYDrSueACEyKGbUs5kC/72DGlZZoinh84sJfVV0i8UOJD1asdzkvLPBRrKs41kZ8MdEXg==}
+    dev: true
+
   /@types/eslint-scope@3.7.7:
     resolution: {integrity: sha512-MzMFlSLBqNF2gcHWO0G1vP/YQyfvrxZ0bF+u7mzUdZ1/xK4A4sru+nraZz5i3iEIk1l1uyicaDVTB4QbbEkAYg==}
     dependencies:
@@ -2099,6 +2109,13 @@ packages:
     resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
     dependencies:
       '@types/http-errors': 2.0.5
+      '@types/node': 24.19.1
+    dev: true
+
+  /@types/sql.js@1.4.11:
+    resolution: {integrity: sha512-QXIx38p2ZThJaK9vP5ZdqdlRe1FG9I8SmCZOS7FHfB/2qPAjZwkL7/vlfPg6N/oWHuuOaGg/P/IRwfP2W0kWVQ==}
+    dependencies:
+      '@types/emscripten': 1.41.6
       '@types/node': 24.19.1
     dev: true
 
@@ -5792,6 +5809,9 @@ packages:
     engines: {node: '>=14'}
     dev: false
 
+  /sql.js@1.15.2:
+    resolution: {integrity: sha512-ZmMYFsZPZWDKIJUh3A5rdnpRV3hB/r7AijwAzSzLnfv/9CSx4obUmDtA8brAjWJWjGtUVh43nIEJ+6nl6HuOUg==}
+
   /stack-utils@2.0.6:
     resolution: {integrity: sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ==}
     engines: {node: '>=10'}
@@ -6203,7 +6223,7 @@ packages:
       media-typer: 1.1.1
       mime-types: 3.0.2
 
-  /typeorm@1.1.1(mysql2@3.24.5)(redis@5.12.1)(ts-node@10.9.2):
+  /typeorm@1.1.1(mysql2@3.24.5)(redis@5.12.1)(sql.js@1.15.2)(ts-node@10.9.2):
     resolution: {integrity: sha512-og9mG4Lwlvj6MfvYd8yRCzXy73gETtwgTKQ/ISLYvEOpJPy4IrjU/89HK4ZAFmRIbEg1hkIk04v8phTrxfgPmQ==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24.11.0}
     hasBin: true
@@ -6264,6 +6284,7 @@ packages:
       redis: 5.12.1
       reflect-metadata: 0.2.2
       sql-highlight: 6.1.0
+      sql.js: 1.15.2
       tinyglobby: 0.2.17
       ts-node: 10.9.2(@types/node@24.19.1)(typescript@5.9.3)
       tslib: 2.8.1

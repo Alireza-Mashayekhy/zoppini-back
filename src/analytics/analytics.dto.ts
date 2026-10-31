@@ -14,12 +14,14 @@ export class EventDto {
   @IsUUID() id: string;
   @IsIn([
     'page_view',
+    'category_view',
     'product_view',
     'add_to_cart',
     'cart_updated',
     'checkout_started',
   ])
   name: string;
+  @IsOptional() @IsInt() @Min(1) category?: number;
   @IsOptional() @IsInt() @Min(1) product?: number;
   @IsOptional() @IsInt() @Min(1) variant?: number;
   @IsOptional() @Matches(/^[a-zA-Z][a-zA-Z_-]{0,63}$/) source?: string;
@@ -30,7 +32,7 @@ export class EventDto {
 }
 export class ConsentDto {
   @IsUUID() id: string;
-  @IsIn(['2026-10-27.2']) policy: string;
+  @IsIn(['2026-10-31.2']) policy: string;
   @IsBoolean() preferences: boolean;
   @IsBoolean() analytics: boolean;
   @IsBoolean() marketing: boolean;

@@ -1,4 +1,3 @@
-import { AnalyticsService } from 'src/analytics/analytics.service';
 // src/orders/orders.controller.ts
 import {
   Body,
@@ -11,8 +10,10 @@ import {
   Request,
   UseGuards,
 } from '@nestjs/common';
+import { AnalyticsService } from 'src/analytics/analytics.service';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 import { QueryDto } from 'src/common/query';
+import { verifyAttribution } from 'src/torob/torob-attribution.util';
 
 import { CreateOrderDto } from './dto/create-order.dto';
 import { OrdersService } from './order.service';
@@ -40,7 +41,19 @@ export class OrdersController {
   @Post()
   async create(@Request() req, @Body() dto: CreateOrderDto) {
     const userId = req.user.id;
-    return this.ordersService.createOrder(userId, dto);
+    const attribution =
+      process.env.TOROB_TRACKING_ENABLED === 'true'
+        ? verifyAttribution(
+            req.headers['x-torob-attribution'],
+            process.env.TOROB_ATTRIBUTION_SECRET,
+          )
+        : null;
+    return this.ordersService.createOrder(
+      userId,
+      dto,
+      attribution,
+      String(req.headers['x-analytics-context'] ?? ''),
+    );
   }
 
   @Patch(':id/cancel')

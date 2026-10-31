@@ -389,6 +389,7 @@ export class ProductsService {
       categoryIds?: number[];
       colorIds?: number[];
       sizeIds?: number[];
+      directCategory?: boolean;
     },
     options?: {
       onlyInStock?: boolean;
@@ -416,9 +417,11 @@ export class ProductsService {
     }
 
     if (filters?.categoryIds?.length) {
-      const categoryScope = await this.categoriesService.findWithDescendantIds(
-        filters.categoryIds,
-      );
+      const categoryScope = filters.directCategory
+        ? filters.categoryIds
+        : await this.categoriesService.findWithDescendantIds(
+            filters.categoryIds,
+          );
 
       if (!categoryScope.length) {
         // فقط شناسه‌های نامعتبر فرستاده شده بود → هیچ محصولی نباید برگردد
