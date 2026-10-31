@@ -11,7 +11,7 @@ import { DataSource, EntityManager, TableColumn, TableIndex } from 'typeorm';
 
 import { ConsentDto, EventDto, ReportDto } from './analytics.dto';
 
-export const POLICY = '2026-10-31.2';
+export const POLICY = '2026-10-31.3';
 const CATEGORY_VERSION = 'necessary,preferences,analytics,marketing';
 @Injectable()
 export class AnalyticsService implements OnModuleInit {

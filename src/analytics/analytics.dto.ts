@@ -32,7 +32,9 @@ export class EventDto {
 }
 export class ConsentDto {
   @IsUUID() id: string;
-  @IsIn(['2026-10-31.2']) policy: string;
+  // The previous version stays accepted while a front-end deploy and this
+  // deploy are not atomic: cached Next bundles still post `2026-10-31.2`.
+  @IsIn(['2026-10-31.2', '2026-10-31.3']) policy: string;
   @IsBoolean() preferences: boolean;
   @IsBoolean() analytics: boolean;
   @IsBoolean() marketing: boolean;
