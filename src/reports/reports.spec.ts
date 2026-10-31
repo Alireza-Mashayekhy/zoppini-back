@@ -151,6 +151,29 @@ describe('sales reports on safe transaction fixtures', () => {
       ),
     ).rejects.toThrow();
   });
+  it('uses a MySQL-safe line-item CTE in every table report query', async () => {
+    const statements: string[] = [];
+    const db = {
+      query: (sql: string) => {
+        statements.push(sql);
+        return Promise.resolve(
+          sql.includes('COUNT(*) total') ? [{ total: 0 }] : [],
+        );
+      },
+    };
+    const reports = new ReportsService(db as unknown as DataSource);
+
+    for (const kind of ['sales', 'products', 'categories', 'variants']) {
+      await reports.table(kind, query);
+    }
+
+    expect(statements).toHaveLength(8);
+    for (const sql of statements) {
+      expect(sql).toContain('report_lines AS');
+      expect(sql).not.toMatch(/\bLINES\s+AS\b/i);
+      expect(sql).not.toMatch(/\bFROM\s+LINES\b/i);
+    }
+  });
   it('aggregates real line quantities and proportional coupon discount; low sellers include zero sales', async () => {
     const high = await service.table('products', query);
     expect(

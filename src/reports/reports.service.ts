@@ -12,11 +12,12 @@ const paid = `o.status IN ('paid','shipped','delivered') AND (
  (o.walletPayment <= 0 OR EXISTS (SELECT 1 FROM wallet_transactions w WHERE w.transactionKey=CONCAT('wallet-order-',o.id) AND w.type='purchase' AND w.status='success' AND w.amount>=o.walletPayment))
  AND (o.finalPrice <= o.walletPayment OR EXISTS (SELECT 1 FROM payments pay WHERE pay.orderId=o.id AND pay.purpose='order' AND pay.status='success' AND pay.amount >= ROUND((o.finalPrice-o.walletPayment)*10)))
  ))`;
+// `LINES` is reserved by MySQL; use a non-keyword CTE name for line-item data.
 const base = `WITH cohort AS (SELECT o.*, (${paid}) AS eligible FROM \`order\` o WHERE o.created_at >= ? AND o.created_at < ?),
- lines AS (SELECT v.product_id AS productId, v.id AS variantId, i.order_id AS orderId, i.quantity AS quantity,
+ report_lines AS (SELECT v.product_id AS productId, v.id AS variantId, i.order_id AS orderId, i.quantity AS quantity,
  CASE WHEN (o.totalPrice-o.saleDiscount)>0 THEN i.totalPrice * GREATEST(o.totalPrice-o.discount,0)/(o.totalPrice-o.saleDiscount) ELSE 0 END AS revenue
  FROM cohort o JOIN order_item i ON i.order_id=o.id LEFT JOIN variant v ON v.id=i.variant_id WHERE o.eligible=1),
- product_sales AS (SELECT productId, SUM(quantity) units, SUM(revenue) revenue, COUNT(DISTINCT orderId) orders FROM lines WHERE productId IS NOT NULL GROUP BY productId),
+ product_sales AS (SELECT productId, SUM(quantity) units, SUM(revenue) revenue, COUNT(DISTINCT orderId) orders FROM report_lines WHERE productId IS NOT NULL GROUP BY productId),
  product_stock AS (SELECT product_id productId, SUM(GREATEST(stock,0)) stock FROM variant GROUP BY product_id)`;
 
 type Kind = 'sales' | 'products' | 'categories' | 'variants';
@@ -101,7 +102,7 @@ export class ReportsService {
           [m.from, m.to, ...m.days.flatMap(d => [d.day, d.from, d.to])],
         ),
         this.db.query(
-          `${base} SELECT COUNT(*) count FROM lines WHERE productId IS NULL`,
+          `${base} SELECT COUNT(*) count FROM report_lines WHERE productId IS NULL`,
           [m.from, m.to],
         ),
         this.db.query(
@@ -177,10 +178,10 @@ export class ReportsService {
     else if (kind === 'products')
       body = `SELECT p.id, p.title AS name, COALESCE(ps.units,0) units, COALESCE(ps.revenue,0) revenue, COALESCE(ps.orders,0) orders, COALESCE(st.stock,0) stock FROM product p LEFT JOIN product_sales ps ON ps.productId=p.id LEFT JOIN product_stock st ON st.productId=p.id WHERE p.title LIKE ?`;
     else if (kind === 'variants')
-      body = `SELECT v.id, CONCAT(p.title, ' / ', COALESCE(col.name,''), ' / ', COALESCE(sz.name,'')) name, COALESCE(s.units,0) units, COALESCE(s.revenue,0) revenue, COALESCE(s.orders,0) orders, v.stock stock FROM variant v JOIN product p ON p.id=v.product_id LEFT JOIN color col ON col.id=v.color_id LEFT JOIN size sz ON sz.id=v.size_id LEFT JOIN (SELECT variantId, SUM(quantity) units, SUM(revenue) revenue, COUNT(DISTINCT orderId) orders FROM lines WHERE variantId IS NOT NULL GROUP BY variantId) s ON s.variantId=v.id WHERE p.title LIKE ?`;
+      body = `SELECT v.id, CONCAT(p.title, ' / ', COALESCE(col.name,''), ' / ', COALESCE(sz.name,'')) name, COALESCE(s.units,0) units, COALESCE(s.revenue,0) revenue, COALESCE(s.orders,0) orders, v.stock stock FROM variant v JOIN product p ON p.id=v.product_id LEFT JOIN color col ON col.id=v.color_id LEFT JOIN size sz ON sz.id=v.size_id LEFT JOIN (SELECT variantId, SUM(quantity) units, SUM(revenue) revenue, COUNT(DISTINCT orderId) orders FROM report_lines WHERE variantId IS NOT NULL GROUP BY variantId) s ON s.variantId=v.id WHERE p.title LIKE ?`;
     // Aggregate order count separately to avoid multiplying a category's revenue by its orders.
     if (kind === 'categories')
-      body = `SELECT c.id,c.name, COALESCE(SUM(ps.units),0) units, COALESCE(SUM(ps.revenue),0) revenue, COUNT(DISTINCT CASE WHEN st.stock>0 THEN p.id END) activeProducts, (SELECT COUNT(DISTINCT l.orderId) FROM lines l JOIN product_categories cc ON cc.product_id=l.productId WHERE cc.category_id=c.id) orders FROM category c LEFT JOIN product_categories pc ON pc.category_id=c.id LEFT JOIN product p ON p.id=pc.product_id LEFT JOIN product_sales ps ON ps.productId=p.id LEFT JOIN product_stock st ON st.productId=p.id WHERE c.isActive=1 AND c.name LIKE ? GROUP BY c.id,c.name`;
+      body = `SELECT c.id,c.name, COALESCE(SUM(ps.units),0) units, COALESCE(SUM(ps.revenue),0) revenue, COUNT(DISTINCT CASE WHEN st.stock>0 THEN p.id END) activeProducts, (SELECT COUNT(DISTINCT l.orderId) FROM report_lines l JOIN product_categories cc ON cc.product_id=l.productId WHERE cc.category_id=c.id) orders FROM category c LEFT JOIN product_categories pc ON pc.category_id=c.id LEFT JOIN product p ON p.id=pc.product_id LEFT JOIN product_sales ps ON ps.productId=p.id LEFT JOIN product_stock st ON st.productId=p.id WHERE c.isActive=1 AND c.name LIKE ? GROUP BY c.id,c.name`;
     return {
       sql: `${base}, result AS (${body})`,
       params: [r.from, r.to, search],
