@@ -20,7 +20,11 @@ export class TorobOrderTracking1795000000000 implements MigrationInterface {
         }),
       );
     }
-    if (!(await q.hasTable('order'))) throw new Error('Order table is missing');
+    // Fresh installs: migrations run before synchronize, so `order` may not
+    // exist yet. The Order entity already declares the torob columns, hence
+    // synchronize creates the final schema and this migration has nothing to
+    // do. Existing databases (table present) are upgraded below as before.
+    if (!(await q.hasTable('order'))) return;
     for (const column of [
       new TableColumn({
         name: 'torob_clid',

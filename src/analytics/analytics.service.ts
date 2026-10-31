@@ -1,19 +1,92 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
+  OnModuleInit,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { createHmac, timingSafeEqual } from 'crypto';
-import { DataSource, EntityManager } from 'typeorm';
+import { DataSource, EntityManager, TableColumn, TableIndex } from 'typeorm';
 
 import { ConsentDto, EventDto, ReportDto } from './analytics.dto';
 
 export const POLICY = '2026-10-31.2';
 const CATEGORY_VERSION = 'necessary,preferences,analytics,marketing';
 @Injectable()
-export class AnalyticsService {
+export class AnalyticsService implements OnModuleInit {
+  private readonly logger = new Logger(AnalyticsService.name);
   constructor(private readonly db: DataSource) {}
+  // Backstop for migration ReportCategoryEvents1796000000000. Event
+  // ingestion (event()) and GET /reports/interest both use
+  // analytics_events.category, so a database whose migrations never ran
+  // (historically migrationsRun defaulted to false outside production and
+  // .env templates still pin TYPEORM_MIGRATIONS_RUN=false) failed every
+  // such request with "Unknown column 'category'". Ensure the column and
+  // its index exist at boot; on migrated databases this is a
+  // metadata-only no-op. Creating the table itself stays the migrations'
+  // job. Never throws: a failed backstop must not take the app down.
+  async onModuleInit() {
+    try {
+      const runner = this.db.createQueryRunner();
+      try {
+        await runner.connect();
+        if (!(await runner.hasTable('analytics_events'))) {
+          this.logger.error(
+            'Table analytics_events is missing; analytics is disabled until migrations run (pnpm migration:run).',
+          );
+          return;
+        }
+        if (!(await runner.hasColumn('analytics_events', 'category'))) {
+          try {
+            await runner.addColumn(
+              'analytics_events',
+              new TableColumn({
+                name: 'category',
+                type: 'int',
+                isNullable: true,
+              }),
+            );
+            this.logger.warn(
+              'Added missing analytics_events.category column; migration ReportCategoryEvents1796000000000 had not been applied.',
+            );
+          } catch (error) {
+            // Another booting instance may have added it first.
+            if (!(await runner.hasColumn('analytics_events', 'category')))
+              throw error;
+          }
+        }
+        const table = await runner.getTable('analytics_events');
+        if (
+          !table?.indices.some(i => i.name === 'IDX_analytics_category_date')
+        ) {
+          try {
+            await runner.createIndex(
+              'analytics_events',
+              new TableIndex({
+                name: 'IDX_analytics_category_date',
+                columnNames: ['category', 'created_at'],
+              }),
+            );
+          } catch (error) {
+            const current = await runner.getTable('analytics_events');
+            if (
+              !current?.indices.some(
+                i => i.name === 'IDX_analytics_category_date',
+              )
+            )
+              throw error;
+          }
+        }
+      } finally {
+        await runner.release().catch(() => undefined);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Could not ensure analytics_events.category exists (${error instanceof Error ? error.message : String(error)}). Run pnpm migration:run; analytics ingestion and /reports/interest will fail until then.`,
+      );
+    }
+  }
   trusted(key: string) {
     const secret = process.env.PRIVACY_PROXY_SECRET;
     if (

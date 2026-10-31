@@ -265,3 +265,63 @@ describe('privacy analytics boundaries (no database/network)', () => {
     expect(query.mock.calls[0][1].slice(-2)).toEqual([visitor, 100]);
   });
 });
+
+describe('analytics_events.category bootstrap guard', () => {
+  const makeService = (runner: Record<string, unknown>) =>
+    new AnalyticsService({ createQueryRunner: () => runner } as never);
+  const baseRunner = () => ({
+    connect: jest.fn().mockResolvedValue(undefined),
+    release: jest.fn().mockResolvedValue(undefined),
+    hasTable: jest.fn().mockResolvedValue(true),
+    hasColumn: jest.fn().mockResolvedValue(true),
+    addColumn: jest.fn().mockResolvedValue(undefined),
+    getTable: jest
+      .fn()
+      .mockResolvedValue({ indices: [{ name: 'IDX_analytics_category_date' }] }),
+    createIndex: jest.fn().mockResolvedValue(undefined),
+  });
+
+  it('adds the missing category column and its index', async () => {
+    const runner = baseRunner();
+    runner.hasColumn.mockResolvedValue(false);
+    runner.getTable.mockResolvedValue({ indices: [] });
+    await makeService(runner).onModuleInit();
+    expect(runner.addColumn).toHaveBeenCalledWith(
+      'analytics_events',
+      expect.objectContaining({ name: 'category', type: 'int' }),
+    );
+    expect(runner.createIndex).toHaveBeenCalledWith(
+      'analytics_events',
+      expect.objectContaining({ name: 'IDX_analytics_category_date' }),
+    );
+    expect(runner.release).toHaveBeenCalled();
+  });
+
+  it('is a no-op when the column and index already exist', async () => {
+    const runner = baseRunner();
+    await makeService(runner).onModuleInit();
+    expect(runner.addColumn).not.toHaveBeenCalled();
+    expect(runner.createIndex).not.toHaveBeenCalled();
+  });
+
+  it('tolerates a concurrent instance adding the column first', async () => {
+    const runner = baseRunner();
+    runner.hasColumn.mockResolvedValueOnce(false).mockResolvedValue(true);
+    runner.addColumn.mockRejectedValue(
+      new Error("Duplicate column name 'category'"),
+    );
+    await expect(makeService(runner).onModuleInit()).resolves.toBeUndefined();
+  });
+
+  it('never throws when the table is missing or DDL is rejected', async () => {
+    const missing = baseRunner();
+    missing.hasTable.mockResolvedValue(false);
+    await expect(makeService(missing).onModuleInit()).resolves.toBeUndefined();
+    expect(missing.addColumn).not.toHaveBeenCalled();
+
+    const failing = baseRunner();
+    failing.hasColumn.mockRejectedValue(new Error('ALTER command denied'));
+    await expect(makeService(failing).onModuleInit()).resolves.toBeUndefined();
+    expect(failing.release).toHaveBeenCalled();
+  });
+});

@@ -21,10 +21,19 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
 
     const synchronize =
       !isProd && (syncOverride !== undefined ? syncOverride === 'true' : true);
+    // Migrations default to ON in every environment: several tables are
+    // managed by raw SQL migrations alone (analytics_*, torob grants) and
+    // have no entity, so `synchronize` can never create them. Skipping
+    // migrations outside production silently broke those modules locally
+    // (e.g. /reports/interest -> "Unknown column 'analytics_events.category'"
+    // because ReportCategoryEvents1796000000000 never ran). All registered
+    // migrations are existence-guarded/idempotent, so running them before
+    // dev synchronize is safe. TYPEORM_MIGRATIONS_RUN=false still opts out
+    // for controlled production rollouts (run `pnpm migration:run` there).
     const migrationsRun =
       migrationsRunOverride !== undefined
         ? migrationsRunOverride === 'true'
-        : isProd;
+        : true;
 
     return {
       type: 'mysql',
