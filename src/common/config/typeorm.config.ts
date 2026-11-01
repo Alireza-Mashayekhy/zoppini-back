@@ -7,6 +7,7 @@ import { AddSnappayGateway1794000000000 } from 'src/migrations/1794000000000-Add
 import { TorobOrderTracking1795000000000 } from 'src/migrations/1795000000000-TorobOrderTracking';
 import { ReportCategoryEvents1796000000000 } from 'src/migrations/1796000000000-ReportCategoryEvents';
 import { AddHediehMallPickup1797000000000 } from 'src/migrations/1797000000000-AddHediehMallPickup';
+import { SiteImages1798000000000 } from 'src/migrations/1798000000000-SiteImages';
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
@@ -51,6 +52,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         TorobOrderTracking1795000000000,
         ReportCategoryEvents1796000000000,
         AddHediehMallPickup1797000000000,
+        SiteImages1798000000000,
       ],
       migrationsRun,
 

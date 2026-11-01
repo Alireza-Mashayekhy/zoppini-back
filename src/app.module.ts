@@ -34,6 +34,7 @@ import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
 import { ReportsModule } from './reports/reports.module';
 import { SeoModule } from './seo/seo.module';
+import { SiteImagesModule } from './site-images/site-images.module';
 import { SitemapModule } from './sitemap/sitemap.module';
 import { SmsModule } from './sms/sms.module';
 import { TorobModule } from './torob/torob.module';
@@ -93,6 +94,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     TorobModule,
     ModaiModule,
     SeoModule,
+    SiteImagesModule,
     BotReportsModule,
   ],
   controllers: [AppController],
