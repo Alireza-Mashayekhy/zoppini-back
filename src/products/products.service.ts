@@ -497,6 +497,41 @@ export class ProductsService {
     return this.productRepo.findOne({ where: { productCode: code } });
   }
 
+  /**
+   * پیدا کردن محصولی که یکی از واریانت‌هایش این SKU را دارد.
+   *
+   * از این متد برای اتصال کالای راهکاران به محصول استفاده می‌شود؛
+   * چون SKU در دیتابیس یکتاست و هر کالای راهکاران فقط می‌تواند
+   * به یک واریانت از یک محصول وصل شود.
+   */
+  async findByVariantSku(sku: string): Promise<Product | null> {
+    const normalized = this.normalizeSku(sku);
+
+    if (!normalized) {
+      return null;
+    }
+
+    const variant = await this.variantRepo
+      .createQueryBuilder('variant')
+      .where('TRIM(variant.sku) = :sku', { sku: normalized })
+      .getOne();
+
+    if (!variant) {
+      return null;
+    }
+
+    return this.productRepo.findOne({
+      where: { id: variant.productId },
+      relations: {
+        variants: {
+          color: true,
+          size: true,
+        },
+        categories: true,
+      },
+    });
+  }
+
   async findById(id: number): Promise<Product> {
     const product = await this.productRepo.findOne({ where: { id } });
     if (!product) {

@@ -126,6 +126,18 @@ export class AdmiProductsController {
     return this.productsService.allSizes();
   }
 
+  /**
+   * محصولی که یکی از واریانت‌هایش این SKU را دارد.
+   *
+   * خروجی:
+   * - محصول، اگر کد قبلاً به یک واریانت وصل شده باشد
+   * - null، اگر هیچ محصولی این کد را نداشته باشد
+   */
+  @Get('by-sku/:sku')
+  async findByVariantSku(@Param('sku') sku: string) {
+    return this.productsService.findByVariantSku(sku);
+  }
+
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findOne(slug, {
