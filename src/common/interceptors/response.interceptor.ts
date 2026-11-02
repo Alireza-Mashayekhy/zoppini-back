@@ -32,6 +32,13 @@ export class ResponseInterceptor implements NestInterceptor {
         data: result?.data ?? result,
         pagination: result?.pagination ?? undefined,
         ...(result?.stats ? { stats: result.stats } : {}),
+        /**
+         * پیامهای جانبی سرویسها (مثلاً هشدار حذف سایز/ردیف جدول سایزبندی
+         * که در تغییرات اختصاصی محصولات استفاده شده است) نباید اینجا گم
+         * شوند؛ کلاینت آنها را بالای صفحه نمایش می‌دهد.
+         */
+        ...(result?.warnings ? { warnings: result.warnings } : {}),
+        ...(result?.dependents ? { dependents: result.dependents } : {}),
       })),
     );
   }

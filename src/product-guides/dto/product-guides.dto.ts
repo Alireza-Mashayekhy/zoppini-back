@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -84,12 +85,16 @@ export class UpsertSizeTableDto {
 
   @ApiProperty({ type: [SizeTableColumnDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: 'حداقل یک سایز باید به جدول اضافه شود.' })
+  @ArrayMaxSize(60)
   @ValidateNested({ each: true })
   @Type(() => SizeTableColumnDto)
   columns: SizeTableColumnDto[];
 
   @ApiProperty({ type: [SizeTableRowDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: 'حداقل یک مشخصه اندازه‌گیری باید در جدول باشد.' })
+  @ArrayMaxSize(60)
   @ValidateNested({ each: true })
   @Type(() => SizeTableRowDto)
   rows: SizeTableRowDto[];

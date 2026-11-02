@@ -66,6 +66,25 @@ const MODE_COLUMNS: Record<GuideType, string> = {
   [GuideType.MEASUREMENT_GUIDE]: 'measurementGuideMode',
 };
 
+/**
+ * شکل داخلی تعریف جدول: سلول‌ها با شناسهٔ ستون نگه داشته می‌شوند تا حذف یا
+ * جابه‌جایی یک سایز، مقادیر سایز‌های دیگر را جابه‌جا نکند. موتور resolve محصول
+ * دقیقاً همین شکل را می‌خواند.
+ */
+interface SizeTableDefinitionSnapshot {
+  id: number;
+  name: string;
+  unit: string;
+  notes: string | null;
+  isArchived: boolean;
+  columns: { id: number; label: string }[];
+  rows: {
+    id: number;
+    label: string;
+    cells: { columnId: number; value: string | null }[];
+  }[];
+}
+
 @Injectable()
 export class ProductGuidesService {
   private readonly logger = new Logger(ProductGuidesService.name);
@@ -151,7 +170,9 @@ export class ProductGuidesService {
   async getSizeTable(id: number) {
     const table = await this.findSizeTableEntity(id);
 
-    return { data: this.toSizeTableDefinition(table) };
+    return {
+      data: this.toAdminSizeTableDefinition(this.toSizeTableDefinition(table)),
+    };
   }
 
   async createSizeTable(dto: UpsertSizeTableDto) {
@@ -159,7 +180,7 @@ export class ProductGuidesService {
 
     return {
       message: 'جدول سایزبندی با موفقیت ساخته شد.',
-      data: table,
+      data: this.toAdminSizeTableDefinition(table),
       dependents: { categories: 0, products: 0 },
     };
   }
@@ -175,7 +196,7 @@ export class ProductGuidesService {
 
     return {
       message: 'جدول سایزبندی با موفقیت ذخیره شد.',
-      data: saved,
+      data: this.toAdminSizeTableDefinition(saved),
       warnings,
       dependents,
     };
@@ -184,57 +205,68 @@ export class ProductGuidesService {
   async duplicateSizeTable(id: number, name?: string) {
     const source = await this.findSizeTableEntity(id);
 
-    const copy = await this.sizeTableRepo.save(
-      this.sizeTableRepo.create({
-        name: name ?? `${source.name} (کپی)`,
-        unit: source.unit,
-        notes: source.notes,
-        isArchived: false,
-      }),
-    );
+    /**
+     * کپی هم مثل ذخیره، یا کامل انجام می‌شود یا هیچ: وسط کار خطا بدهد
+     * نباید جدول ناقص (ستون بدون ردیف/سلول) باقی بماند.
+     */
+    return this.dataSource.transaction(async manager => {
+      const sizeTableRepo = manager.getRepository(SizeTable);
+      const columnRepo = manager.getRepository(SizeTableColumn);
+      const rowRepo = manager.getRepository(SizeTableRow);
+      const cellRepo = manager.getRepository(SizeTableCell);
 
-    const columnMap = new Map<number, SizeTableColumn>();
-
-    for (const column of this.sortColumns(source.columns)) {
-      const saved = await this.columnRepo.save(
-        this.columnRepo.create({
-          sizeTableId: copy.id,
-          label: column.label,
-          order: column.order,
+      const copy = await sizeTableRepo.save(
+        sizeTableRepo.create({
+          name: name ?? `${source.name} (کپی)`,
+          unit: source.unit,
+          notes: source.notes,
+          isArchived: false,
         }),
       );
 
-      columnMap.set(column.id, saved);
-    }
+      const columnMap = new Map<number, SizeTableColumn>();
 
-    for (const row of this.sortRows(source.rows)) {
-      const savedRow = await this.rowRepo.save(
-        this.rowRepo.create({
-          sizeTableId: copy.id,
-          label: row.label,
-          order: row.order,
-        }),
-      );
-
-      for (const cell of row.cells ?? []) {
-        const column = columnMap.get(cell.columnId);
-
-        if (!column) continue;
-
-        await this.cellRepo.save(
-          this.cellRepo.create({
-            rowId: savedRow.id,
-            columnId: column.id,
-            value: cell.value,
+      for (const column of this.sortColumns(source.columns)) {
+        const saved = await columnRepo.save(
+          columnRepo.create({
+            sizeTableId: copy.id,
+            label: column.label,
+            order: column.order,
           }),
         );
-      }
-    }
 
-    return {
-      message: 'یک نسخه کپی از جدول سایزبندی ساخته شد.',
-      data: { id: copy.id, name: copy.name },
-    };
+        columnMap.set(column.id, saved);
+      }
+
+      for (const row of this.sortRows(source.rows)) {
+        const savedRow = await rowRepo.save(
+          rowRepo.create({
+            sizeTableId: copy.id,
+            label: row.label,
+            order: row.order,
+          }),
+        );
+
+        for (const cell of row.cells ?? []) {
+          const column = columnMap.get(cell.columnId);
+
+          if (!column) continue;
+
+          await cellRepo.save(
+            cellRepo.create({
+              rowId: savedRow.id,
+              columnId: column.id,
+              value: cell.value,
+            }),
+          );
+        }
+      }
+
+      return {
+        message: 'یک نسخه کپی از جدول سایزبندی ساخته شد.',
+        data: { id: copy.id, name: copy.name },
+      };
+    });
   }
 
   async setSizeTableArchived(id: number, isArchived: boolean) {
@@ -1616,125 +1648,268 @@ export class ProductGuidesService {
   // ذخیره ساختارها
   // ============================================================
 
+  /**
+   * ذخیرهٔ کامل ساختار جدول در یک تراکنش واحد.
+   *
+   * قواعدی که جلوی «پریدن سایز‌های دیگر» را می‌گیرند:
+   *  - شناسهٔ ستون/ردیف فقط وقتی پذیرفته می‌شود که واقعاً متعلق به همین
+   *    جدول باشد؛ شناسهٔ تکراری یا بیگانه دیگر باعث ساخت ستون تازه‌ای نمی‌شود
+   *    که بعداً ستون‌های مورد نظر ادمین به‌عنوان «حذف‌شده» پاک شوند.
+   *  - `values` آرایه‌ای موقعیتی است؛ اگر کلاینت آن را نفرستاد، سلول‌های
+   *    قبلی دست‌نخورده می‌مانند (نسخهٔ قبل نبودن آن را «خالی» فرض می‌کرد
+   *    و همهٔ سلول‌ها را null می‌کرد). اگر فرستاد، طولش باید دقیقاً
+   *    برابر تعداد ستون‌ها باشد.
+   *  - خانهٔ خالی به‌جای ذخیرهٔ null، سلولش حذف می‌شود تا ردّ اضافی نماند.
+   */
   private async saveSizeTable(table: SizeTable, dto: UpsertSizeTableDto) {
     const columns = dto.columns ?? [];
+    const rows = dto.rows ?? [];
 
     if (!columns.length) {
       throw new BadRequestException('حداقل یک سایز باید به جدول اضافه شود.');
     }
 
-    table.name = dto.name.trim();
-    table.unit = dto.unit?.trim() || 'سانتیمتر';
-    table.notes = normalizeText(dto.notes);
-
-    const savedTable = await this.sizeTableRepo.save(table);
-
-    const existingColumns = await this.columnRepo.find({
-      where: { sizeTableId: savedTable.id },
-    });
-
-    const keptColumnIds = new Set<number>();
-    const columnByIndex: SizeTableColumn[] = [];
-
-    for (const [index, columnDto] of columns.entries()) {
-      const existing = columnDto.id
-        ? existingColumns.find(column => column.id === columnDto.id)
-        : undefined;
-
-      const column = existing
-        ? await this.columnRepo.save(
-            Object.assign(existing, {
-              label: columnDto.label.trim(),
-              order: index,
-            }),
-          )
-        : await this.columnRepo.save(
-            this.columnRepo.create({
-              sizeTableId: savedTable.id,
-              label: columnDto.label.trim(),
-              order: index,
-            }),
-          );
-
-      columnByIndex.push(column);
-      keptColumnIds.add(column.id);
+    if (!rows.length) {
+      throw new BadRequestException(
+        'حداقل یک مشخصه اندازه‌گیری باید در جدول باشد.',
+      );
     }
 
-    const existingRows = await this.rowRepo.find({
-      where: { sizeTableId: savedTable.id },
-      relations: { cells: true },
-    });
+    this.assertUniqueIds(
+      columns.map(column => column.id),
+      'ستون',
+    );
+    this.assertUniqueIds(
+      rows.map(row => row.id),
+      'ردیف',
+    );
 
-    const keptRowIds = new Set<number>();
+    if (!dto.name?.trim()) {
+      throw new BadRequestException('نام جدول سایزبندی الزامی است.');
+    }
 
-    for (const [index, rowDto] of (dto.rows ?? []).entries()) {
-      const existing = rowDto.id
-        ? existingRows.find(row => row.id === rowDto.id)
-        : undefined;
+    if (columns.some(column => !column.label?.trim())) {
+      throw new BadRequestException('برچسب همه سایز‌ها الزامی است.');
+    }
 
-      const row = existing
-        ? await this.rowRepo.save(
-            Object.assign(existing, {
-              label: rowDto.label.trim(),
-              order: index,
-            }),
-          )
-        : await this.rowRepo.save(
-            this.rowRepo.create({
-              sizeTableId: savedTable.id,
-              label: rowDto.label.trim(),
-              order: index,
-            }),
-          );
+    if (rows.some(row => !row.label?.trim())) {
+      throw new BadRequestException(
+        'نام همه مشخصه‌های اندازه‌گیری الزامی است.',
+      );
+    }
 
-      keptRowIds.add(row.id);
+    if (columns.some(column => column.label.trim().length > 50)) {
+      throw new BadRequestException('برچسب سایز حداکثر ۵۰ نویسه است.');
+    }
 
-      const existingCells = row.cells ?? [];
+    if (rows.some(row => row.label.trim().length > 150)) {
+      throw new BadRequestException('نام مشخصه حداکثر ۱۵۰ نویسه است.');
+    }
 
-      for (const [columnIndex, column] of columnByIndex.entries()) {
-        const value = normalizeCellValue(rowDto.values?.[columnIndex] ?? null);
+    for (const row of rows) {
+      if (row.values === undefined || row.values === null) continue;
 
-        const cell = existingCells.find(item => item.columnId === column.id);
+      if (row.values.length !== columns.length) {
+        throw new BadRequestException(
+          'تعداد مقادیر هر ردیف باید دقیقاً برابر تعداد سایز‌ها باشد.',
+        );
+      }
 
-        if (cell) {
-          if (cell.value !== value) {
-            cell.value = value;
-            await this.cellRepo.save(cell);
-          }
+      for (const value of row.values) {
+        const normalized = normalizeCellValue(value);
 
-          continue;
-        }
-
-        if (value !== null) {
-          await this.cellRepo.save(
-            this.cellRepo.create({
-              rowId: row.id,
-              columnId: column.id,
-              value,
-            }),
-          );
+        if (normalized !== null && normalized.length > 30) {
+          throw new BadRequestException('مقدار هر خانه حداکثر ۳۰ نویسه است.');
         }
       }
     }
 
-    /** حذف ردیف/ستون‌هایی که در پنل حذف شده‌اند */
-    for (const column of existingColumns) {
-      if (keptColumnIds.has(column.id)) continue;
+    return this.dataSource.transaction(async manager => {
+      const sizeTableRepo = manager.getRepository(SizeTable);
+      const columnRepo = manager.getRepository(SizeTableColumn);
+      const rowRepo = manager.getRepository(SizeTableRow);
+      const cellRepo = manager.getRepository(SizeTableCell);
 
-      await this.cellRepo.delete({ columnId: column.id });
-      await this.columnRepo.delete(column.id);
+      /**
+       * فقط فیلدهای اسکالر ذخیره می‌شوند. جدول هنگام ویرایش با
+       * رابطه‌های columns/rows/cells لود شده است؛ save مستقیم آن با
+       * cascade:true تمام ردیف‌ها و سلول‌ها (حتی آن‌هایی که باید
+       * حذف شوند) را دوباره می‌نوشت و ترتیب حذف‌ها را بی‌اثر می‌کرد.
+       */
+      const savedTable = await sizeTableRepo.save(
+        sizeTableRepo.create({
+          ...(table.id ? { id: table.id } : {}),
+          name: dto.name.trim(),
+          unit: dto.unit?.trim() || 'سانتیمتر',
+          notes: normalizeText(dto.notes),
+          isArchived: table.isArchived ?? false,
+        }),
+      );
+
+      const existingColumns = await columnRepo.find({
+        where: { sizeTableId: savedTable.id },
+      });
+
+      const columnByIndex: SizeTableColumn[] = [];
+      const keptColumnIds = new Set<number>();
+
+      for (const [index, columnDto] of columns.entries()) {
+        const existing = columnDto.id
+          ? existingColumns.find(column => column.id === columnDto.id)
+          : undefined;
+
+        if (columnDto.id && !existing) {
+          throw new BadRequestException(
+            `ستون با شناسه ${columnDto.id} متعلق به این جدول نیست.`,
+          );
+        }
+
+        const column = existing
+          ? await columnRepo.save(
+              Object.assign(existing, {
+                label: columnDto.label.trim(),
+                order: index,
+              }),
+            )
+          : await columnRepo.save(
+              columnRepo.create({
+                sizeTableId: savedTable.id,
+                label: columnDto.label.trim(),
+                order: index,
+              }),
+            );
+
+        columnByIndex.push(column);
+        keptColumnIds.add(column.id);
+      }
+
+      const existingRows = await rowRepo.find({
+        where: { sizeTableId: savedTable.id },
+      });
+
+      const existingCells = existingRows.length
+        ? await cellRepo.find({
+            where: { rowId: In(existingRows.map(row => row.id)) },
+          })
+        : [];
+
+      const cellsByRow = new Map<number, SizeTableCell[]>();
+
+      for (const cell of existingCells) {
+        const list = cellsByRow.get(cell.rowId) ?? [];
+
+        list.push(cell);
+        cellsByRow.set(cell.rowId, list);
+      }
+
+      const keptRowIds = new Set<number>();
+
+      for (const [index, rowDto] of rows.entries()) {
+        const existing = rowDto.id
+          ? existingRows.find(row => row.id === rowDto.id)
+          : undefined;
+
+        if (rowDto.id && !existing) {
+          throw new BadRequestException(
+            `ردیف با شناسه ${rowDto.id} متعلق به این جدول نیست.`,
+          );
+        }
+
+        const row = existing
+          ? await rowRepo.save(
+              Object.assign(existing, {
+                label: rowDto.label.trim(),
+                order: index,
+              }),
+            )
+          : await rowRepo.save(
+              rowRepo.create({
+                sizeTableId: savedTable.id,
+                label: rowDto.label.trim(),
+                order: index,
+              }),
+            );
+
+        keptRowIds.add(row.id);
+
+        const rowCells = cellsByRow.get(row.id) ?? [];
+
+        // فقط وقتی کلاینت مقادیر را فرستاده است سلول‌ها دستکاری می‌شوند؛
+        // درخواست ناقص/قدیمی نباید مقادیر ذخیره‌شده را پاک کند.
+        if (Array.isArray(rowDto.values)) {
+          for (const [columnIndex, column] of columnByIndex.entries()) {
+            const value = normalizeCellValue(
+              rowDto.values[columnIndex] ?? null,
+            );
+            const cell = rowCells.find(item => item.columnId === column.id);
+
+            if (value === null) {
+              if (cell) await cellRepo.delete(cell.id);
+
+              continue;
+            }
+
+            if (cell) {
+              if (cell.value !== value) {
+                cell.value = value;
+                await cellRepo.save(cell);
+              }
+            } else {
+              await cellRepo.save(
+                cellRepo.create({
+                  rowId: row.id,
+                  columnId: column.id,
+                  value,
+                }),
+              );
+            }
+          }
+        }
+
+        /** سلول‌های ستون‌های حذف‌شده یا یتیم */
+        for (const cell of rowCells) {
+          if (keptColumnIds.has(cell.columnId)) continue;
+
+          await cellRepo.delete(cell.id);
+        }
+      }
+
+      /** حذف ردیف/ستون‌هایی که در پنل حذف شده‌اند */
+      for (const column of existingColumns) {
+        if (keptColumnIds.has(column.id)) continue;
+
+        await cellRepo.delete({ columnId: column.id });
+        await columnRepo.delete(column.id);
+      }
+
+      for (const row of existingRows) {
+        if (keptRowIds.has(row.id)) continue;
+
+        await cellRepo.delete({ rowId: row.id });
+        await rowRepo.delete(row.id);
+      }
+
+      const refreshed = await sizeTableRepo.findOne({
+        where: { id: savedTable.id },
+        relations: { columns: true, rows: { cells: true } },
+      });
+
+      if (!refreshed) {
+        throw new NotFoundException('جدول سایزبندی پیدا نشد.');
+      }
+
+      return this.toSizeTableDefinition(refreshed);
+    });
+  }
+
+  private assertUniqueIds(ids: (number | undefined | null)[], label: string) {
+    const defined = ids.filter(
+      (id): id is number => id !== undefined && id !== null,
+    );
+
+    if (new Set(defined).size !== defined.length) {
+      throw new BadRequestException(`شناسه ${label} تکراری در درخواست است.`);
     }
-
-    for (const row of existingRows) {
-      if (keptRowIds.has(row.id)) continue;
-
-      await this.cellRepo.delete({ rowId: row.id });
-      await this.rowRepo.delete(row.id);
-    }
-
-    const refreshed = await this.findSizeTableEntity(savedTable.id);
-
-    return this.toSizeTableDefinition(refreshed);
   }
 
   private async saveCareGuide(guide: CareGuide, dto: UpsertCareGuideDto) {
@@ -2226,7 +2401,7 @@ export class ProductGuidesService {
       .filter(item => Number.isFinite(item) && item > 0);
   }
 
-  private toSizeTableDefinition(table: SizeTable) {
+  private toSizeTableDefinition(table: SizeTable): SizeTableDefinitionSnapshot {
     const columns = this.sortColumns(table.columns);
 
     return {
@@ -2247,6 +2422,25 @@ export class ProductGuidesService {
           value:
             row.cells?.find(cell => cell.columnId === column.id)?.value ?? null,
         })),
+      })),
+    };
+  }
+
+  /**
+   * خروجی مخصوص ادمین. موتور resolve محصول `cells` (برحسب columnId) می‌خواهد،
+   * ولی فرم ویرایش جدول `values` موقعیتی می‌خواند. نسخهٔ قبل فقط `cells`
+   * می‌فرستاد؛ چون `values`ای در کار نبود، همهٔ خانه‌ها خالی لود می‌شدند و با
+   * اولین ذخیره مقادیر سایز‌های باقیمانده هم پاک می‌شدند. حالا هر دو شکل،
+   * از یک منبع واحد و همتراز، ارسال می‌شود.
+   */
+  private toAdminSizeTableDefinition(definition: SizeTableDefinitionSnapshot) {
+    return {
+      ...definition,
+      rows: definition.rows.map(row => ({
+        id: row.id,
+        label: row.label,
+        cells: row.cells,
+        values: row.cells.map(cell => cell.value),
       })),
     };
   }
