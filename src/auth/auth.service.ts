@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
@@ -39,12 +44,24 @@ export class AuthService {
     guestId: string | undefined,
     response: Response,
   ) {
-    await this.otpService.verifyOtp(sendVerifyOtp.phone, sendVerifyOtp.code);
-
     const user = await this.usersService.findWithPhone(sendVerifyOtp.phone);
 
+    // کد همیشه بررسی میشود (چه کاربر وجود داشته باشد چه نه) تا پیام «کد
+    // اشتباه» در دو حالت یکسان باشد. اگر حسابی وجود نداشته باشد کد مصرف
+    // نمیشود: فرانت به مرحلهی تکمیل ثبتنام میرود و همان کد را در
+    // /auth/sign-up ارسال میکند.
+    await this.otpService.verifyOtp(sendVerifyOtp.phone, sendVerifyOtp.code, {
+      consume: Boolean(user),
+    });
+
     if (!user) {
-      throw new BadRequestException('کاربری با این شماره تلفن یافت نشد');
+      return {
+        message: 'signup_required',
+        data: {
+          signupRequired: true,
+          expiresIn: await this.otpService.getRemainingTtl(sendVerifyOtp.phone),
+        },
+      };
     }
 
     // ادغام سبد خرید مهمان
@@ -69,25 +86,38 @@ export class AuthService {
     guestId: string | undefined,
     response: Response,
   ) {
-    await this.otpService.verifyOtp(createUserDto.phone, createUserDto.code);
+    // اول کد بررسی میشود (بدون مصرف) تا نتوان صرفاً با ارسال یک کد دلخواه
+    // فهمید شمارهای قبلاً ثبت شده یا نه. در خطای «شماره تکراری» هم کد نسوزد.
+    await this.otpService.verifyOtp(createUserDto.phone, createUserDto.code, {
+      consume: false,
+    });
 
     const user = await this.usersService.findWithPhone(createUserDto.phone);
-    // const userEmail = await this.usersService.findWithEmail(
-    //   createUserDto.email,
-    // );
 
-    // if (userEmail) {
-    //   throw new BadRequestException('کاربر با این ایمیل وجود دارد');
-    // }
     if (user) {
       throw new BadRequestException('کاربر با این شماره تلفن وجود دارد');
     }
+
+    const email = this.normalizeEmail(createUserDto.email);
+    const birthDate = this.normalizeBirthDate(createUserDto.birthDate);
+
+    // ستون email unique است؛ بدون این چک، ایمیل تکراری خطای ۵۰۰ دیتابیس میدهد.
+    // قبل از مصرف کد انجام میشود تا کاربر بتواند ایمیل را اصلاح و دوباره تلاش کند.
+    if (email) {
+      const userEmail = await this.usersService.findWithEmail(email);
+      if (userEmail) {
+        throw new BadRequestException('کاربر با این ایمیل وجود دارد');
+      }
+    }
+
+    await this.otpService.consumeOtp(createUserDto.phone);
 
     const hashedPassword = await bcrypt.hash(createUserDto.password, 10);
 
     const newUser = await this.usersService.create({
       ...createUserDto,
-      email: createUserDto.email?.trim() || null,
+      email,
+      birthDate,
       password: hashedPassword,
     });
 
@@ -107,8 +137,8 @@ export class AuthService {
         firstName: firstName,
         lastName: lastName,
         customerCode: createUserDto.phone,
-        email: createUserDto.email,
-        birthDate: createUserDto.birthDate || undefined,
+        email: email ?? undefined,
+        birthDate,
       });
     } catch (err) {
       this.logger.log(err);
@@ -165,15 +195,26 @@ export class AuthService {
     };
   }
 
-  async refresh(refreshToken: string, response: Response) {
-    const payload = await this.jwtService.verifyAsync(refreshToken, {
-      secret: process.env.JWT_REFRESH_SECRET,
-    });
+  async refresh(refreshToken: string | undefined, response: Response) {
+    if (!refreshToken) {
+      throw new UnauthorizedException('refresh token not found');
+    }
 
-    const user = await this.usersService.findOne(payload.sub);
+    let payload: { sub: number };
+
+    try {
+      payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: process.env.JWT_REFRESH_SECRET,
+      });
+    } catch {
+      // توکن ناموجود/منقضی/دستکاریشده نباید 500 بدهد؛ فرانت با 401 لاگاوت میکند
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const user = await this.usersService.findOne(payload?.sub);
 
     if (!user) {
-      throw new BadRequestException('user not found');
+      throw new UnauthorizedException('user not found');
     }
 
     const newAccessToken = await this.generateAccessToken(user);
@@ -237,12 +278,29 @@ export class AuthService {
     };
   }
 
+  /** ایمیل اختیاری است: خالی/فقط فاصله → null، در غیر این صورت trim شده. */
+  private normalizeEmail(email?: string | null): string | null {
+    const trimmed = email?.trim();
+    return trimmed ? trimmed : null;
+  }
+
+  /**
+   * فرانت برای تاریخ تولد خالی رشته‌ی `''` میفرستد؛ ذخیره‌ی آن در ستون
+   * datetime خطا میدهد. مقدار خالی/نامعتبر را حذف و بقیه را ISO یکدست میکنیم.
+   */
+  private normalizeBirthDate(birthDate?: string): string | undefined {
+    if (!birthDate) return undefined;
+    const parsed = new Date(birthDate);
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+  }
+
   private readonly accessCookieOptions = {
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
     // secure: false,
     sameSite: 'lax' as const,
-    maxAge: 15 * 60 * 1000,
+    // همزمان با expiresIn: '6h' توکن — کوکی نباید زودتر از توکن حذف شود
+    maxAge: 6 * 60 * 60 * 1000,
     path: '/',
   };
 
