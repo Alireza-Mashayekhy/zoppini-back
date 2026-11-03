@@ -25,6 +25,7 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "seed": "ts-node -r tsconfig-paths/register seed.ts",
     "migration:run": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/common/config/typeorm-datasource.ts",
+    "migration:product-care-title": "ts-node -r tsconfig-paths/register src/scripts/migrate-product-care-title.ts",
     "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/common/config/typeorm-datasource.ts",
     "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/common/config/typeorm-datasource.ts"
   },

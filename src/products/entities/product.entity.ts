@@ -12,6 +12,11 @@ import { Comment } from './comment.entity';
 import { ProductColorImage } from './product-color-image.entity';
 import { Variant } from './variant.entity';
 
+export enum CareInstructionsTitle {
+  WASHING = 'washing',
+  MAINTENANCE = 'maintenance',
+}
+
 @Entity()
 export class Product {
   @PrimaryGeneratedColumn()
@@ -64,6 +69,13 @@ export class Product {
 
   @Column({ type: 'text', nullable: true })
   careInstructionsHtml: string;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: CareInstructionsTitle.WASHING,
+  })
+  careInstructionsTitle: CareInstructionsTitle;
 
   @Column({
     type: 'timestamp',

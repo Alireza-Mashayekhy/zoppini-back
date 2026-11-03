@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -11,6 +12,8 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { coerceOptionalBoolean } from 'src/common/utils/coerce-optional-boolean';
+
+import { CareInstructionsTitle } from '../entities/product.entity';
 
 class CreateVariantDto {
   @ApiProperty()
@@ -99,6 +102,15 @@ export class CreateProductDto {
   @IsString()
   @IsOptional()
   careInstructionsHtml?: string;
+
+  @ApiProperty({
+    required: false,
+    enum: CareInstructionsTitle,
+    default: CareInstructionsTitle.WASHING,
+  })
+  @IsOptional()
+  @IsEnum(CareInstructionsTitle)
+  careInstructionsTitle?: CareInstructionsTitle;
 
   // تبدیل رشته JSON به آرایه اعداد
   @ApiProperty({ type: [Number] })

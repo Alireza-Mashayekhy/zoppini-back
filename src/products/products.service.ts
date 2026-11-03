@@ -39,7 +39,7 @@ import {
 import { UpdateColorDto } from './dto/update-color.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { UpdateSizeDto } from './dto/update-size.dto';
-import { Product } from './entities/product.entity';
+import { CareInstructionsTitle, Product } from './entities/product.entity';
 import { Color } from './entities/product-color.entity';
 import { ProductColorImage } from './entities/product-color-image.entity';
 import { Size } from './entities/product-size.entity';
@@ -102,6 +102,7 @@ export class ProductsService {
       indexable,
       followable,
       careInstructionsHtml,
+      careInstructionsTitle,
       categoryIds,
       variants,
     } = createProductDto;
@@ -122,6 +123,8 @@ export class ProductsService {
       indexable: indexable ?? true,
       followable: followable ?? true,
       careInstructionsHtml,
+      careInstructionsTitle:
+        careInstructionsTitle ?? CareInstructionsTitle.WASHING,
       image,
     });
     await this.productRepo.save(product);
@@ -823,6 +826,9 @@ export class ProductsService {
         product.image = newProductImage;
       }
 
+      // A missing or null optional value must not erase the existing choice.
+      if (simpleFields.careInstructionsTitle == null)
+        delete simpleFields.careInstructionsTitle;
       Object.assign(product, simpleFields);
 
       await queryRunner.manager.save(product);
