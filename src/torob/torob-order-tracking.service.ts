@@ -56,7 +56,7 @@ export class TorobOrderTrackingService {
         'o.discount AS discount',
         'o.shippingCost AS shipping',
         "DATE_FORMAT(o.created_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS purchase_utc",
-        "DATE_FORMAT(o.updated_at, '%Y-%m-%dT%H:%i:%s.%fZ') AS updated_utc",
+        "DATE_FORMAT(GREATEST(o.updated_at, o.created_at), '%Y-%m-%dT%H:%i:%s.%fZ') AS updated_utc",
       ])
       .innerJoin(
         'torob_attribution_grants',

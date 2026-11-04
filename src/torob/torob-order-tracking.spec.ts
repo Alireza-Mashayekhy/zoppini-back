@@ -150,6 +150,11 @@ describe('Torob order tracking', () => {
         },
       ],
     });
+    expect(qb.select).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        "DATE_FORMAT(GREATEST(o.updated_at, o.created_at), '%Y-%m-%dT%H:%i:%s.%fZ') AS updated_utc",
+      ]),
+    );
     expect(response.headers['cache-control']).toBe('no-store');
     expect(qb.innerJoin).toHaveBeenCalledWith(
       'torob_attribution_grants',

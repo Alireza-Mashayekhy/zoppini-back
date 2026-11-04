@@ -7,6 +7,7 @@ import { Product } from 'src/products/entities/product.entity';
 import { ProductColorImage } from 'src/products/entities/product-color-image.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 
+import { OrderTimestampTriggerService } from './order-timestamp-trigger.service';
 import { TorobOrderTrackingController } from './torob-order-tracking.controller';
 import { TorobOrderTrackingService } from './torob-order-tracking.service';
 import { TorobOrderGuard } from './torob-order.guard';
@@ -30,6 +31,7 @@ import { TorobTokenGuard } from './torob-token.guard';
     TorobService,
     TorobTokenGuard,
     TorobOrderTrackingService,
+    OrderTimestampTriggerService,
     TorobOrderGuard,
   ],
 })

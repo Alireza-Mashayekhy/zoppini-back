@@ -9,6 +9,7 @@ import { ReportCategoryEvents1796000000000 } from 'src/migrations/1796000000000-
 import { AddHediehMallPickup1797000000000 } from 'src/migrations/1797000000000-AddHediehMallPickup';
 import { SiteImages1798000000000 } from 'src/migrations/1798000000000-SiteImages';
 import { ProductCareInstructionsTitle1799000000000 } from 'src/migrations/1799000000000-ProductCareInstructionsTitle';
+import { OrderUpdatedAtPrecision1800000000000 } from 'src/migrations/1800000000000-OrderUpdatedAtPrecision';
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
@@ -55,6 +56,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         AddHediehMallPickup1797000000000,
         SiteImages1798000000000,
         ProductCareInstructionsTitle1799000000000,
+        OrderUpdatedAtPrecision1800000000000,
       ],
       migrationsRun,
 
