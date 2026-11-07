@@ -29,7 +29,9 @@ export class Category {
   @Column({ type: 'json', nullable: true })
   secondImages: string[];
 
-  @Column()
+  @Column({
+    type: 'longtext',
+  })
   description: string;
 
   @CreateDateColumn()
