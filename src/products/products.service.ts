@@ -44,6 +44,7 @@ import { Color } from './entities/product-color.entity';
 import { ProductColorImage } from './entities/product-color-image.entity';
 import { Size } from './entities/product-size.entity';
 import { Variant } from './entities/variant.entity';
+import { applyProductSort } from './utils/product-sort.util';
 import { findInStockProductIds } from './utils/stock.util';
 
 /** ستون‌هایی که جست‌وجوی متنی روی آن‌ها انجام می‌شود */
@@ -450,27 +451,7 @@ export class ProductsService {
 
     applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
 
-    if (query.sort) {
-      const [field, order] = query.sort.split(':');
-      const direction = (order?.toUpperCase() as any) || 'ASC';
-
-      switch (field) {
-        case 'title':
-          qb.orderBy('products.title', direction);
-          break;
-
-        case 'price':
-          qb.orderBy('variant.price', direction);
-          break;
-
-        case 'createdAt':
-          qb.orderBy('products.createdAt', direction);
-          break;
-
-        default:
-          qb.orderBy('products.id', direction);
-      }
-    }
+    applyProductSort(qb, query.sort);
 
     addSearchRelevanceOrder(qb, query.search, {
       rankField: 'products.title',
@@ -1331,6 +1312,8 @@ export class ProductsService {
     }
 
     applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
+
+    applyProductSort(qb, query.sort);
 
     addSearchRelevanceOrder(qb, query.search, {
       rankField: 'products.title',
