@@ -1,5 +1,11 @@
 import { HttpService } from '@nestjs/axios';
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadGatewayException,
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AxiosError, AxiosRequestConfig } from 'axios';
 import { firstValueFrom } from 'rxjs';
@@ -181,6 +187,7 @@ export class ClubService {
 
   private accessToken: string | null = null;
   private tokenExpiresAt: number | null = null;
+  private tokenRequest: Promise<string> | null = null;
 
   constructor(
     private readonly httpService: HttpService,
@@ -218,6 +225,19 @@ export class ClubService {
       return this.accessToken;
     }
 
+    if (this.tokenRequest) {
+      return this.tokenRequest;
+    }
+
+    this.tokenRequest = this.fetchAccessToken();
+    try {
+      return await this.tokenRequest;
+    } finally {
+      this.tokenRequest = null;
+    }
+  }
+
+  private async fetchAccessToken(): Promise<string> {
     if (!this.username || !this.password) {
       throw new BadRequestException(
         'اطلاعات اتصال به باشگاه دایاتک کامل نیست.',
@@ -231,8 +251,6 @@ export class ClubService {
       body.append('grant_type', 'password');
       body.append('username', this.username);
       body.append('password', this.password);
-
-      this.logger.log(this.baseUrl, body);
 
       const response = await firstValueFrom(
         this.httpService.post<DiatechTokenResponse>(
@@ -283,7 +301,10 @@ export class ClubService {
   // HTTP
   // ============================================================
 
-  private async request<T>(config: AxiosRequestConfig): Promise<T> {
+  private async request<T>(
+    config: AxiosRequestConfig,
+    retryUnauthorized = true,
+  ): Promise<T> {
     try {
       const token = await this.getAccessToken();
 
@@ -303,7 +324,7 @@ export class ClubService {
         }),
       );
 
-      return response.data;
+      return this.normalizeDiatechResponse(response.data) as T;
     } catch (error) {
       const axiosError = error as AxiosError<any>;
 
@@ -318,12 +339,32 @@ export class ClubService {
       if (status === 401) {
         this.accessToken = null;
         this.tokenExpiresAt = null;
+
+        if (retryUnauthorized) {
+          return this.request<T>(config, false);
+        }
       }
 
       this.logger.error(
         `❌ Diatech API Error ${status || ''}`,
         this.getErrorMessage(error),
       );
+
+      if (status === 404) {
+        throw new NotFoundException('اطلاعات در باشگاه مشتریان یافت نشد.');
+      }
+
+      if (status === 400) {
+        throw new BadRequestException(
+          this.getErrorMessage(error) || 'درخواست باشگاه مشتریان نامعتبر است.',
+        );
+      }
+
+      if (status && status >= 500) {
+        throw new BadGatewayException(
+          'سرویس باشگاه مشتریان موقتاً در دسترس نیست.',
+        );
+      }
 
       throw error;
     }
@@ -377,7 +418,6 @@ export class ClubService {
 
       Address: data.address || null,
     };
-    this.logger.log(payload);
 
     try {
       const response = await this.request<DiatechResponse<DiatechCustomer>>({
@@ -409,7 +449,6 @@ export class ClubService {
   async getCustomer(customerCode: string): Promise<DiatechCustomer> {
     const encodedCustomerCode = encodeURIComponent(customerCode);
 
-    console.log(encodedCustomerCode);
     const url = `/api/v1/customers/${encodedCustomerCode}/office`;
 
     const response = await this.request<DiatechResponse<DiatechCustomer>>({
@@ -668,6 +707,68 @@ export class ClubService {
   // Helpers
   // ============================================================
 
+  /**
+   * Diatech deployments may serialize the same .NET DTO in either PascalCase
+   * or camelCase (depending on their serializer configuration). Normalize the
+   * wire response once here so every club endpoint consumes one stable shape.
+   */
+  private normalizeDiatechResponse<T>(value: T): DiatechResponse<unknown> {
+    const normalized = this.normalizeDiatechKeys(value);
+
+    if (Array.isArray(normalized)) {
+      return { Succeeded: true, Payload: normalized };
+    }
+
+    if (!normalized || typeof normalized !== 'object') {
+      return { Succeeded: true, Payload: normalized };
+    }
+
+    const response = normalized as Record<string, unknown>;
+    const hasEnvelope =
+      Object.prototype.hasOwnProperty.call(response, 'Succeeded') ||
+      Object.prototype.hasOwnProperty.call(response, 'Success') ||
+      Object.prototype.hasOwnProperty.call(response, 'Payload') ||
+      Object.prototype.hasOwnProperty.call(response, 'Errors');
+
+    if (hasEnvelope) {
+      // Some API versions use the generic { success, data } envelope.
+      if (response.Succeeded === undefined && response.Success !== undefined) {
+        response.Succeeded = response.Success;
+      }
+      if (
+        response.Payload === undefined &&
+        Object.prototype.hasOwnProperty.call(response, 'Data')
+      ) {
+        response.Payload = response.Data;
+      }
+
+      return response as unknown as DiatechResponse<unknown>;
+    }
+
+    // Also tolerate endpoints that return the DTO directly rather than the
+    // standard { Succeeded, Payload } envelope.
+    return { Succeeded: true, Payload: normalized };
+  }
+
+  private normalizeDiatechKeys(value: unknown): unknown {
+    if (Array.isArray(value)) {
+      return value.map(item => this.normalizeDiatechKeys(item));
+    }
+
+    if (!value || typeof value !== 'object') {
+      return value;
+    }
+
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+        const normalizedKey = key.length
+          ? `${key[0].toUpperCase()}${key.slice(1)}`
+          : key;
+        return [normalizedKey, this.normalizeDiatechKeys(item)];
+      }),
+    );
+  }
+
   private checkResponse(
     response: DiatechResponse<any>,
     operation: string,
@@ -712,6 +813,10 @@ export class ClubService {
 
     if (error instanceof Error) {
       return error.message;
+    }
+
+    if (error && typeof error === 'object') {
+      return JSON.stringify(error);
     }
 
     return String(error);

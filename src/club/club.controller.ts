@@ -144,7 +144,14 @@ export class ClubController {
 
     try {
       return await this.clubService.getCustomer(customerCode);
-    } catch {
+    } catch (error) {
+      // Only create a Diatech record when the customer is genuinely absent.
+      // Hiding auth/configuration/validation failures here caused unrelated
+      // upstream 400 errors to be reported as a misleading customer 404.
+      if (!(error instanceof NotFoundException)) {
+        throw error;
+      }
+
       this.logger.warn(
         `مشتری ${customerCode} در دایاتک پیدا نشد؛ تلاش برای ثبت‌نام...`,
       );
@@ -173,9 +180,13 @@ export class ClubController {
             : String(registerError),
         );
 
-        throw new NotFoundException(
-          'اطلاعات شما در باشگاه مشتریان یافت نشد. لطفاً بعداً دوباره تلاش کنید.',
-        );
+        if (registerError instanceof NotFoundException) {
+          throw new NotFoundException(
+            'اطلاعات شما در باشگاه مشتریان یافت نشد. لطفاً بعداً دوباره تلاش کنید.',
+          );
+        }
+
+        throw registerError;
       }
     }
   }

@@ -44,15 +44,17 @@ export class ProductsController {
     });
   }
 
+  // Keep the static route before ':slug'; otherwise Express/Nest can treat
+  // "search-suggestions" as a product slug and respond with a misleading 404.
+  @Get('/search-suggestions')
+  searchSuggestions(@Query() query: QueryDto) {
+    return this.productsService.getSearchSuggestions(query.search, query.limit);
+  }
+
   @Get(':slug')
   findOne(@Param('slug') slug: string) {
     return this.productsService.findOne(slug, {
       onlyInStock: true,
     });
-  }
-
-  @Get('/search-suggestions')
-  searchSuggestions(@Query() query: QueryDto) {
-    return this.productsService.getSearchSuggestions(query.search, query.limit);
   }
 }
