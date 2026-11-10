@@ -13,6 +13,7 @@ import { AddHediehMallPickup1797000000000 } from 'src/migrations/1797000000000-A
 import { SiteImages1798000000000 } from 'src/migrations/1798000000000-SiteImages';
 import { ProductCareInstructionsTitle1799000000000 } from 'src/migrations/1799000000000-ProductCareInstructionsTitle';
 import { OrderUpdatedAtPrecision1800000000000 } from 'src/migrations/1800000000000-OrderUpdatedAtPrecision';
+import { AddDigipayUgpFields1801000000000 } from 'src/migrations/1801000000000-AddDigipayUgpFields';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -33,6 +34,7 @@ export default new DataSource({
     SiteImages1798000000000,
     ProductCareInstructionsTitle1799000000000,
     OrderUpdatedAtPrecision1800000000000,
+    AddDigipayUgpFields1801000000000,
   ],
   synchronize: false,
 });

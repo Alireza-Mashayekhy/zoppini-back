@@ -7,6 +7,7 @@ import { WalletCharge } from 'src/wallet/entities/wallet-charge.entity';
 import { WalletModule } from 'src/wallet/wallet.module';
 
 import { Payment } from './entities/payment.entity';
+import { PaymentRefund } from './entities/payment-refund.entity';
 import { PaymentController } from './payment.controller';
 import { PaymentScheduler } from './payment.scheduler';
 import { DigipayAuthService } from './services/digipay-auth.service';
@@ -22,7 +23,7 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 @Module({
   imports: [
     AnalyticsModule,
-    TypeOrmModule.forFeature([Payment, WalletCharge]),
+    TypeOrmModule.forFeature([Payment, PaymentRefund, WalletCharge]),
     HttpModule,
     OrdersModule,
     WalletModule,

@@ -75,6 +75,53 @@ export class Payment {
   @Column({ type: 'enum', enum: PaymentStatus, default: PaymentStatus.PENDING })
   status: PaymentStatus;
 
+  //==============================================================
+  // دیجی‌پی (UPG) — اطلاعات خرید اعتباری/اقساطی
+  //==============================================================
+
+  /**
+   * نوع خرید دیجی‌پی که از **callback** می‌آید (نه نوع تیکت اولیهٔ UPG).
+   * 0 = IPG (درگاه اینترنتی)، 5 = Credit (CPG)، 11 = Wallet،
+   * 13 = BNPL (BPG)، 24 = Credit-Card
+   */
+  @Column({ name: 'digipay_purchase_type', type: 'int', nullable: true })
+  digipayPurchaseType: number | null;
+
+  /**
+   * ابزار پرداخت تأییدشدهٔ دیجی‌پی از پاسخ `purchases/verify`:
+   * 3 = Wallet، 4 = CPG/اعتباری، 10 = BPG/BNPL
+   */
+  @Column({ name: 'digipay_payment_gateway', type: 'int', nullable: true })
+  digipayPaymentGateway: number | null;
+
+  /** تأمین‌کنندهٔ اعتبار (`fpName` در verify یا `creditProvider` در callback) */
+  @Column({
+    name: 'credit_provider',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  creditProvider: string | null;
+
+  /**
+   * روش بازپرداخت اعتبار دیجی‌پی: 0 = تک‌مرحله‌ای (یک‌جا)،
+   * 1 = چندمرحله‌ای (۴ قسط). در callback اعتباری/BNPL ارسال می‌شود.
+   */
+  @Column({ name: 'repayment_option', type: 'int', nullable: true })
+  repaymentOption: number | null;
+
+  /**
+   * زمان اعلام تحویل خرید اعتباری به دیجی‌پی (`purchases/deliver`).
+   * فقط برای خریدهای CREDIT و BNPL لازم است و برای جلوگیری از ارسال
+   * تکراری، تاریخ موفق‌ترین اعلام در این ستون نگه داشته می‌شود.
+   */
+  @Column({
+    name: 'digipay_delivered_at',
+    type: 'datetime',
+    nullable: true,
+  })
+  digipayDeliveredAt: Date | null;
+
   @Column({ type: 'enum', enum: PaymentGateway })
   gateway: PaymentGateway;
 

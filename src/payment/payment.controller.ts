@@ -13,6 +13,7 @@ import {
   Res,
   UseGuards,
 } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AnalyticsService } from 'src/analytics/analytics.service';
 import { Roles } from 'src/common/decorators/roles.decorator';
@@ -21,6 +22,7 @@ import { AuthGuard } from 'src/common/guards/auth.guard';
 import { RolesGuard } from 'src/common/guards/roles.guard';
 import { OrdersService } from 'src/order/order.service';
 
+import { DigipayAdminRefundDto } from './dto/digipay-admin.dto';
 import { RequestPaymentDto } from './dto/request-payment.dto';
 import {
   SnappayAdminCancelDto,
@@ -356,11 +358,21 @@ export class PaymentController {
   // Digipay
   //==============================================================
 
-  @Post('callback/digipay')
+  /**
+   * نتیجهٔ پرداخت دیجی‌پی (بند ۸ مستند UPG).
+   *
+   * مسیر موفق معمولاً **POST** است، ولی در «انصراف» ممکن است بازگشت **GET با
+   * بدنهٔ خالی** باشد؛ پس هر دو متد و هم بدنه هم query خوانده می‌شود. دریافت
+   * callback به‌تنهایی اثبات پرداخت نیست و نتیجه فقط با `purchases/verify`
+   * نهایی می‌شود.
+   */
+  @All('callback/digipay')
+  @SkipThrottle()
   async callbackDigipay(@Req() req: Request, @Res() res: Response) {
     /*
      * طبق مستند UPG، دیجی‌پی نتیجه را با POST و این فیلدها می‌فرستد:
-     * amount, providerId, trackingCode, rrn, psp, isCredit, result, type
+     * amount, providerId, trackingCode, rrn, psp, isCredit, creditProvider,
+     * repaymentOption, result, type
      * (ticket/status که قبلاً اینجا خوانده می‌شد مربوط به قرارداد دیگری بود.)
      */
     const rawBody = req.body as Record<string, unknown> | undefined;
@@ -373,19 +385,40 @@ export class PaymentController {
       rrn: readCallbackFieldAny(req, ['rrn', 'Rrn', 'RRN']),
       psp,
       isCredit: readCallbackFieldAny(req, ['isCredit', 'IsCredit']),
+      creditProvider: readCallbackFieldAny(req, [
+        'creditProvider',
+        'CreditProvider',
+      ]),
+      repaymentOption: readCallbackFieldAny(req, [
+        'repaymentOption',
+        'RepaymentOption',
+      ]),
       type: readCallbackFieldAny(req, ['type', 'Type']),
       result: readCallbackFieldAny(req, ['result', 'Result']),
     };
 
-    const payment = callback.providerId
-      ? await this.digipayService.findPaymentByProviderId(callback.providerId)
-      : null;
+    const payment =
+      (callback.providerId
+        ? await this.digipayService.findPaymentByProviderId(callback.providerId)
+        : null) ??
+      // بازگشت‌های تکراری/بدون providerId: با کد پیگیری هم قابل تطبیق است
+      (callback.trackingCode
+        ? await this.digipayService.findPaymentBySaleReferenceId(
+            callback.trackingCode,
+          )
+        : null);
 
     if (!payment) {
+      /*
+       * انصراف کاربر یا بازگشت خالی: سفارش را پرداخت‌شده فرض نمی‌کنیم و
+       * کاربر به صفحهٔ نتیجهٔ ناموفق می‌رود. سفارش PENDING می‌ماند تا
+       * بتواند دوباره پرداخت کند.
+       */
       this.logger.warn(
-        `callback دیجی‌پی برای providerId ناشناخته دریافت شد: ${
-          callback.providerId || 'خالی'
-        }`,
+        `callback دیجی‌پی بدون تطبیق با پرداخت ثبت‌شده دریافت شد (` +
+          `providerId=${callback.providerId || 'خالی'}, ` +
+          `trackingCode=${callback.trackingCode || 'خالی'}, ` +
+          `result=${callback.result || 'خالی'}, method=${req.method})`,
       );
 
       return this.redirect(res, 'failed');
@@ -407,7 +440,13 @@ export class PaymentController {
       );
     }
 
-    if (normalizedResult !== 'SUCCESS') {
+    /*
+     * طبق مستند، `result` ممکن است در بازگشت موجود نباشد (به‌خصوص خرید با
+     * کیف پول دیجی‌پی)؛ «نبودن result» را شکست نمی‌دانیم و verify را انجام
+     * می‌دهیم. مقدار ناشناخته‌ی غیرخالی را محافظه‌کارانه «در حال بررسی»
+     * می‌گیریم.
+     */
+    if (normalizedResult && normalizedResult !== 'SUCCESS') {
       await this.digipayService.recordCallback(payment, callback);
 
       return this.redirect(res, 'pending', payment.orderId ?? undefined);
@@ -638,5 +677,78 @@ export class PaymentController {
     @Param('paymentId', ParseIntPipe) paymentId: number,
   ) {
     return this.snappayService.adminReconcilePayment(paymentId);
+  }
+
+  //==============================================================
+  // Digipay — عملیات ادمین (تحویل / عودت / استعلام)
+  //==============================================================
+
+  /**
+   * اعلام تحویل خرید اعتباری/BNPL یک سفارش به دیجی‌پی
+   * (`purchases/deliver` — بند ۱۰). برای خریدهای IPG/Wallet بی‌اثر است.
+   */
+  @Post('digipay/admin/orders/:orderId/deliver')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async digipayAdminDeliver(@Param('orderId', ParseIntPipe) orderId: number) {
+    return this.digipayService.deliverOrder(orderId);
+  }
+
+  /**
+   * عودت وجه پرداخت‌های دیجی‌پی یک سفارش (`refunds` — بند ۱۱).
+   * بدنه: { "confirm": true, "amount": 100000, "reason": "..." }
+   * اگر `amount` (تومان) داده نشود، کل ماندهٔ قابل عودت برمی‌گردد.
+   */
+  @Post('digipay/admin/orders/:orderId/refund')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async digipayAdminRefund(
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Body() dto: DigipayAdminRefundDto,
+  ) {
+    if (dto.confirm !== true) {
+      throw new BadRequestException(
+        'برای ثبت عودت باید confirm=true ارسال شود',
+      );
+    }
+
+    return this.digipayService.refundOrder(orderId, {
+      amount: dto.amount,
+      reason: dto.reason,
+    });
+  }
+
+  /** استعلام وضعیت نهایی یک درخواست عودت دیجی‌پی (Refund Inquiry — بند ۱۲) */
+  @Post('digipay/admin/refunds/:refundId/inquiry')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async digipayAdminRefundInquiry(
+    @Param('refundId', ParseIntPipe) refundId: number,
+  ) {
+    const refund = await this.digipayService.findRefundById(refundId);
+
+    return this.digipayService.inquireRefund(refund);
+  }
+
+  /** فهرست درخواست‌های عودت دیجی‌پی (اختیاری برای یک پرداخت خاص) */
+  @Get('digipay/admin/refunds')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async digipayAdminRefunds(@Query('paymentId') paymentId?: string) {
+    const parsed = Number(paymentId);
+
+    return this.digipayService.listRefunds(
+      Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
+    );
+  }
+
+  /** تلاش مجدد برای verify یک پرداخت دیجی‌پی (همان مسیر کرون) */
+  @Post('digipay/admin/payments/:paymentId/reconcile')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async digipayAdminReconcile(
+    @Param('paymentId', ParseIntPipe) paymentId: number,
+  ) {
+    return this.digipayService.reconcilePaymentById(paymentId);
   }
 }

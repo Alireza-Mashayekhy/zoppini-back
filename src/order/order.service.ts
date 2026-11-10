@@ -24,6 +24,7 @@ import {
   PaymentGateway,
   PaymentStatus,
 } from 'src/payment/entities/payment.entity';
+import { describeDigipayPurchase } from 'src/payment/utils/digipay-instrument.util';
 import { Variant } from 'src/products/entities/variant.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
@@ -1006,6 +1007,12 @@ export class OrdersService {
         saleReferenceId: true,
         resCode: true,
         createdAt: true,
+        // اطلاعات خرید اعتباری/اقساطی دیجی‌پی برای نمایش در پنل ادمین
+        digipayPurchaseType: true,
+        digipayPaymentGateway: true,
+        creditProvider: true,
+        repaymentOption: true,
+        digipayDeliveredAt: true,
       },
       order: {
         createdAt: 'ASC',
@@ -1105,15 +1112,26 @@ export class OrdersService {
     const finalPrice = Number(order.finalPrice ?? 0);
     const walletAmount = Number(order.walletPayment ?? 0);
 
-    const orderPayments = (paymentsByOrderId.get(order.id) ?? []).map(p => ({
-      paymentId: p.id,
-      gateway: p.gateway,
-      gatewayLabel: this.getGatewayLabel(p.gateway),
-      amount: Number(p.amount) / 10,
-      saleReferenceId: p.saleReferenceId,
-      resCode: p.resCode,
-      createdAt: p.createdAt,
-    }));
+    const orderPayments = (paymentsByOrderId.get(order.id) ?? []).map(p => {
+      const digipay = describeDigipayPurchase(p);
+
+      return {
+        paymentId: p.id,
+        gateway: p.gateway,
+        gatewayLabel: this.getGatewayLabel(p.gateway),
+        amount: Number(p.amount) / 10,
+        saleReferenceId: p.saleReferenceId,
+        resCode: p.resCode,
+        createdAt: p.createdAt,
+        /** برچسب ابزار پرداخت دیجی‌پی: کیف پول / اعتبار / BNPL / اینترنتی */
+        digipayInstrument: digipay?.label ?? null,
+        /** تعداد اقساط (1 = یک‌جا، 4 = چهار قسط) */
+        digipayInstallments: digipay?.installments ?? null,
+        digipayCreditProvider: digipay?.creditProvider ?? null,
+        /** زمان اعلام تحویل خرید اعتباری به دیجی‌پی */
+        digipayDeliveredAt: p.digipayDeliveredAt ?? null,
+      };
+    });
 
     const gatewayAmount = orderPayments.reduce(
       (sum, p) => sum + Number(p.amount),
