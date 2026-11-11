@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { AuthGuard } from 'src/common/guards/auth.guard';
 
-import { ClubService } from './club.service';
+import { ClubService, DiatechCustomer } from './club.service';
 
 interface AuthenticatedUser {
   id?: number;
@@ -79,8 +79,17 @@ export class ClubController {
 
     const customer = await this.getCustomerForUser(user);
 
-    // فقط تراکنش کیف پول‌های خود کاربر قابل دریافت است
-    const walletIds = (customer.Wallets ?? []).map(wallet => wallet.Id);
+    /**
+     * فقط تراکنش کیف پول‌های خود کاربر قابل دریافت است.
+     *
+     * لیست معتبر کیف پول‌ها از endpoint اختصاصی `/wallets` خوانده می‌شود:
+     * DTO مشتری در همه‌ی نسخه‌های دایاتک فیلد `Wallets` را برنمی‌گرداند و
+     * اگر فقط به همان تکیه کنیم، همه‌ی درخواست‌های تراکنش 403 می‌شوند
+     * (دقیقاً همان چیزی که کاربر به‌صورت «خطا بعد از باز شدن صفحه» می‌دید).
+     */
+    const wallets = await this.getWalletListForCustomer(customer);
+
+    const walletIds = wallets.map(wallet => wallet.Id);
 
     if (!walletIds.includes(customerWalletId)) {
       throw new ForbiddenException('این کیف پول متعلق به شما نیست.');
@@ -127,6 +136,31 @@ export class ClubController {
   // ============================================================
   // Helpers
   // ============================================================
+
+  /**
+   * کیف پول‌های مشتری؛ اول از endpoint اختصاصی و در صورت خطا از فیلد
+   * `Wallets` داخل DTO مشتری استفاده می‌شود.
+   */
+  private async getWalletListForCustomer(customer: DiatechCustomer) {
+    try {
+      const wallets = await this.clubService.getCustomerWallets(
+        customer.CustomerCode,
+      );
+
+      if (wallets.length > 0) {
+        return wallets;
+      }
+    } catch (error) {
+      // اگر دریافت لیست کیف پول‌ها شکست خورد، از داده‌ی مشتری استفاده می‌کنیم
+      this.logger.warn(
+        `دریافت کیف پول‌های ${customer.CustomerCode} ناموفق بود؛ ` +
+          `استفاده از Wallets داخل DTO مشتری.`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    return customer.Wallets ?? [];
+  }
 
   /**
    * دریافت مشتری معادل کاربر لاگین‌شده از دایاتک.
