@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { OrderItem } from 'src/order/entities/order-item';
 import { Order, OrderStatus } from 'src/order/entities/order.entity';
 import { PromotionsService } from 'src/promotions/promotions.service';
 import { Variant } from 'src/products/entities/variant.entity';
@@ -102,7 +103,7 @@ export class PromotionRevalidationService {
     );
 
     // سفارش با شرایط جدید بازسازی می‌شود تا مشتری با مبلغ درست تأیید کند
-    await this.rebuildOrderPricing(order);
+    await this.rebuildOrderPricing(order, changes.length > 0);
 
     return {
       ok: false,
@@ -116,14 +117,26 @@ export class PromotionRevalidationService {
   /**
    * بازمحاسبهٔ سفارش با حذف پروموشن‌هایی که دیگر معتبر نیستند.
    * فقط روی سفارش PENDING انجام می‌شود.
+   *
+   * فرمول قیمت نهایی باید دقیقاً با همان چیزی که هنگام ساخت سفارش استفاده شد
+   * یکی باشد:
+   *
+   *   final = totalPrice − saleDiscount − promotionDiscount − discount + shipping
+   *
+   * اگر فقط `discount` کم شود، تمام تخفیف‌های دیگر (فروش ویژه، پروموشن و کد
+   * تخفیف) از قیمت جدید حذف می‌شوند و مشتری مبلغی بسیار بیشتر از واقعیت
+   * می‌بیند — همان چیزی که قانون «هرگز بیشتر از تأیید مشتری» منع می‌کند.
    */
-  private async rebuildOrderPricing(order: Order) {
+  private async rebuildOrderPricing(order: Order, promotionInvalid: boolean) {
     if (order.status !== OrderStatus.PENDING) {
       return;
     }
 
     const items = order.items ?? [];
-    let removedValue = 0;
+
+    let removedFreeValue = 0;
+    let removedDiscount = 0;
+    let touched = false;
 
     for (const item of items) {
       if (!item.isPromotionReward) {
@@ -148,29 +161,92 @@ export class PromotionRevalidationService {
         (await this.hasStock(item.variantId, item.quantity));
 
       if (!valid) {
-        removedValue += Number(item.totalPrice ?? 0);
+        /*
+         * ارزش هدیه در `promotionDiscount` ردیف نگه داشته می‌شود، نه در
+         * `totalPrice` (که برای ردیف رایگان صفر است). پس هر دو مقدار حذف‌شده
+         * از همین یک فیلد می‌آیند؛ استفاده از totalPrice باعث می‌شد ارزش
+         * هدیه در فاکتور باقی بماند.
+         */
+        const giftValue = Number(item.promotionDiscount ?? 0);
+
+        removedFreeValue += giftValue;
+        removedDiscount += giftValue;
+
         item.isPromotionReward = false;
         item.promotionRewardId = null;
         item.promotionLabel = 'هدیه حذف شد (شرایط تغییر کرد)';
+        item.promotionDiscount = 0;
         item.totalPrice = 0;
         item.price = 0;
         item.quantity = 0;
+
+        touched = true;
       }
     }
 
-    if (removedValue <= 0) {
+    /*
+     * پروموشن غیرمعتبر ممکن است تخفیف نقدی داشته باشد (با یا بدون ردیف
+     * رایگان). در آن حالت هر نوع تخفیف پروموشن ساقط می‌شود، حتی اگر هیچ
+     * ردیفی حذف نشده باشد؛ در غیر این صورت فاکتور تخفیفی را نشان می‌دهد که
+     * مستند به هیچ قاعدهٔ معتبری نیست.
+     */
+    if (promotionInvalid) {
+      removedDiscount = Number(order.promotionDiscount ?? 0);
+      touched = true;
+    }
+
+    if (!touched) {
       return;
     }
 
     const orderTotal = Number(order.totalPrice ?? 0);
-    const discount = Number(order.discount ?? 0);
+    const saleDiscount = Number(order.saleDiscount ?? 0);
+    const codeDiscount = Number(order.discount ?? 0);
     const shipping = Number(order.shippingCost ?? 0);
 
-    const finalPrice = Math.max(0, orderTotal - discount + shipping);
+    const nextPromotionDiscount = Math.max(
+      0,
+      Number(order.promotionDiscount ?? 0) - removedDiscount,
+    );
 
+    /*
+     * هزینهٔ ارسال دست نمی‌خورد: اگر ارسال رایگان را از پروموشن گرفته بود،
+     * با حذف پروموشن ارسال «رایگان» باقی نمی‌ماند ولی مبلغ جدید ارسال هم
+     * ناگهانی اضافه نمی‌شود؛ چون مشتری آن را تأیید نکرده است. پرچم
+     * promotionFreeShipping پاک می‌شود تا پشتیبانی بداند ارسال رایگان
+     * دیگر مستند به پروموشن نیست.
+     */
+    const shippingCost = shipping;
+
+    const finalPrice = Math.max(
+      0,
+      orderTotal - saleDiscount - nextPromotionDiscount - codeDiscount + shippingCost,
+    );
+
+    order.promotionDiscount = nextPromotionDiscount as never;
+    order.promotionFreeItemValue = Math.max(
+      0,
+      Number(order.promotionFreeItemValue ?? 0) - removedFreeValue,
+    ) as never;
+    order.promotionFreeShipping =
+      nextPromotionDiscount > 0 ? order.promotionFreeShipping : false;
+    order.shippingCost = shippingCost as never;
     order.finalPrice = finalPrice as never;
 
+    // اسنپ‌شات هم باید با واقعیت جدید بخواند؛ در غیر این صورت گزارش
+    // پشتیبانی مبلغی را نشان می‌دهد که مشتری پرداخت نکرده است.
+    order.promotionSnapshot = (order.promotionSnapshot ?? []).filter(
+      entry =>
+        !promotionInvalid ||
+        items.some(
+          item =>
+            item.promotionRewardId === entry.promotionId ||
+            (item.promotionIds ?? []).includes(entry.promotionId),
+        ),
+    );
+
     await this.dataSource.manager.save(Order, order);
+    await this.dataSource.manager.save(OrderItem, items);
   }
 
   private async hasStock(variantId: number | null, quantity: number) {
