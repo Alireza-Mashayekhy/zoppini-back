@@ -7,6 +7,7 @@ import { BotReportsModule } from 'src/bot-reports/bot-reports.module';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubModule } from 'src/club/club.module';
 import { DiscountsModule } from 'src/discounts/discounts.module';
+import { PromotionsModule } from 'src/promotions/promotions.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
 import { Payment } from 'src/payment/entities/payment.entity';
@@ -39,6 +40,7 @@ import { OrdersService } from './order.service';
     SmsModule,
     forwardRef(() => RahkaranModule),
     DiscountsModule,
+    PromotionsModule,
     ClubModule,
     WalletModule,
     BotReportsModule,

@@ -15,7 +15,7 @@ import { AuthGuard } from 'src/common/guards/auth.guard';
 import { QueryDto } from 'src/common/query';
 import { verifyAttribution } from 'src/torob/torob-attribution.util';
 
-import { CreateOrderDto } from './dto/create-order.dto';
+import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { OrdersService } from './order.service';
 
 @Controller('orders')
@@ -25,6 +25,20 @@ export class OrdersController {
     private readonly ordersService: OrdersService,
     private readonly analyticsService: AnalyticsService,
   ) {}
+
+  /**
+   * پیش‌نمایش زندهٔ مبالغ چک‌اوت با پروموشن‌های فعلی.
+   * باید پیش از `@Get(':id')` ثبت شود تا «checkout-preview» شناسه تلقی نشود.
+   */
+  @Get('checkout-preview')
+  async checkoutPreview(
+    @Request() req,
+    @Query('shippingMethod') shippingMethod?: ShippingMethod,
+  ) {
+    return this.ordersService.previewCheckout(req.user.id, {
+      shippingMethod,
+    });
+  }
 
   @Get()
   async findAll(@Request() req, @Query() query: QueryDto) {

@@ -30,6 +30,7 @@ import { OtpModule } from './otp/otp.module';
 import { PaymentModule } from './payment/payment.module';
 import { ProductGuidesModule } from './product-guides/product-guides.module';
 import { ProductsModule } from './products/products.module';
+import { PromotionsModule } from './promotions/promotions.module';
 import { RahkaranModule } from './rahkaran/rahkaran.module';
 import { RedisModule } from './redis/redis.module';
 import { ReportsModule } from './reports/reports.module';
@@ -96,6 +97,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     SeoModule,
     SiteImagesModule,
     BotReportsModule,
+    PromotionsModule,
   ],
   controllers: [AppController],
   providers: [

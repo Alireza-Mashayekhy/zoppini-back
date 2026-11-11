@@ -24,6 +24,7 @@ import {
   QueryDto,
 } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
+import { PromotionsService } from 'src/promotions/promotions.service';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { extractBothWarehouseStocks } from 'src/rahkaran/rahkaran.service';
@@ -87,6 +88,9 @@ export class ProductsService {
     private readonly smsService: SmsService,
     @Optional()
     private readonly botEventsService?: BotEventsService,
+    /** اختیاری: با DI تزریق می‌شود (برای نشان پروموشن روی کارت محصول) */
+    @Optional()
+    private readonly promotionsService?: PromotionsService,
   ) {}
 
   async create(
@@ -466,6 +470,8 @@ export class ProductsService {
 
     await this.attachDiscounts(data);
 
+    await this.attachPromotionBadges(data);
+
     return {
       data,
       pagination: {
@@ -728,6 +734,18 @@ export class ProductsService {
       }
 
       relatedProducts = await relatedQb.take(10).getMany();
+    }
+
+    // =====================================================
+    // PROMOTION BADGES
+    // =====================================================
+
+    // قیمت‌ها بدون تغییر می‌مانند؛ فقط متن نشان و توضیح پیشنهاد اضافه می‌شود.
+    try {
+      (product as any).promotionBadges =
+        (await this.promotionsService?.getProductBadges(product)) ?? [];
+    } catch {
+      (product as any).promotionBadges = [];
     }
 
     return {
@@ -1328,6 +1346,8 @@ export class ProductsService {
 
     await this.attachDiscounts(data);
 
+    await this.attachPromotionBadges(data);
+
     return {
       data,
       pagination: {
@@ -1549,6 +1569,32 @@ export class ProductsService {
         finalPrice,
         expiresAt: discount.expiresAt,
       };
+    }
+
+    return products;
+  }
+
+  /**
+   * نشان پروموشن روی کارت محصول.
+   *
+   * نکتهٔ مهم: قیمت کارت محصول تغییر نمی‌کند؛ فقط متن نشان اضافه می‌شود تا
+   * تخفیفِ محاسبه‌شده در سبد به‌اشتباه به‌عنوان قیمت نهایی نمایش داده نشود.
+   */
+  private async attachPromotionBadges(products: Product[]) {
+    if (!products.length) {
+      return products;
+    }
+
+    const badges =
+      (await this.promotionsService?.getProductCardBadgeMap()) ??
+      new Map<number, { promotionId: number; text: string }>();
+
+    for (const product of products) {
+      const badge = badges.get(product.id);
+
+      (product as any).promotionBadge = badge
+        ? { promotionId: badge.promotionId, text: badge.text }
+        : null;
     }
 
     return products;

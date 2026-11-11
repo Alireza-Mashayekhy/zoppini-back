@@ -17,6 +17,9 @@ import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubService } from 'src/club/club.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
+import { buildPromotionSnapshot } from 'src/order/checkout-pricing';
+import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
+import { PromotionsService } from 'src/promotions/promotions.service';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
 import {
@@ -81,6 +84,14 @@ export class OrdersService {
 
     @Optional()
     private readonly botEventsService?: BotEventsService,
+
+    /**
+     * سرویس پروموشن؛ اختیاری است تا سازندهٔ موجود (و تست‌های قبلی) نشکند.
+     * در اپ واقعی همیشه با DI تزریق می‌شود و همهٔ مسیرهای قیمت‌گذاری از آن
+     * استفاده می‌کنند.
+     */
+    @Optional()
+    private readonly promotionsService?: PromotionsService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -169,41 +180,135 @@ export class OrdersService {
       })),
     );
 
+    // =====================================================
+    // 4-b. پروموشن‌ها (قبل از محاسبه ارسال و کد تخفیف)
+    // =====================================================
+
+    const promotionResult = this.promotionsService
+      ? await this.promotionsService.evaluateCart({
+          cart,
+          userId,
+          forCheckout: true,
+        })
+      : EMPTY_PROMOTION_RESULT;
+
+    if (promotionResult.notices.length) {
+      this.logger.log(
+        `پروموشن‌های اعمال‌نشده در سفارش کاربر ${userId}: ${promotionResult.notices.join(' | ')}`,
+      );
+    }
+
+    const promotionDiscountByLine = new Map<
+      number,
+      { amount: number; isFree: boolean; labels: string[]; promotionIds: number[] }
+    >();
+
+    for (const evaluation of promotionResult.applied) {
+      for (const allocation of evaluation.allocations) {
+        const lineId = Number(allocation.lineId);
+
+        if (!Number.isFinite(lineId)) {
+          continue;
+        }
+
+        const current = promotionDiscountByLine.get(lineId) ?? {
+          amount: 0,
+          isFree: false,
+          labels: [],
+          promotionIds: [],
+        };
+
+        current.amount += allocation.isFree ? 0 : allocation.amount;
+        current.isFree = current.isFree || allocation.isFree;
+
+        if (!current.labels.includes(allocation.label)) {
+          current.labels.push(allocation.label);
+        }
+
+        if (!current.promotionIds.includes(evaluation.promotionId)) {
+          current.promotionIds.push(evaluation.promotionId);
+        }
+
+        promotionDiscountByLine.set(lineId, current);
+      }
+    }
+
+    // هر کالای هدیه حتماً رایگان محاسبه شود (حتی اگر پروموشن در این لحظه
+    // کامل احراز نشود، ردیف هدیه نباید پول بگیرد)
+    for (const item of cart.items) {
+      if (item.promotionRewardId != null) {
+        const current = promotionDiscountByLine.get(item.id) ?? {
+          amount: 0,
+          isFree: false,
+          labels: [],
+          promotionIds: [],
+        };
+
+        current.isFree = true;
+        current.promotionIds = [
+          ...new Set([...current.promotionIds, item.promotionRewardId]),
+        ];
+        current.labels = ['رایگان (هدیه پروموشن)'];
+        promotionDiscountByLine.set(item.id, current);
+      }
+    }
+
     let totalPrice = 0;
 
     let saleDiscountAmount = 0;
 
+    let promotionDiscountAmount = 0;
+
     const orderItems = cart.items.map((item, index) => {
       const line = pricedLines[index];
+      const promotionLine = promotionDiscountByLine.get(item.id);
 
       // قیمت فریزشدهٔ هر واحد = قیمت پس از فروش ویژه
-      const price = line.unitPrice;
+      const salePrice = line.unitPrice;
 
-      const itemTotal = price * item.quantity;
+      const lineSaleTotal = salePrice * item.quantity;
+      const linePromotionDiscount = promotionLine?.isFree
+        ? lineSaleTotal
+        : Math.min(promotionLine?.amount ?? 0, lineSaleTotal);
+
+      const itemTotal = Math.max(0, lineSaleTotal - linePromotionDiscount);
 
       totalPrice += line.originalPrice * item.quantity;
 
       saleDiscountAmount += line.saleDiscountPerUnit * item.quantity;
 
+      promotionDiscountAmount += linePromotionDiscount;
+
       return {
         variant: item.variant,
         quantity: item.quantity,
-        price,
+        // قیمت فریزشدهٔ هر واحد = قیمت پس از فروش ویژه و پروموشن
+        price:
+          item.quantity > 0
+            ? Math.round(itemTotal / item.quantity)
+            : salePrice,
         originalPrice: line.originalPrice,
         totalPrice: itemTotal,
+        promotionDiscount: linePromotionDiscount,
+        isPromotionReward: !!item.promotionRewardId || !!promotionLine?.isFree,
+        promotionRewardId: item.promotionRewardId ?? null,
+        promotionLabel: promotionLine?.labels.join('، ') ?? null,
+        promotionIds: promotionLine?.promotionIds ?? null,
       };
     });
 
-    const subtotalAfterSale = totalPrice - saleDiscountAmount;
+    const subtotalAfterSale =
+      totalPrice - saleDiscountAmount - promotionDiscountAmount;
 
     // =====================================================
     // 5. هزینه ارسال
     // =====================================================
 
-    const shippingCost = this.calculateShippingCost(
-      dto.shippingMethod,
-      subtotalAfterSale,
-    );
+    const promotionFreeShipping = promotionResult.freeShipping;
+
+    const shippingCost = promotionFreeShipping
+      ? 0
+      : this.calculateShippingCost(dto.shippingMethod, subtotalAfterSale);
 
     // =====================================================
     // 6. تخفیف
@@ -233,7 +338,8 @@ export class OrdersService {
       discountCode = result.discount.code;
     }
 
-    const discountAmount = saleDiscountAmount + codeDiscountAmount;
+    const discountAmount =
+      saleDiscountAmount + promotionDiscountAmount + codeDiscountAmount;
 
     // =====================================================
     // 7. مبلغ نهایی
@@ -243,6 +349,38 @@ export class OrdersService {
       0,
       totalPrice + Number(shippingCost) - discountAmount,
     );
+
+    // بررسی سازگاری: جمع ردیف‌ها باید دقیقاً با مبلغ نهایی بخواند
+    const linesTotal = orderItems.reduce(
+      (sum, item) => sum + Number(item.totalPrice),
+      0,
+    );
+    const expectedLinesTotal = Math.max(
+      0,
+      totalPrice - saleDiscountAmount - promotionDiscountAmount - codeDiscountAmount,
+    );
+
+    if (Math.abs(linesTotal - expectedLinesTotal) >= 1) {
+      this.logger.error(
+        `❌ ناسازگاری جمع ردیف‌ها با مبلغ سفارش: lines=${linesTotal} expected=${expectedLinesTotal}`,
+      );
+
+      const diff = linesTotal - expectedLinesTotal;
+
+      if (diff > 0) {
+        // ردیف‌ها بیشتر از انتظار: تخفیف روی آخرین ردیف اعمال شود
+        for (let index = orderItems.length - 1; index >= 0 && diff > 0; index -= 1) {
+          const item = orderItems[index];
+          const reduceBy = Math.min(diff, Number(item.totalPrice));
+
+          item.totalPrice -= reduceBy;
+          item.price =
+            item.quantity > 0
+              ? Math.round(item.totalPrice / item.quantity)
+              : item.price;
+        }
+      }
+    }
 
     let walletPayment = 0;
 
@@ -269,6 +407,19 @@ export class OrdersService {
       discount: discountAmount,
 
       saleDiscount: saleDiscountAmount,
+
+      promotionDiscount: promotionDiscountAmount,
+
+      promotionFreeItemValue: promotionResult.totalFreeItemValue,
+
+      promotionFreeShipping,
+
+      promotionSnapshot: buildPromotionSnapshot(
+        promotionResult.applied,
+        new Map(
+          cart.items.map(item => [String(item.id), item.variant?.id ?? null]),
+        ),
+      ),
 
       finalPrice,
 
@@ -477,6 +628,21 @@ export class OrdersService {
       }
 
       // =========================================================
+      // 2-b. ثبت استفاده از پروموشن‌ها (برای محدودیت استفاده و گزارش)
+      // =========================================================
+
+      if (this.promotionsService && order.promotionSnapshot?.length) {
+        await this.promotionsService.recordRedemption(queryRunner.manager, {
+          promotionIds: order.promotionSnapshot.map(snapshot => ({
+            id: snapshot.promotionId,
+            discountAmount: Number(snapshot.discountAmount ?? 0),
+          })),
+          orderId: order.id,
+          userId,
+        });
+      }
+
+      // =========================================================
       // 3. خالی کردن سبد خرید
       // =========================================================
 
@@ -679,6 +845,168 @@ export class OrdersService {
   }
 
   // دریافت یک سفارش
+  /**
+   * پیش‌نمایش زندهٔ چک‌اوت: همان محاسباتی که ثبت سفارش انجام می‌دهد، بدون
+   * ثبت چیزی. صفحهٔ چک‌اوت و پشتیبانی همین اعداد را می‌بینند.
+   */
+  async previewCheckout(
+    userId: number,
+    dto: { shippingMethod?: ShippingMethod; discountCode?: string } = {},
+  ) {
+    const cart = await this.cartRepo.findOne({
+      where: { user: { id: userId } },
+      relations: {
+        items: {
+          variant: { product: { categories: true } },
+        },
+      },
+    });
+
+    if (!cart || !cart.items?.length) {
+      throw new BadRequestException('سبد خرید خالی است.');
+    }
+
+    const pricedLines = await this.discountService.priceCartLines(
+      cart.items.map(item => ({
+        productId: item.variant.product.id,
+        quantity: item.quantity,
+        price: Number(item.variant.price),
+        categoryIds:
+          item.variant.product.categories?.map(category => category.id) ?? [],
+      })),
+    );
+
+    const promotionResult = this.promotionsService
+      ? await this.promotionsService.evaluateCart({ cart, userId })
+      : EMPTY_PROMOTION_RESULT;
+
+    const promotionByLine = new Map<
+      number,
+      { amount: number; isFree: boolean; labels: string[]; promotionIds: number[] }
+    >();
+
+    for (const evaluation of promotionResult.applied) {
+      for (const allocation of evaluation.allocations) {
+        const lineId = Number(allocation.lineId);
+
+        if (!Number.isFinite(lineId)) {
+          continue;
+        }
+
+        const current = promotionByLine.get(lineId) ?? {
+          amount: 0,
+          isFree: false,
+          labels: [],
+          promotionIds: [],
+        };
+
+        current.amount += allocation.isFree ? 0 : allocation.amount;
+        current.isFree = current.isFree || allocation.isFree;
+
+        if (!current.labels.includes(allocation.label)) {
+          current.labels.push(allocation.label);
+        }
+
+        if (!current.promotionIds.includes(evaluation.promotionId)) {
+          current.promotionIds.push(evaluation.promotionId);
+        }
+
+        promotionByLine.set(lineId, current);
+      }
+    }
+
+    for (const item of cart.items) {
+      if (item.promotionRewardId != null) {
+        const current = promotionByLine.get(item.id) ?? {
+          amount: 0,
+          isFree: false,
+          labels: [],
+          promotionIds: [],
+        };
+
+        current.isFree = true;
+        current.promotionIds = [
+          ...new Set([...current.promotionIds, item.promotionRewardId]),
+        ];
+        current.labels = ['رایگان (هدیه پروموشن)'];
+        promotionByLine.set(item.id, current);
+      }
+    }
+
+    const lines = cart.items.map((item, index) => {
+      const priced = pricedLines[index];
+      const promotion = promotionByLine.get(item.id);
+      const saleTotal = priced.unitPrice * item.quantity;
+
+      return {
+        lineId: item.id,
+        variantId: item.variant.id,
+        productId: item.variant.product.id,
+        title: item.variant.product.title,
+        slug: item.variant.product.slug,
+        image: item.variant.product.image,
+        colorName: item.variant.color?.name ?? null,
+        sizeName: item.variant.size?.name ?? null,
+        quantity: item.quantity,
+        originalPrice: priced.originalPrice,
+        salePrice: priced.unitPrice,
+        promotionDiscount: promotion?.isFree
+          ? saleTotal
+          : Math.min(promotion?.amount ?? 0, saleTotal),
+        isFreeReward: !!item.promotionRewardId || !!promotion?.isFree,
+        promotionRewardId: item.promotionRewardId ?? null,
+        promotionLabel: promotion?.labels.join('، ') ?? null,
+        promotionIds: promotion?.promotionIds ?? [],
+      };
+    });
+
+    const subtotalAfterSale = lines.reduce(
+      (sum, line) => sum + line.salePrice * line.quantity - line.promotionDiscount,
+      0,
+    );
+
+    const freeShipping = promotionResult.freeShipping;
+    const shippingMethod = dto.shippingMethod ?? ShippingMethod.POST;
+    const shippingCost = freeShipping
+      ? 0
+      : this.calculateShippingCost(shippingMethod, subtotalAfterSale);
+
+    return {
+      data: {
+        lines,
+        promotions: {
+          applied: promotionResult.applied,
+          rejected: promotionResult.rejected,
+          notices: promotionResult.notices,
+          suggestions: promotionResult.suggestions,
+        },
+        totals: {
+          originalPrice: lines.reduce(
+            (sum, line) => sum + line.originalPrice * line.quantity,
+            0,
+          ),
+          saleDiscount: lines.reduce(
+            (sum, line) =>
+              sum +
+              (line.originalPrice - line.salePrice) * line.quantity,
+            0,
+          ),
+          promotionDiscount: lines.reduce(
+            (sum, line) => sum + line.promotionDiscount,
+            0,
+          ),
+          freeItemValue: promotionResult.totalFreeItemValue,
+          shippingCost,
+          freeShipping,
+          finalPrice: Math.max(
+            0,
+            subtotalAfterSale - 0 + shippingCost,
+          ),
+        },
+      },
+    };
+  }
+
   async findOne(id: number, userId?: number): Promise<Order> {
     const where: any = { id };
     if (userId) {

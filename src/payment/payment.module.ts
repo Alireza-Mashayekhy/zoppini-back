@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AnalyticsModule } from 'src/analytics/analytics.module';
 import { OrdersModule } from 'src/order/order.module';
+import { PromotionsModule } from 'src/promotions/promotions.module';
 import { WalletCharge } from 'src/wallet/entities/wallet-charge.entity';
 import { WalletModule } from 'src/wallet/wallet.module';
 
@@ -14,6 +15,7 @@ import { DigipayAuthService } from './services/digipay-auth.service';
 import { DigipayPaymentService } from './services/digipay-payment.service';
 import { MellatPaymentService } from './services/mellat-payment.service';
 import { PaymentGuardService } from './services/payment-guard.service';
+import { PromotionRevalidationService } from './services/promotion-revalidation.service';
 import { SnappayPaymentService } from './services/snappay-payment.service';
 import { TaraAuthService } from './services/tara-auth.service';
 import { TaraPaymentService } from './services/tara-payment.service';
@@ -27,10 +29,12 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
     HttpModule,
     OrdersModule,
     WalletModule,
+    PromotionsModule,
   ],
   controllers: [PaymentController],
   providers: [
     PaymentGuardService,
+    PromotionRevalidationService,
     MellatPaymentService,
     ZarinpalPaymentService,
     DigipayAuthService,
@@ -42,6 +46,7 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
     PaymentScheduler,
   ],
   exports: [
+    PromotionRevalidationService,
     MellatPaymentService,
     ZarinpalPaymentService,
     DigipayPaymentService,

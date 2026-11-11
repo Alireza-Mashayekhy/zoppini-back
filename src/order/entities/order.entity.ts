@@ -50,6 +50,42 @@ export class Order {
   @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
   saleDiscount: number;
 
+  /** جمع تخفیف پروموشن‌های سبد (غیر از فروش ویژه و کد تخفیف) */
+  @Column({ type: 'decimal', precision: 15, scale: 2, default: 0 })
+  promotionDiscount: number;
+
+  /** ارزش کالاهای رایگان پروموشن */
+  @Column({
+    name: 'promotion_free_item_value',
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    default: 0,
+  })
+  promotionFreeItemValue: number;
+
+  /**
+   * اسنپ‌شات پروموشن‌های اعمال‌شده در لحظهٔ ثبت سفارش:
+   * شناسه، نام، نوع، مبلغ تخفیف، اقلام واجد شرط/پاداش، قواعد.
+   */
+  @Column({ name: 'promotion_snapshot', type: 'json', nullable: true })
+  promotionSnapshot: {
+    promotionId: number;
+    name: string;
+    type: string;
+    discountAmount: number;
+    freeItemValue: number;
+    grantsFreeShipping: boolean;
+    qualifyingVariantIds: number[];
+    rewardVariantIds: number[];
+    rewardProductIds: number[];
+    lines: { lineId: string; amount: number; isFree: boolean; label: string }[];
+  }[] | null;
+
+  /** آیا ارسال این سفارش با پروموشن رایگان شد */
+  @Column({ name: 'promotion_free_shipping', type: 'boolean', default: false })
+  promotionFreeShipping: boolean;
+
   @Column({
     type: 'varchar',
     length: 100,

@@ -6,6 +6,7 @@ import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { FilesModule } from 'src/files/files.module';
 import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
+import { PromotionsModule } from 'src/promotions/promotions.module';
 import { SmsModule } from 'src/sms/sms.module';
 
 import { Comment } from './entities/comment.entity';
@@ -44,6 +45,7 @@ import { StyleService } from './style.service';
     FilesModule,
     forwardRef(() => RahkaranModule),
     DiscountsModule,
+    forwardRef(() => PromotionsModule),
     SmsModule,
     BotReportsModule,
   ],

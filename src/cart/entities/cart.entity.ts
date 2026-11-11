@@ -27,6 +27,31 @@ export class Cart {
   @OneToMany(() => CartItem, item => item.cart, { cascade: true })
   items: CartItem[];
 
+  /** پروموشن‌هایی که مشتری صریحاً پذیرفته است (JSON: number[]) */
+  @Column({ name: 'accepted_promotions', type: 'json', nullable: true })
+  acceptedPromotions: number[] | null;
+
+  /** پروموشن‌هایی که مشتری برای پاپ‌آپ رد کرده است (یک بار نمایش) */
+  @Column({ name: 'dismissed_promotions', type: 'json', nullable: true })
+  dismissedPromotions: number[] | null;
+
+  /** پاداش انتخابی مشتری برای پروموشن‌های «انتخاب با مشتری» */
+  @Column({ name: 'selected_rewards', type: 'json', nullable: true })
+  selectedRewards: {
+    promotionId: number;
+    productId: number;
+    variantId: number | null;
+  }[] | null;
+
+  /** آخرین اثرانگشت سبد برای تصمیم «پاپ‌آپ یک بار» */
+  @Column({
+    name: 'promotion_popup_shown_for',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+  })
+  promotionPopupShownFor: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
