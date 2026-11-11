@@ -40,7 +40,7 @@ import { OrdersService } from './order.service';
     SmsModule,
     forwardRef(() => RahkaranModule),
     DiscountsModule,
-    PromotionsModule,
+    forwardRef(() => PromotionsModule),
     ClubModule,
     WalletModule,
     BotReportsModule,
