@@ -735,19 +735,62 @@ export class ClubService {
       if (response.Succeeded === undefined && response.Success !== undefined) {
         response.Succeeded = response.Success;
       }
-      if (
-        response.Payload === undefined &&
-        Object.prototype.hasOwnProperty.call(response, 'Data')
-      ) {
+      if (response.Payload === undefined && response.Data !== undefined) {
         response.Payload = response.Data;
       }
+
+      // System.Text.Json (PreserveReferencesHandling) and a few paged
+      // endpoints wrap the DTO one level deeper (`{ $values: [...] }`,
+      // `{ Items: [...], TotalCount }`, `{ Results: [...] }`). Unwrap it
+      // here so the Next app always receives the real list.
+      response.Payload = this.unwrapPayload(response.Payload);
 
       return response as unknown as DiatechResponse<unknown>;
     }
 
     // Also tolerate endpoints that return the DTO directly rather than the
     // standard { Succeeded, Payload } envelope.
-    return { Succeeded: true, Payload: normalized };
+    return { Succeeded: true, Payload: this.unwrapPayload(normalized) };
+  }
+
+  /**
+   * اگر Payload خودش یک پوشش دیگر باشد (`{ $values }`، `{ Items }`،
+   * `{ Results }`، `{ Data }`)، یک لایه باز می‌شود.
+   */
+  private unwrapPayload(value: unknown): unknown {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return value;
+    }
+
+    const inner = this.findListOrDto(value as Record<string, unknown>);
+
+    return inner === undefined ? value : inner;
+  }
+
+  private findListOrDto(
+    response: Record<string, unknown>,
+  ): unknown | undefined {
+    for (const key of [
+      'Payload',
+      'payload',
+      'Data',
+      'data',
+      'Items',
+      'items',
+      'Results',
+      'results',
+      'Records',
+      'records',
+      'List',
+      'list',
+      '$values',
+    ]) {
+      if (!Object.prototype.hasOwnProperty.call(response, key)) continue;
+
+      return response[key];
+    }
+
+    return undefined;
   }
 
   private normalizeDiatechKeys(value: unknown): unknown {

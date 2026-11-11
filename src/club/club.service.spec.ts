@@ -128,6 +128,43 @@ describe('ClubService Diatech API contract', () => {
     ]);
   });
 
+  it('unwraps doubly wrapped list payloads ({ Items }, { $values })', async () => {
+    httpService.request
+      .mockReturnValueOnce(
+        of({ data: { Succeeded: true, Payload: { Items: [{ Id: 1 }] } } }),
+      )
+      .mockReturnValueOnce(
+        of({ data: { Succeeded: true, Payload: { $values: [{ Id: 2 }] } } }),
+      )
+      .mockReturnValueOnce(
+        of({ data: { Succeeded: true, Payload: { Results: [{ Id: 3 }] } } }),
+      );
+
+    await expect(service.getCustomerWallets('09120000000')).resolves.toEqual([
+      { Id: 1 },
+    ]);
+    await expect(service.getLoyaltyLevels()).resolves.toEqual([{ Id: 2 }]);
+    await expect(
+      service.getCustomerLoyaltyHistories('09120000000'),
+    ).resolves.toEqual([{ Id: 3 }]);
+  });
+
+  it('keeps single DTO payloads intact when they match no wrapper key', async () => {
+    httpService.request.mockReturnValueOnce(
+      of({
+        data: {
+          Succeeded: true,
+          Payload: { Id: 7, CustomerCode: '09120000000', TotalPoint: 11 },
+        },
+      }),
+    );
+
+    await expect(service.getCustomer('09120000000')).resolves.toMatchObject({
+      Id: 7,
+      TotalPoint: 11,
+    });
+  });
+
   it('shares one token request across concurrent dashboard API calls', async () => {
     await Promise.all([
       service.getCustomerWallets('09120000000'),
