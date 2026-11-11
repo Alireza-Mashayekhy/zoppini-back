@@ -207,14 +207,14 @@ export class Promotion {
 
   /** اگر دامنه‌ی پاداش خالی باشد، از این محصول/دسته استفاده می‌شود */
   @ManyToOne(() => Product, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'suggested_product_id' })
+  @JoinColumn({ name: 'suggestedProductId' })
   suggestedProduct: Product | null;
 
   @Column({ type: 'int', nullable: true })
   suggestedProductId: number | null;
 
   @ManyToOne(() => Category, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'suggested_category_id' })
+  @JoinColumn({ name: 'suggestedCategoryId' })
   suggestedCategory: Category | null;
 
   @Column({ type: 'int', nullable: true })
@@ -328,14 +328,14 @@ export class Promotion {
   popupSuggestedProductId: number | null;
 
   @ManyToOne(() => Product, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'popup_suggested_product_id' })
+  @JoinColumn({ name: 'popupSuggestedProductId' })
   popupSuggestedProduct: Product | null;
 
   @Column({ type: 'int', nullable: true })
   popupSuggestedCategoryId: number | null;
 
   @ManyToOne(() => Category, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'popup_suggested_category_id' })
+  @JoinColumn({ name: 'popupSuggestedCategoryId' })
   popupSuggestedCategory: Category | null;
 
   @CreateDateColumn()
