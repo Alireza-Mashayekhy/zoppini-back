@@ -366,6 +366,66 @@ describe('double discount prevention', () => {
   });
 });
 
+describe('free units consume the line budget when stacking', () => {
+  it('never discounts more than the line is worth across two promotions', () => {
+    /*
+     * سناریوی واقعی: «خرید ۲، ۱ رایگان» + «۱۰٪ تخفیف سبد» هر دو قابل ترکیب.
+     * اگر واحد رایگان از بودجهٔ ردیف کم نکند، پروموشن دوم همان واحد را دوباره
+     * تخفیف می‌دهد و جمع تخفیف از ارزش ردیف بیشتر می‌شود.
+     */
+    const freeItemPromo = makePromotion({
+      id: 91,
+      type: PromotionType.BUY_X_GET_Y_SAME_GROUP,
+      rewardType: PromotionRewardType.FREE_ITEM,
+      rewardValue: null,
+      requiredQuantity: 1,
+      freeQuantity: 1,
+      canStack: true,
+      scope: PromotionScope.ALL,
+    });
+
+    // ۱۰۰٪ تخفیف سبد: بدون بودجه‌گذاری صحیح، این با «۱ رایگان» جمع می‌شود و
+    // از ارزش سبد رد می‌شود.
+    const cartDiscount = makePromotion({
+      id: 92,
+      type: PromotionType.CART_DISCOUNT,
+      rewardType: PromotionRewardType.PERCENTAGE,
+      rewardValue: 100,
+      canStack: true,
+    });
+
+    const lines = [line('shirt', 1_000_000, 2)];
+    const cartValue = 2_000_000;
+
+    const result = coordinatePromotions({
+      promotions: [freeItemPromo, cartDiscount],
+      lines,
+      options: { now, allowStacking: true },
+    });
+
+    const totalDiscount = result.applied.reduce(
+      (sum, evaluation) =>
+        sum +
+        evaluation.allocations
+          .filter(allocation => !allocation.isFree)
+          .reduce((lineSum, allocation) => lineSum + allocation.amount, 0),
+      0,
+    );
+
+    const totalFree = result.applied.reduce(
+      (sum, evaluation) =>
+        sum +
+        evaluation.allocations
+          .filter(allocation => allocation.isFree)
+          .reduce((lineSum, allocation) => lineSum + allocation.amount, 0),
+      0,
+    );
+
+    // هیچ‌وقت بیشتر از ارزش سبد تخفیف + رایگان نمی‌شود
+    expect(totalDiscount + totalFree).toBeLessThanOrEqual(cartValue);
+  });
+});
+
 describe('pre-cart suggestions', () => {
   const promo = makePromotion({
     id: 61,
