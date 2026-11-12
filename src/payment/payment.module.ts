@@ -2,6 +2,8 @@ import { HttpModule } from '@nestjs/axios';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AnalyticsModule } from 'src/analytics/analytics.module';
+import { ClubModule } from 'src/club/club.module';
+import { FirstPurchaseGiftModule } from 'src/first-purchase-gift/first-purchase-gift.module';
 import { OrdersModule } from 'src/order/order.module';
 import { PromotionsModule } from 'src/promotions/promotions.module';
 import { WalletCharge } from 'src/wallet/entities/wallet-charge.entity';
@@ -25,6 +27,8 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 @Module({
   imports: [
     AnalyticsModule,
+    ClubModule,
+    FirstPurchaseGiftModule,
     TypeOrmModule.forFeature([Payment, PaymentRefund, WalletCharge]),
     HttpModule,
     OrdersModule,

@@ -34,9 +34,13 @@ export class OrdersController {
   async checkoutPreview(
     @Request() req,
     @Query('shippingMethod') shippingMethod?: ShippingMethod,
+    @Query('useFirstPurchaseGift') useFirstPurchaseGift?: string,
+    @Query('discountCode') discountCode?: string,
   ) {
     return this.ordersService.previewCheckout(req.user.id, {
       shippingMethod,
+      useFirstPurchaseGift: useFirstPurchaseGift === 'true',
+      discountCode,
     });
   }
 

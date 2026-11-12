@@ -468,9 +468,12 @@ export class SnappayPaymentService {
       }),
       shippingToman: Number(order.shippingCost ?? 0),
       discountToman: Number(order.discount ?? 0),
-      externalToman: Number(order.walletPayment ?? 0),
+      externalToman:
+        Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0),
       expectedPayableToman:
-        Number(order.finalPrice ?? 0) - Number(order.walletPayment ?? 0),
+        Number(order.finalPrice ?? 0) -
+        Number(order.walletPayment ?? 0) -
+        Number(order.clubCreditPayment ?? 0),
       commissionType: this.getCommissionType(),
     });
   }

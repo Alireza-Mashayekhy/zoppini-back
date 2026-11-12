@@ -175,6 +175,49 @@ describe('ClubService Diatech API contract', () => {
     expect(httpService.post).toHaveBeenCalledTimes(1);
   });
 
+  it('writes club credit as CurrentCredit in rial and supports invoice approval', async () => {
+    httpService.request
+      .mockImplementationOnce(config => {
+        requests.push({ method: config.method, url: config.url });
+        return of({
+          data: {
+            Succeeded: true,
+            Payload: {
+              Id: 7,
+              CustomerCode: '09120000000',
+              FirstName: 'Test',
+              LastName: 'Customer',
+            },
+          },
+        });
+      })
+      .mockImplementationOnce(config => {
+        requests.push({ method: config.method, url: config.url });
+        return of({ data: { Succeeded: true, Payload: { Id: 88 } } });
+      })
+      .mockImplementationOnce(config => {
+        requests.push({ method: config.method, url: config.url });
+        return of({ data: { Succeeded: true, Payload: { Id: 88 } } });
+      });
+
+    const invoice = await service.createInvoice({
+      customerCode: '09120000000',
+      finalPrice: 2500,
+      currentCredit: 700,
+    });
+    await service.approveInvoice(invoice.Id!);
+
+    expect(httpService.request.mock.calls[1][0].data).toMatchObject({
+      CustomerId: 7,
+      FinalPrice: 25000,
+      CurrentCredit: 7000,
+    });
+    expect(requests.slice(-2)).toEqual([
+      { method: 'POST', url: '/api/v1/invoices' },
+      { method: 'POST', url: '/api/v1/invoices/88/approve' },
+    ]);
+  });
+
   it('reports missing customers as 404 and preserves upstream validation failures', async () => {
     httpService.request.mockReturnValueOnce(
       throwError(() => ({ response: { status: 404 }, message: 'not found' })),

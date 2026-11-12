@@ -46,9 +46,10 @@ export class MellatPaymentService {
   ) {}
 
   private getOrderCardAmount(order: Order): number {
-    const walletPayment = Number(order.walletPayment ?? 0);
+    const externalPayment =
+      Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0);
 
-    return Math.round((Number(order.finalPrice) - walletPayment) * 10);
+    return Math.round((Number(order.finalPrice) - externalPayment) * 10);
   }
 
   // === اصلاح متد getClient ===

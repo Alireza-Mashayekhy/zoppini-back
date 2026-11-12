@@ -1,4 +1,3 @@
-import { AnalyticsModule } from 'src/analytics/analytics.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
@@ -6,6 +5,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 
 import { AddressesModule } from './address/address.module';
 import { AppController } from './app.controller';
@@ -22,6 +22,7 @@ import { TypeOrmConfigService } from './common/config/typeorm.config';
 import { ContactModule } from './contact/contact.module';
 import { DiscountsModule } from './discounts/discounts.module';
 import { FilesModule } from './files/files.module';
+import { FirstPurchaseGiftModule } from './first-purchase-gift/first-purchase-gift.module';
 import { GamificationModule } from './gamification/gamification.module';
 import { LocationsModule } from './locations/locations.module';
 import { ModaiModule } from './modai/modai.module';
@@ -86,6 +87,7 @@ import { WishlistModule } from './wishlist/wishlist.module';
     RahkaranModule,
     PaymentModule,
     DiscountsModule,
+    FirstPurchaseGiftModule,
     ContactModule,
     CatalogModule,
     GamificationModule,
