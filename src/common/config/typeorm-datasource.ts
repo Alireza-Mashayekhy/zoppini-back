@@ -15,6 +15,7 @@ import { ProductCareInstructionsTitle1799000000000 } from 'src/migrations/179900
 import { OrderUpdatedAtPrecision1800000000000 } from 'src/migrations/1800000000000-OrderUpdatedAtPrecision';
 import { AddDigipayUgpFields1801000000000 } from 'src/migrations/1801000000000-AddDigipayUgpFields';
 import { PromotionSystem1802000000000 } from 'src/migrations/1802000000000-PromotionSystem';
+import { AddClubCreditPayment1803000000000 } from 'src/migrations/1803000000000-AddClubCreditPayment';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -37,6 +38,7 @@ export default new DataSource({
     OrderUpdatedAtPrecision1800000000000,
     AddDigipayUgpFields1801000000000,
     PromotionSystem1802000000000,
+    AddClubCreditPayment1803000000000,
   ],
   synchronize: false,
 });

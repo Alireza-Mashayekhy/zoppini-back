@@ -26,8 +26,8 @@ import { SnappPayCart } from './snappay.client';
  *     isTaxIncluded=true
  *
  * پس amount نهایی دقیقاً می‌شود:
- *   totalPrice + shippingCost − discount − walletPayment
- *   = finalPrice − walletPayment   (همان مبلغ قابل پرداخت با درگاه)
+ *   totalPrice + shippingCost − discount − externalSourceAmount
+ *   = finalPrice − سهم کیف پول − اعتبار باشگاه (مبلغ قابل پرداخت با درگاه)
  */
 
 /** تبدیل مبلغ تومانی (ممکن است اعشاریِ دیتابیس باشد) به ریال صحیح */
@@ -72,9 +72,9 @@ export interface BuildSnappPayCartInput {
   shippingToman: number;
   /** مجموع تخفیف سفارش (فروش ویژه + کد تخفیف)، تومان */
   discountToman: number;
-  /** سهم کیف پول/منبع خارجی، تومان */
+  /** سهم کیف پول داخلی و اعتبار باشگاه/منبع خارجی، تومان */
   externalToman: number;
-  /** مبلغ قابل پرداخت با درگاه به تومان (finalPrice − walletPayment) برای کنترل سازگاری */
+  /** مبلغ قابل پرداخت با درگاه به تومان پس از کسر منابع خارجی */
   expectedPayableToman: number;
   /** کد کمیسیون؛ مقدار پیش‌فرض مستند ۱۰۰ است */
   commissionType: number;

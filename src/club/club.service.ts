@@ -168,9 +168,13 @@ export interface DiatechInvoiceDetail {
 }
 
 export interface DiatechInvoice {
+  Id?: number;
   CustomerId: number;
   officeId: number;
   FinalPrice: number;
+  /** اعتبار مصرف‌شده از کیف پول مشتری، ریال */
+  CurrentCredit?: number;
+  FinalValue?: number;
 }
 
 // ============================================================
@@ -592,6 +596,7 @@ export class ClubService {
   async createInvoice(data: {
     customerCode: string;
     finalPrice: number;
+    currentCredit?: number;
   }): Promise<DiatechInvoice> {
     // ============================================================
     // 1. پیدا کردن مشتری در دایاتک
@@ -621,6 +626,10 @@ export class ClubService {
       officeId: 1,
 
       FinalPrice: Number(data.finalPrice) * 10 || 0,
+      CurrentCredit: Math.min(
+        Number(data.finalPrice) * 10 || 0,
+        Math.max(0, Number(data.currentCredit) * 10 || 0),
+      ),
     };
 
     // ============================================================

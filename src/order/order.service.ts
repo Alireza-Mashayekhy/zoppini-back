@@ -17,11 +17,11 @@ import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubService } from 'src/club/club.service';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
-import { buildPromotionSnapshot } from 'src/order/checkout-pricing';
-import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
-import { PromotionsService } from 'src/promotions/promotions.service';
 import { Discount } from 'src/discounts/entities/discount.entity';
 import { DiscountUsage } from 'src/discounts/entities/discount-code-usage.entity';
+import { FirstPurchaseGiftService } from 'src/first-purchase-gift/first-purchase-gift.service';
+import { calculateFirstPurchaseGiftDiscount } from 'src/first-purchase-gift/first-purchase-gift-pricing';
+import { buildPromotionSnapshot } from 'src/order/checkout-pricing';
 import {
   Payment,
   PaymentGateway,
@@ -29,6 +29,8 @@ import {
 } from 'src/payment/entities/payment.entity';
 import { describeDigipayPurchase } from 'src/payment/utils/digipay-instrument.util';
 import { Variant } from 'src/products/entities/variant.entity';
+import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
+import { PromotionsService } from 'src/promotions/promotions.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
 import {
@@ -92,6 +94,9 @@ export class OrdersService {
      */
     @Optional()
     private readonly promotionsService?: PromotionsService,
+
+    @Optional()
+    private readonly firstPurchaseGiftService?: FirstPurchaseGiftService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -200,7 +205,12 @@ export class OrdersService {
 
     const promotionDiscountByLine = new Map<
       number,
-      { amount: number; isFree: boolean; labels: string[]; promotionIds: number[] }
+      {
+        amount: number;
+        isFree: boolean;
+        labels: string[];
+        promotionIds: number[];
+      }
     >();
 
     for (const evaluation of promotionResult.applied) {
@@ -284,9 +294,7 @@ export class OrdersService {
         quantity: item.quantity,
         // قیمت فریزشدهٔ هر واحد = قیمت پس از فروش ویژه و پروموشن
         price:
-          item.quantity > 0
-            ? Math.round(itemTotal / item.quantity)
-            : salePrice,
+          item.quantity > 0 ? Math.round(itemTotal / item.quantity) : salePrice,
         originalPrice: line.originalPrice,
         totalPrice: itemTotal,
         promotionDiscount: linePromotionDiscount,
@@ -338,8 +346,101 @@ export class OrdersService {
       discountCode = result.discount.code;
     }
 
+    let firstPurchaseGiftDiscount = 0;
+    let firstPurchaseGiftPercent = 0;
+    let firstPurchaseGiftStackWithDiscountCodes = false;
+    let firstPurchaseGiftStackWithSalePrices = false;
+    const firstPurchaseGiftEligibleItemIndexes: number[] = [];
+
+    if (dto.useFirstPurchaseGift) {
+      if (!this.firstPurchaseGiftService) {
+        throw new BadRequestException('هدیهٔ اولین خرید در دسترس نیست.');
+      }
+
+      const gift =
+        await this.firstPurchaseGiftService.getDiscountConfigForUser(userId);
+      if (!gift.eligible) {
+        throw new BadRequestException(
+          gift.reason === 'inactive'
+            ? 'هدیهٔ اولین خرید در حال حاضر فعال نیست.'
+            : 'این حساب شرایط استفاده از هدیهٔ اولین خرید آنلاین را ندارد.',
+        );
+      }
+      if (discountCode && !gift.settings.stackWithDiscountCodes) {
+        throw new BadRequestException(
+          'هدیهٔ اولین خرید با کد تخفیف قابل استفاده همزمان نیست؛ یکی از دو گزینه را انتخاب کنید.',
+        );
+      }
+
+      firstPurchaseGiftPercent = Number(gift.settings.discountPercent);
+      firstPurchaseGiftStackWithDiscountCodes =
+        gift.settings.stackWithDiscountCodes;
+      firstPurchaseGiftStackWithSalePrices = gift.settings.stackWithSalePrices;
+      let eligibleProductSubtotal = 0;
+      cart.items.forEach((item, index) => {
+        const line = pricedLines[index];
+        const promo = promotionDiscountByLine.get(item.id);
+        const hasOtherPromotion =
+          Boolean(item.promotionRewardId) ||
+          Boolean(promo?.isFree) ||
+          Number(promo?.amount ?? 0) > 0;
+        if (
+          (line.isOnSale && !gift.settings.stackWithSalePrices) ||
+          hasOtherPromotion
+        ) {
+          return;
+        }
+
+        const lineSubtotal = Math.max(
+          0,
+          Number(line.unitPrice) * item.quantity,
+        );
+        if (lineSubtotal <= 0) return;
+        eligibleProductSubtotal += lineSubtotal;
+        firstPurchaseGiftEligibleItemIndexes.push(index);
+      });
+
+      if (eligibleProductSubtotal <= 0) {
+        throw new BadRequestException(
+          'سبد خرید محصولی با قیمت عادی برای استفاده از هدیهٔ اولین خرید ندارد.',
+        );
+      }
+
+      firstPurchaseGiftDiscount = calculateFirstPurchaseGiftDiscount(
+        eligibleProductSubtotal,
+        firstPurchaseGiftPercent,
+      );
+
+      // پخش مبلغ هدیه روی همهٔ ردیف‌های واجد شرایط (نه یک محصول خاص).
+      let remainingGiftDiscount = firstPurchaseGiftDiscount;
+      firstPurchaseGiftEligibleItemIndexes.forEach((index, position) => {
+        const item = orderItems[index];
+        const isLast =
+          position === firstPurchaseGiftEligibleItemIndexes.length - 1;
+        const share = isLast
+          ? remainingGiftDiscount
+          : Math.min(
+              remainingGiftDiscount,
+              Math.round(
+                (firstPurchaseGiftDiscount * Number(item.totalPrice)) /
+                  eligibleProductSubtotal,
+              ),
+            );
+        const appliedShare = Math.min(share, Number(item.totalPrice));
+        item.totalPrice = Math.max(0, Number(item.totalPrice) - appliedShare);
+        item.price =
+          item.quantity > 0
+            ? Math.round(item.totalPrice / item.quantity)
+            : item.price;
+        remainingGiftDiscount -= appliedShare;
+      });
+    }
+
     const discountAmount =
-      saleDiscountAmount + promotionDiscountAmount + codeDiscountAmount;
+      saleDiscountAmount +
+      promotionDiscountAmount +
+      codeDiscountAmount +
+      firstPurchaseGiftDiscount;
 
     // =====================================================
     // 7. مبلغ نهایی
@@ -357,7 +458,11 @@ export class OrdersService {
     );
     const expectedLinesTotal = Math.max(
       0,
-      totalPrice - saleDiscountAmount - promotionDiscountAmount - codeDiscountAmount,
+      totalPrice -
+        saleDiscountAmount -
+        promotionDiscountAmount -
+        codeDiscountAmount -
+        firstPurchaseGiftDiscount,
     );
 
     if (Math.abs(linesTotal - expectedLinesTotal) >= 1) {
@@ -369,7 +474,11 @@ export class OrdersService {
 
       if (diff > 0) {
         // ردیف‌ها بیشتر از انتظار: تخفیف روی آخرین ردیف اعمال شود
-        for (let index = orderItems.length - 1; index >= 0 && diff > 0; index -= 1) {
+        for (
+          let index = orderItems.length - 1;
+          index >= 0 && diff > 0;
+          index -= 1
+        ) {
           const item = orderItems[index];
           const reduceBy = Math.min(diff, Number(item.totalPrice));
 
@@ -383,10 +492,28 @@ export class OrdersService {
     }
 
     let walletPayment = 0;
+    let clubCreditPayment = 0;
 
     if (dto.useWallet) {
       const balance = await this.walletService.getBalance(userId);
       walletPayment = Math.min(balance, finalPrice);
+    }
+
+    if (dto.useClubCredit && finalPrice > walletPayment) {
+      if (!user.phone) {
+        throw new BadRequestException(
+          'برای استفاده از اعتبار باشگاه، شماره موبایل حساب کاربری لازم است.',
+        );
+      }
+
+      const customer = await this.clubService.getCustomer(user.phone);
+      const availableCreditToman = Math.floor(
+        Math.max(0, Number(customer.AvailableCredit ?? 0)) / 10,
+      );
+      clubCreditPayment = Math.min(
+        availableCreditToman,
+        finalPrice - walletPayment,
+      );
     }
 
     // =====================================================
@@ -410,6 +537,8 @@ export class OrdersService {
 
       promotionDiscount: promotionDiscountAmount,
 
+      firstPurchaseGiftDiscount,
+
       promotionFreeItemValue: promotionResult.totalFreeItemValue,
 
       promotionFreeShipping,
@@ -424,6 +553,8 @@ export class OrdersService {
       finalPrice,
 
       walletPayment,
+
+      clubCreditPayment,
 
       discountId,
 
@@ -473,6 +604,20 @@ export class OrdersService {
           torobGrantId: attribution.grantId,
         });
       }
+      if (firstPurchaseGiftDiscount > 0) {
+        await this.firstPurchaseGiftService?.reserveInTransaction(
+          manager,
+          userId,
+          persisted.id,
+          firstPurchaseGiftPercent,
+          firstPurchaseGiftDiscount,
+          {
+            stackWithDiscountCodes: firstPurchaseGiftStackWithDiscountCodes,
+            stackWithSalePrices: firstPurchaseGiftStackWithSalePrices,
+            usedDiscountCode: Boolean(discountCode),
+          },
+        );
+      }
       await this.botEventsService?.recordOrderCreatedInTransaction(
         manager,
         persisted,
@@ -499,7 +644,7 @@ export class OrdersService {
         this.logger.warn('Analytics checkout context could not be stored');
       }
     }
-    if (dto.useWallet && walletPayment >= finalPrice) {
+    if (walletPayment + clubCreditPayment >= finalPrice && finalPrice > 0) {
       try {
         return await this.confirmOrderPayment(savedOrder.id);
       } catch (error) {
@@ -547,6 +692,12 @@ export class OrdersService {
       }
 
       const userId = order.user.id;
+      // Serialize every successful payment for this account so a simultaneous
+      // ordinary checkout cannot race a first-purchase gift redemption.
+      await queryRunner.manager.findOne(User, {
+        where: { id: userId },
+        lock: { mode: 'pessimistic_write' },
+      });
 
       const walletPayment = Number(order.walletPayment ?? 0);
 
@@ -642,6 +793,24 @@ export class OrdersService {
         });
       }
 
+      if (Number(order.firstPurchaseGiftDiscount ?? 0) > 0) {
+        if (!this.firstPurchaseGiftService || !order.user) {
+          throw new BadRequestException(
+            'هدیهٔ خرید اول برای این سفارش قابل ثبت نیست.',
+          );
+        }
+        await this.firstPurchaseGiftService.redeemInTransaction(
+          queryRunner.manager,
+          userId,
+          order,
+        );
+      }
+      await this.firstPurchaseGiftService?.releaseOtherReservationsForPaidOrder(
+        queryRunner.manager,
+        userId,
+        order.id,
+      );
+
       // =========================================================
       // 3. خالی کردن سبد خرید
       // =========================================================
@@ -717,10 +886,17 @@ export class OrdersService {
       }
 
       try {
-        await this.clubService.createInvoice({
+        const invoice = await this.clubService.createInvoice({
           customerCode: order.user.phone,
           finalPrice: order.finalPrice,
+          currentCredit: Number(order.clubCreditPayment ?? 0),
         });
+
+        if (!invoice?.Id) {
+          throw new Error('شناسه فاکتور دایاتک دریافت نشد.');
+        }
+        // تایید فاکتور باعث ثبت فروش و اعمال CurrentCredit مصرف‌شده در دایاتک می‌شود.
+        await this.clubService.approveInvoice(invoice.Id);
 
         this.logger.log(`✅ سفارش ${order.id} در دایاتک ثبت شد. `);
       } catch (error) {
@@ -768,6 +944,10 @@ export class OrdersService {
     await this.dataSource.transaction(async manager => {
       order.status = OrderStatus.CANCELLED;
       await manager.save(Order, order);
+      await this.firstPurchaseGiftService?.releaseOrderReservation(
+        manager,
+        order.id,
+      );
       await this.botEventsService?.recordOrderStatusTransitionInTransaction(
         manager,
         order,
@@ -793,10 +973,11 @@ export class OrdersService {
 
     const finalPrice = Number(order.finalPrice);
     const walletPayment = Number(order.walletPayment ?? 0);
+    const clubCreditPayment = Number(order.clubCreditPayment ?? 0);
 
-    if (walletPayment < finalPrice) {
+    if (walletPayment + clubCreditPayment < finalPrice) {
       throw new BadRequestException(
-        'این سفارش به‌طور کامل با کیف پول پوشش داده نشده است',
+        'مجموع اعتبارهای انتخابی برای پوشش کامل سفارش کافی نیست.',
       );
     }
 
@@ -851,7 +1032,11 @@ export class OrdersService {
    */
   async previewCheckout(
     userId: number,
-    dto: { shippingMethod?: ShippingMethod; discountCode?: string } = {},
+    dto: {
+      shippingMethod?: ShippingMethod;
+      discountCode?: string;
+      useFirstPurchaseGift?: boolean;
+    } = {},
   ) {
     const cart = await this.cartRepo.findOne({
       where: { user: { id: userId } },
@@ -882,7 +1067,12 @@ export class OrdersService {
 
     const promotionByLine = new Map<
       number,
-      { amount: number; isFree: boolean; labels: string[]; promotionIds: number[] }
+      {
+        amount: number;
+        isFree: boolean;
+        labels: string[];
+        promotionIds: number[];
+      }
     >();
 
     for (const evaluation of promotionResult.applied) {
@@ -961,7 +1151,8 @@ export class OrdersService {
     });
 
     const subtotalAfterSale = lines.reduce(
-      (sum, line) => sum + line.salePrice * line.quantity - line.promotionDiscount,
+      (sum, line) =>
+        sum + line.salePrice * line.quantity - line.promotionDiscount,
       0,
     );
 
@@ -970,6 +1161,62 @@ export class OrdersService {
     const shippingCost = freeShipping
       ? 0
       : this.calculateShippingCost(shippingMethod, subtotalAfterSale);
+
+    let codeDiscountAmount = 0;
+    if (dto.discountCode?.trim()) {
+      const result = await this.discountService.validateDiscount(
+        dto.discountCode.trim(),
+        userId,
+        pricedLines.map(line => ({
+          productId: line.productId,
+          quantity: line.quantity,
+          price: line.unitPrice,
+          categoryIds: line.categoryIds,
+          isOnSale: line.isOnSale,
+        })),
+      );
+      codeDiscountAmount = Number(result.discountAmount);
+    }
+
+    let firstPurchaseGiftDiscount = 0;
+    if (dto.useFirstPurchaseGift) {
+      if (!this.firstPurchaseGiftService) {
+        throw new BadRequestException('هدیهٔ اولین خرید در دسترس نیست.');
+      }
+      const gift =
+        await this.firstPurchaseGiftService.getDiscountConfigForUser(userId);
+      if (!gift.eligible) {
+        throw new BadRequestException(
+          'این حساب شرایط استفاده از هدیهٔ اولین خرید آنلاین را ندارد.',
+        );
+      }
+      if (dto.discountCode?.trim() && !gift.settings.stackWithDiscountCodes) {
+        throw new BadRequestException(
+          'هدیهٔ اولین خرید با کد تخفیف قابل استفاده همزمان نیست.',
+        );
+      }
+      const eligibleSubtotal = cart.items.reduce((sum, item, index) => {
+        const promo = promotionByLine.get(item.id);
+        if (
+          (pricedLines[index].isOnSale && !gift.settings.stackWithSalePrices) ||
+          item.promotionRewardId != null ||
+          promo?.isFree ||
+          Number(promo?.amount ?? 0) > 0
+        ) {
+          return sum;
+        }
+        return sum + pricedLines[index].unitPrice * item.quantity;
+      }, 0);
+      if (eligibleSubtotal <= 0) {
+        throw new BadRequestException(
+          'سبد خرید محصولی با قیمت عادی برای استفاده از هدیهٔ اولین خرید ندارد.',
+        );
+      }
+      firstPurchaseGiftDiscount = calculateFirstPurchaseGiftDiscount(
+        eligibleSubtotal,
+        Number(gift.settings.discountPercent),
+      );
+    }
 
     return {
       data: {
@@ -987,20 +1234,24 @@ export class OrdersService {
           ),
           saleDiscount: lines.reduce(
             (sum, line) =>
-              sum +
-              (line.originalPrice - line.salePrice) * line.quantity,
+              sum + (line.originalPrice - line.salePrice) * line.quantity,
             0,
           ),
           promotionDiscount: lines.reduce(
             (sum, line) => sum + line.promotionDiscount,
             0,
           ),
+          discountCode: codeDiscountAmount,
+          firstPurchaseGiftDiscount,
           freeItemValue: promotionResult.totalFreeItemValue,
           shippingCost,
           freeShipping,
           finalPrice: Math.max(
             0,
-            subtotalAfterSale - 0 + shippingCost,
+            subtotalAfterSale +
+              shippingCost -
+              codeDiscountAmount -
+              firstPurchaseGiftDiscount,
           ),
         },
       },
@@ -1108,6 +1359,10 @@ export class OrdersService {
       const previousStatus = order.status;
       order.status = OrderStatus.CANCELLED;
       await queryRunner.manager.save(order);
+      await this.firstPurchaseGiftService?.releaseOrderReservation(
+        queryRunner.manager,
+        order.id,
+      );
       await this.botEventsService?.recordOrderStatusTransitionInTransaction(
         queryRunner.manager,
         order,
@@ -1393,6 +1648,10 @@ export class OrdersService {
           : `دلیل لغو توسط ادمین: ${reason}`;
       }
       await queryRunner.manager.save(order);
+      await this.firstPurchaseGiftService?.releaseOrderReservation(
+        queryRunner.manager,
+        order.id,
+      );
       await this.botEventsService?.recordOrderStatusTransitionInTransaction(
         queryRunner.manager,
         order,
@@ -1439,6 +1698,7 @@ export class OrdersService {
   ) {
     const finalPrice = Number(order.finalPrice ?? 0);
     const walletAmount = Number(order.walletPayment ?? 0);
+    const clubCreditAmount = Number(order.clubCreditPayment ?? 0);
 
     const orderPayments = (paymentsByOrderId.get(order.id) ?? []).map(p => {
       const digipay = describeDigipayPurchase(p);
@@ -1470,9 +1730,12 @@ export class OrdersService {
 
     if (order.status === OrderStatus.CANCELLED) {
       type = 'cancelled';
-    } else if (walletAmount >= finalPrice && finalPrice > 0) {
+    } else if (
+      walletAmount + clubCreditAmount >= finalPrice &&
+      finalPrice > 0
+    ) {
       type = 'wallet';
-    } else if (walletAmount > 0 && gatewayAmount > 0) {
+    } else if (walletAmount + clubCreditAmount > 0 && gatewayAmount > 0) {
       type = 'mixed';
     } else if (gatewayAmount > 0) {
       type = 'gateway';
@@ -1484,12 +1747,16 @@ export class OrdersService {
       type,
       finalPrice,
       walletAmount,
+      clubCreditAmount,
       gatewayAmount,
       // در صورت mixed ممکن است walletAmount + gatewayAmount == finalPrice نباشد
       // (مثلاً گرد کردن ریالی یا خطای انسانی). هر دو مقدار برای ادمین
       // مفید هستند، پس جمع و اختلاف هم برگردانده می‌شود.
-      paidTotal: walletAmount + gatewayAmount,
-      remaining: Math.max(0, finalPrice - walletAmount - gatewayAmount),
+      paidTotal: walletAmount + clubCreditAmount + gatewayAmount,
+      remaining: Math.max(
+        0,
+        finalPrice - walletAmount - clubCreditAmount - gatewayAmount,
+      ),
       gateways: orderPayments,
     };
   }

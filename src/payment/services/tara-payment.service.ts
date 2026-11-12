@@ -53,9 +53,10 @@ export class TaraPaymentService {
   ) {}
 
   private getOrderCardAmount(order: Order): number {
-    const walletPayment = Number(order.walletPayment ?? 0);
+    const externalPayment =
+      Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0);
 
-    return Math.round((Number(order.finalPrice) - walletPayment) * 10);
+    return Math.round((Number(order.finalPrice) - externalPayment) * 10);
   }
 
   // =========================================================
@@ -165,6 +166,7 @@ export class TaraPaymentService {
     }
 
     const walletPayment = Number(order.walletPayment ?? 0);
+    const clubCreditPayment = Number(order.clubCreditPayment ?? 0);
 
     // const { group, groupTitle } = this.getMerchandiseGroup();
 
@@ -195,6 +197,17 @@ export class TaraPaymentService {
         count: 1,
         unit: TaraUnit.PIECE,
         fee: -Math.round(walletPayment * 10),
+        data: '',
+      });
+    }
+
+    if (clubCreditPayment > 0) {
+      taraInvoiceItemList.push({
+        name: 'اعتبار باشگاه دایاتک',
+        code: 'DIATECH_CLUB',
+        count: 1,
+        unit: TaraUnit.PIECE,
+        fee: -Math.round(clubCreditPayment * 10),
         data: '',
       });
     }

@@ -269,9 +269,10 @@ export class DigipayPaymentService {
   }
 
   private getOrderCardAmount(order: Order): number {
-    const walletPayment = Number(order.walletPayment ?? 0);
+    const externalPayment =
+      Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0);
 
-    return this.toGatewayAmount(Number(order.finalPrice) - walletPayment);
+    return this.toGatewayAmount(Number(order.finalPrice) - externalPayment);
   }
 
   /**

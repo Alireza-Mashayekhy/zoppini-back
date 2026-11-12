@@ -5,7 +5,9 @@ import { OrdersService } from './order.service';
 
 describe('order item persistence boundary', () => {
   function setup(persistedCount: number) {
-    const userRepo = { findOne: jest.fn().mockResolvedValue({ id: 1 }) };
+    const userRepo = {
+      findOne: jest.fn().mockResolvedValue({ id: 1, phone: '09120000000' }),
+    };
     const addressRepo = { findOne: jest.fn().mockResolvedValue({ id: 2 }) };
     const cartRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -49,6 +51,9 @@ describe('order item persistence boundary', () => {
         }
       },
     };
+    const clubService = {
+      getCustomer: jest.fn().mockResolvedValue({ AvailableCredit: 1000 }),
+    };
     const service = new OrdersService(
       orderRepo as never,
       userRepo as never,
@@ -58,14 +63,14 @@ describe('order item persistence boundary', () => {
       {} as never,
       {} as never,
       {} as never,
-      {} as never,
+      clubService as never,
       discountService as never,
       {} as never,
       {} as never,
       dataSource as never,
       {} as never,
     );
-    return { service, manager, commit, rollback, addressRepo };
+    return { service, manager, commit, rollback, addressRepo, clubService };
   }
   const dto = { addressId: 2, shippingMethod: ShippingMethod.POST };
   it('commits with the saved items attached and verifies the order relation', async () => {
@@ -117,6 +122,25 @@ describe('order item persistence boundary', () => {
     expect(addressRepo.findOne).toHaveBeenCalledWith({
       where: { id: 42, user: { id: 1 } },
     });
+  });
+
+  it('caps the selected Diatech credit to the current credit and invoice remainder', async () => {
+    const { service, manager, clubService } = setup(1);
+    const order = await service.createOrder(1, {
+      shippingMethod: ShippingMethod.PICKUP,
+      useClubCredit: true,
+    });
+
+    expect(clubService.getCustomer).toHaveBeenCalledWith('09120000000');
+    expect(manager.save).toHaveBeenCalledWith(
+      Order,
+      expect.objectContaining({
+        finalPrice: 180,
+        clubCreditPayment: 100,
+        walletPayment: 0,
+      }),
+    );
+    expect(order.clubCreditPayment).toBe(100);
   });
   it('fails the transaction when persisted items do not match the cart', async () => {
     const { service, commit, rollback } = setup(0);

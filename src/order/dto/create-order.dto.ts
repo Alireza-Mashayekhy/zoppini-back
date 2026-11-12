@@ -38,4 +38,12 @@ export class CreateOrderDto {
   @IsOptional()
   @IsBoolean()
   useWallet?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  useClubCredit?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  useFirstPurchaseGift?: boolean;
 }
