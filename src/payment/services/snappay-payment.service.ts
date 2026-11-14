@@ -34,7 +34,11 @@ import {
   BuiltSnappPayCart,
   generateSnappPayTransactionId,
 } from '../snappay/snappay-cart.util';
+import { resolveGatewayCallbackUrl } from '../utils/callback-url.util';
 import { PaymentGuardService } from './payment-guard.service';
+
+/** مسیر callback اسنپ‌پی بعد از پیشوند `/api` */
+const SNAPPAY_CALLBACK_PATH = 'payment/callback/snappay';
 
 export interface SnappayEligibilityResult {
   eligible: boolean;
@@ -204,23 +208,35 @@ export class SnappayPaymentService {
    * آدرس بازگشت (returnURL)؛ دامنهٔ آن باید همان دامنه‌ای باشد که هنگام
    * تعریف پذیرنده به اسنپ‌پی معرفی و whitelist شده است، وگرنه درخواست
    * توکن رد می‌شود. نتیجه با POST به این آدرس برمی‌گردد.
+   *
+   * ساخت آدرس از `APP_URL` حتی وقتی آن متغیر با `/api` داده شده باشد آدرس
+   * درست `/api/payment/callback/snappay` را می‌دهد (نه `/api/api/...`).
    */
   private getCallbackUrl(): string {
-    const explicit = this.getConfig('SNAPPAY_CALLBACK_URL');
+    const url = resolveGatewayCallbackUrl({
+      explicit: this.getConfig('SNAPPAY_CALLBACK_URL'),
+      baseUrl: this.getConfig('APP_URL'),
+      pathAfterApi: SNAPPAY_CALLBACK_PATH,
+    });
 
-    if (explicit) {
-      return explicit;
-    }
-
-    const appUrl = this.getConfig('APP_URL');
-
-    if (!appUrl) {
+    if (!url) {
       throw new BadRequestException(
         'SNAPPAY_CALLBACK_URL یا APP_URL تنظیم نشده است',
       );
     }
 
-    return `${appUrl.replace(/\/+$/, '')}/api/payment/callback/snappay`;
+    return url;
+  }
+
+  /**
+   * همان آدرس callback ولی بدون پرتاب خطا؛ برای عیب‌یابی و لاگ.
+   */
+  getCallbackUrlOrEmpty(): string {
+    try {
+      return this.getCallbackUrl();
+    } catch {
+      return '';
+    }
   }
 
   // =========================================================
@@ -323,7 +339,9 @@ export class SnappayPaymentService {
     const localMobile = String(normalizeIranMobile(order.user?.phone ?? ''));
 
     if (!isIranMobile(localMobile)) {
-      throw new BadRequestException('شماره همراه معتبری برای پرداخت اسنپ‌پی ثبت نشده است');
+      throw new BadRequestException(
+        'شماره همراه معتبری برای پرداخت اسنپ‌پی ثبت نشده است',
+      );
     }
 
     // اسنپ‌پی شماره را با قالب بین‌المللی می‌خواهد: +989xxxxxxxxx
@@ -500,6 +518,141 @@ export class SnappayPaymentService {
     return this.paymentRepo.findOne({
       where: { refId, gateway: PaymentGateway.SNAPPAY },
     });
+  }
+
+  /**
+   * پیدا کردن پرداختی که این callback به آن تعلق دارد.
+   *
+   * مسیر اصلی همان `transactionId` خودمان است (providerId)، ولی برای اینکه
+   * یک callback واقعی هرگز به خاطر تفاوت جزئی (بزرگ/کوچک بودن حروف، ارسال
+   * paymentToken به‌جای transactionId، یا نبود transactionId در درخواست) گم
+   * نشود، به‌ترتیب fallback هم انجام می‌شود. امنیت با verify سمت سرور
+   * اسنپ‌پی حفظ می‌شود: تطبیق رکورد هیچ سفارشی را پرداخت‌شده نمی‌کند و فقط
+   * اجازه می‌دهد verify/status واقعی اجرا شود.
+   */
+  async resolveCallbackPayment(lookup: {
+    transactionId?: string;
+    paymentToken?: string;
+    orderId?: string | number | null;
+  }): Promise<Payment | null> {
+    const transactionId = String(lookup.transactionId ?? '').trim();
+
+    if (transactionId) {
+      const exact = await this.findPaymentByTransactionId(transactionId);
+
+      if (exact) {
+        return exact;
+      }
+
+      const variants = [
+        ...new Set([
+          transactionId,
+          transactionId.toUpperCase(),
+          transactionId.toLowerCase(),
+        ]),
+      ];
+
+      const relaxed = await this.paymentRepo.findOne({
+        where: {
+          providerId: In(variants),
+          gateway: PaymentGateway.SNAPPAY,
+        },
+      });
+
+      if (relaxed) {
+        this.logger.warn(
+          `callback اسنپ‌پی با transactionId «${transactionId}» فقط با مقایسهٔ بی‌توجه به حروف به پرداخت ${relaxed.id} تطبیق داده شد.`,
+        );
+
+        return relaxed;
+      }
+    }
+
+    const paymentToken = String(lookup.paymentToken ?? '').trim();
+
+    if (paymentToken) {
+      const byToken = await this.findPaymentByRefId(paymentToken);
+
+      if (byToken) {
+        this.logger.warn(
+          `callback اسنپ‌پی بدون transactionId شناخته‌شده با paymentToken به پرداخت ${byToken.id} تطبیق داده شد.`,
+        );
+
+        return byToken;
+      }
+    }
+
+    const orderId = Number(lookup.orderId);
+
+    if (Number.isSafeInteger(orderId) && orderId > 0) {
+      const byOrder = await this.paymentRepo.findOne({
+        where: { orderId, gateway: PaymentGateway.SNAPPAY },
+        order: { id: 'DESC' },
+      });
+
+      if (byOrder) {
+        this.logger.warn(
+          `callback اسنپ‌پی از روی orderId=${orderId} به آخرین پرداخت اسنپ‌پی این سفارش (${byOrder.id}) تطبیق داده شد.`,
+        );
+
+        return byOrder;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * اطلاعات عیب‌یابی برای پنل ادمین: آدرسی که دقیقاً به اسنپ‌پی داده می‌شود و
+   * آخرین تلاش‌های پرداخت همراه با callback ثبت‌شده‌شان. برای تشخیص
+   * «آدرس بازگشت اشتباه» و «callback چه چیزی فرستاده» ساخته شده است.
+   */
+  async getDiagnostics(limit = 10) {
+    const callbackUrl = this.getCallbackUrlOrEmpty();
+    const apiUrl = this.getConfig('SNAPPAY_API_URL');
+    let apiHost = '';
+
+    try {
+      apiHost = apiUrl ? new URL(apiUrl).host : '';
+    } catch {
+      apiHost = apiUrl;
+    }
+
+    const recent = await this.paymentRepo.find({
+      where: { gateway: PaymentGateway.SNAPPAY },
+      order: { id: 'DESC' },
+      take: Math.min(Math.max(Number(limit) || 10, 1), 50),
+    });
+
+    return {
+      enabled: this.isEnabled(),
+      callbackUrl,
+      callbackUrlSource: this.getConfig('SNAPPAY_CALLBACK_URL')
+        ? 'SNAPPAY_CALLBACK_URL'
+        : 'APP_URL',
+      appUrl: this.getConfig('APP_URL') || null,
+      frontUrl: String(process.env.FRONT_URL ?? '').trim() || null,
+      apiHost: apiHost || null,
+      recentPayments: (recent ?? []).map(payment => {
+        const meta = this.getMeta(payment);
+
+        return {
+          id: payment.id,
+          orderId: payment.orderId ?? null,
+          status: payment.status,
+          resCode: payment.resCode,
+          transactionId: payment.providerId,
+          amount: Number(payment.amount),
+          createdAt: payment.createdAt,
+          providerStatus: meta.status ?? null,
+          callback: meta.callback ?? null,
+          verify: meta.verify ?? null,
+          settle: meta.settle ?? null,
+          revert: meta.revert ?? null,
+          tokenError: meta.tokenError ?? null,
+        };
+      }),
+    };
   }
 
   /**

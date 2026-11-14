@@ -17,6 +17,7 @@ import {
   PaymentPurpose,
   PaymentStatus,
 } from '../entities/payment.entity';
+import { resolveGatewayCallbackUrl } from '../utils/callback-url.util';
 import {
   describeTaraResult,
   TARA_AUTO_REFUND_MINUTES,
@@ -90,23 +91,19 @@ export class TaraPaymentService {
    * یا «87/88» می‌گرفتیم).
    */
   private getCallbackUrl(): string {
-    const explicit = this.configService.get<string>(
-      'TARA_PAYMENT_CALLBACK_URL',
-    );
+    const url = resolveGatewayCallbackUrl({
+      explicit: this.configService.get<string>('TARA_PAYMENT_CALLBACK_URL'),
+      baseUrl: this.configService.get<string>('APP_URL'),
+      pathAfterApi: 'payment/callback/tara',
+    });
 
-    if (explicit?.trim()) {
-      return explicit.trim();
-    }
-
-    const appUrl = this.configService.get<string>('APP_URL');
-
-    if (!appUrl?.trim()) {
+    if (!url) {
       throw new BadRequestException(
         'TARA_PAYMENT_CALLBACK_URL یا APP_URL تنظیم نشده است',
       );
     }
 
-    return `${appUrl.trim().replace(/\/+$/, '')}/api/payment/callback/tara`;
+    return url;
   }
 
   /**

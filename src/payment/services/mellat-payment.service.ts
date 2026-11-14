@@ -13,6 +13,7 @@ import {
   PaymentPurpose,
   PaymentStatus,
 } from '../entities/payment.entity';
+import { resolveGatewayCallbackUrl } from '../utils/callback-url.util';
 import {
   describeMellatResCode,
   isMellatInconclusive,
@@ -108,22 +109,19 @@ export class MellatPaymentService {
    * برگردانده می‌شود.
    */
   private getCallbackUrl(): string {
-    const explicit = this.configService.get<string>(
-      'MELLAT_PAYMENT_CALLBACK_URL',
-    );
+    const url = resolveGatewayCallbackUrl({
+      explicit: this.configService.get<string>('MELLAT_PAYMENT_CALLBACK_URL'),
+      baseUrl: this.configService.get<string>('APP_URL'),
+      pathAfterApi: 'payment/callback/mellat',
+    });
 
-    if (explicit?.trim()) {
-      return explicit.trim();
-    }
-
-    const appUrl = this.configService.get<string>('APP_URL');
-
-    if (!appUrl?.trim()) {
+    if (!url) {
       throw new BadRequestException(
         'MELLAT_PAYMENT_CALLBACK_URL یا APP_URL تنظیم نشده است',
       );
     }
-    return `${appUrl.trim().replace(/\/+$/, '')}/api/payment/callback/mellat`;
+
+    return url;
   }
 
   async getClient() {

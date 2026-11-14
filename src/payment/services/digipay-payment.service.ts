@@ -23,6 +23,7 @@ import {
   PaymentRefund,
   PaymentRefundStatus,
 } from '../entities/payment-refund.entity';
+import { resolveGatewayCallbackUrl } from '../utils/callback-url.util';
 import { describeDigipayPurchase } from '../utils/digipay-instrument.util';
 import { DigipayAuthService } from './digipay-auth.service';
 import { PaymentGuardService } from './payment-guard.service';
@@ -185,25 +186,21 @@ export class DigipayPaymentService {
   }
 
   private getCallbackUrl(): string {
-    const configured = this.configService
-      .get<string>('DIGIPAY_PAYMENT_CALLBACK_URL')
-      ?.trim();
+    const url = resolveGatewayCallbackUrl({
+      explicit: this.configService.get<string>('DIGIPAY_PAYMENT_CALLBACK_URL'),
+      baseUrl:
+        this.configService.get<string>('APP_URL') ||
+        this.configService.get<string>('FRONT_URL'),
+      pathAfterApi: 'payment/callback/digipay',
+    });
 
-    if (configured) {
-      return configured;
-    }
-
-    const appUrl =
-      this.configService.get<string>('APP_URL')?.trim() ||
-      this.configService.get<string>('FRONT_URL')?.trim();
-
-    if (!appUrl) {
+    if (!url) {
       throw new BadRequestException(
         'DIGIPAY_PAYMENT_CALLBACK_URL یا APP_URL تنظیم نشده است',
       );
     }
 
-    return `${appUrl.replace(/\/+$/, '')}/api/payment/callback/digipay`;
+    return url;
   }
 
   /**

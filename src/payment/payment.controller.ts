@@ -38,12 +38,24 @@ import { TaraPaymentService } from './services/tara-payment.service';
 import { WalletChargeService } from './services/wallet-charge.service';
 import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
 import { readCallbackFieldAny } from './utils/callback-fields.util';
+import { normalizePublicBaseUrl } from './utils/callback-url.util';
 import { getClientIp } from './utils/client-ip.util';
 import { isMellatInconclusive, MELLAT_SUCCESS } from './utils/mellat.constants';
 import { TARA_SUCCESS_RESULT } from './utils/tara.constants';
 
 /** درخواست همراه با اطلاعات کاربر — AuthGuard تضمین می‌کند که user ست شده است */
 type AuthenticatedRequest = Request & { user: { id: number } };
+
+/** خلاصهٔ کوتاه و امنِ بدنه/کوئری callback برای لاگ عیب‌یابی */
+function safeJson(value: unknown): string {
+  try {
+    const text = JSON.stringify(value ?? {}) ?? '';
+
+    return text.length > 600 ? `${text.slice(0, 600)}…` : text;
+  } catch {
+    return '[unserializable]';
+  }
+}
 
 @Controller('payment')
 export class PaymentController {
@@ -60,12 +72,47 @@ export class PaymentController {
     private readonly walletChargeService: WalletChargeService,
   ) {}
 
+  private frontUrlWarned = false;
+
+  /**
+   * آدرس سایت (سمت کاربر) برای صفحهٔ نتیجه.
+   *
+   * اگر `FRONT_URL` تنظیم نشده باشد، مثل قبل رشتهٔ «undefined» در آدرس
+   * نمی‌نشیند و از دامنهٔ `APP_URL` استفاده می‌شود (بدون `/api`).
+   */
+  private getFrontUrl(): string {
+    const explicit = normalizePublicBaseUrl(process.env.FRONT_URL);
+
+    if (explicit) {
+      return explicit;
+    }
+
+    const fallback = normalizePublicBaseUrl(process.env.APP_URL);
+
+    if (!this.frontUrlWarned) {
+      this.frontUrlWarned = true;
+      this.logger.warn(
+        fallback
+          ? `FRONT_URL تنظیم نشده است؛ صفحهٔ نتیجه با دامنهٔ APP_URL (${fallback}) باز می‌شود.`
+          : 'هیچ‌کدام از FRONT_URL و APP_URL تنظیم نشده‌اند؛ کاربر به صفحهٔ نتیجه هدایت نمی‌شود.',
+      );
+    }
+
+    return fallback;
+  }
+
   private redirect(
     res: Response,
     status: 'success' | 'failed' | 'pending',
     orderId?: number | string,
   ) {
-    let url = `${process.env.FRONT_URL}/checkout/payment/result?status=${status}`;
+    const frontUrl = this.getFrontUrl();
+    let url = `${frontUrl}/checkout/payment/result?status=${status}`;
+
+    if (!frontUrl) {
+      // بدون دامنهٔ سایت، redirect نسبی همیشه کار می‌کند
+      url = `/checkout/payment/result?status=${status}`;
+    }
 
     if (orderId) {
       url += `&orderId=${orderId}`;
@@ -586,37 +633,101 @@ export class PaymentController {
    * (بدنه/query) خوانده می‌شود؛ امنیت نهایی با تطبیق مبلغ و فراخوانی
    * سمت سرور verify/settle/status برقرار است، نه با خود این درخواست.
    * callback تکراری هم بی‌خطر است و verify دوم ساخته نمی‌شود.
+   *
+   * callback درگاه هیچ‌وقت نباید با rate-limit رد شود (مثل دیجی‌پی).
    */
   @All('callback/snappay')
+  @SkipThrottle()
   async callbackSnappay(@Req() req: Request, @Res() res: Response) {
     const transactionId = readCallbackFieldAny(req, [
       'transactionId',
       'TransactionId',
       'transaction_id',
+      'transactionID',
+      'TransactionID',
     ]);
     const state = readCallbackFieldAny(req, ['state', 'State']);
     const amount = readCallbackFieldAny(req, ['amount', 'Amount']);
+    const paymentToken = readCallbackFieldAny(req, [
+      'paymentToken',
+      'PaymentToken',
+      'payment_token',
+      'token',
+      'Token',
+      'refId',
+      'RefId',
+    ]);
+    const orderId = readCallbackFieldAny(req, [
+      'orderId',
+      'OrderId',
+      'order_id',
+    ]);
 
-    if (!transactionId) {
-      this.logger.warn('callback اسنپ‌پی بدون transactionId دریافت شد.');
+    const hasField = Boolean(
+      transactionId || state || amount || paymentToken || orderId,
+    );
+    const hasBody =
+      Number(req.headers['content-length'] ?? 0) > 0 ||
+      Object.keys((req.body as Record<string, unknown>) ?? {}).length > 0;
+    const hasQuery = Object.keys(req.query ?? {}).length > 0;
 
-      return this.redirect(res, 'failed');
+    /*
+     * باز کردن دستی این آدرس در مرورگر (برای تست) هیچ پرداختی را تغییر
+     * نمی‌دهد؛ به‌جای صفحهٔ گمراه‌کنندهٔ «پرداخت ناموفق» پاسخ روشن می‌دهد
+     * که مسیر در دسترس است و منتظر POST اسنپ‌پی است.
+     *
+     * اگر درخواست بدنه/کوئری داشته ولی هیچ فیلدی از آن خوانده نشده (مثلاً
+     * Content-Type غیرمنتظره)، این حالت «تست دستی» نیست و پایین‌تر به‌عنوان
+     * callback ناشناخته پردازش می‌شود.
+     */
+    if (!hasField && !hasBody && !hasQuery) {
+      return res.status(200).json({
+        received: true,
+        gateway: PaymentGateway.SNAPPAY,
+        callbackUrl: this.snappayService.getCallbackUrlOrEmpty(),
+        message:
+          'این آدرس فقط برای بازگشت از درگاه اسنپ‌پی است؛ نتیجهٔ پرداخت را خود اسنپ‌پی با POST به این مسیر می‌فرستد.',
+      });
     }
 
-    const payment =
-      await this.snappayService.findPaymentByTransactionId(transactionId);
+    // لاگ کامل ورودی برای عیب‌یابی callback (مقدار حساسی در آن نیست)
+    this.logger.log(
+      `↩️ callback اسنپ‌پی: method=${req.method}, state=${state || 'خالی'}, ` +
+        `amount=${amount || 'خالی'}, transactionId=${transactionId || 'خالی'}, ` +
+        `paymentToken=${paymentToken ? 'دارد' : 'خالی'}, orderId=${orderId || 'خالی'}, ` +
+        `body=${safeJson(req.body)} query=${safeJson(req.query)}`,
+    );
+
+    const payment = await this.snappayService.resolveCallbackPayment({
+      transactionId,
+      paymentToken,
+      orderId,
+    });
 
     if (!payment) {
-      this.logger.warn(
-        `callback اسنپ‌پی برای transactionId ناشناخته: ${transactionId}`,
+      /*
+       * به هیچ پرداختی تطبیق داده نشد. «ناموفق» گفتن به کاربر غلط است، چون
+       * ممکن است callback یک پرداخت واقعی باشد که ما رکوردش را پیدا نکردیم
+       * و پول هم گرفته شده باشد؛ فقط اگر خود اسنپ‌پی state=FAILED فرستاده
+       * باشد نتیجه «ناموفق» اعلام می‌شود.
+       */
+      this.logger.error(
+        `❌ callback اسنپ‌پی به هیچ پرداختی تطبیق داده نشد ` +
+          `(transactionId=${transactionId || 'خالی'}, orderId=${orderId || 'خالی'}, ` +
+          `body=${safeJson(req.body)} query=${safeJson(req.query)}). ` +
+          `آدرس بازگشت فعلی: ${this.snappayService.getCallbackUrlOrEmpty() || 'تنظیم نشده'}`,
       );
 
-      return this.redirect(res, 'failed');
+      return this.redirect(
+        res,
+        state?.trim().toUpperCase() === 'FAILED' ? 'failed' : 'pending',
+        orderId || undefined,
+      );
     }
 
     try {
       const result = await this.snappayService.handleCallback(payment, {
-        transactionId,
+        transactionId: transactionId || payment.providerId || '',
         state,
         amount,
       });
@@ -639,6 +750,17 @@ export class PaymentController {
 
       return this.redirect(res, 'pending', payment.orderId ?? undefined);
     }
+  }
+
+  /**
+   * عیب‌یابی درگاه اسنپ‌پی (فقط ادمین): آدرس بازگشتی که دقیقاً به اسنپ‌پی
+   * داده می‌شود + آخرین تلاش‌های پرداخت و callback ثبت‌شدهٔ هر کدام.
+   */
+  @Get('snappay/admin/diagnostics')
+  @UseGuards(AuthGuard, RolesGuard)
+  @Roles(Role.Admin)
+  async snappayDiagnostics(@Query('limit') limit?: string) {
+    return this.snappayService.getDiagnostics(Number(limit) || 10);
   }
 
   /**

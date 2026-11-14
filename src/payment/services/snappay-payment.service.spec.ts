@@ -267,7 +267,7 @@ describe('SnappayPaymentService', () => {
     expect(purchase.amount).toBe(AMOUNT_IRR);
     expect(purchase.discountAmount).toBe(2_000_000);
     expect(purchase.externalSourceAmount).toBe(0);
-    expect(purchase.mobile).toBe('09123456789');
+    expect(purchase.mobile).toBe('+989123456789');
     expect(purchase.returnURL).toBe(
       'https://shop.example/api/payment/callback/snappay',
     );
@@ -279,6 +279,105 @@ describe('SnappayPaymentService', () => {
     expect(saved.gateway).toBe(PaymentGateway.SNAPPAY);
     expect(saved.status).toBe(PaymentStatus.PENDING);
     expect(Number(saved.amount)).toBe(AMOUNT_IRR);
+  });
+
+  it('builds the return URL without a duplicated /api when APP_URL already ends with /api', async () => {
+    const harness = makeHarness();
+    harness.configValues.APP_URL = 'https://zoppinico.com/api';
+
+    await harness.service.requestPayment(10, 1);
+
+    const purchase = harness.client.createPayment.mock.calls[0][0] as {
+      returnURL: string;
+    };
+
+    expect(purchase.returnURL).toBe(
+      'https://zoppinico.com/api/payment/callback/snappay',
+    );
+  });
+
+  it('uses SNAPPAY_CALLBACK_URL verbatim (and repairs a duplicated /api)', async () => {
+    const harness = makeHarness();
+    harness.configValues.SNAPPAY_CALLBACK_URL =
+      'https://zoppinico.com/api/api/payment/callback/snappay';
+
+    await harness.service.requestPayment(10, 1);
+
+    const purchase = harness.client.createPayment.mock.calls[0][0] as {
+      returnURL: string;
+    };
+
+    expect(purchase.returnURL).toBe(
+      'https://zoppinico.com/api/payment/callback/snappay',
+    );
+  });
+
+  describe('resolveCallbackPayment', () => {
+    it('matches the payment by its own transactionId', async () => {
+      const harness = makeHarness();
+      const payment = await makePendingPayment(harness);
+
+      await expect(
+        harness.service.resolveCallbackPayment({ transactionId: TX_ID }),
+      ).resolves.toBe(payment);
+    });
+
+    it('falls back to a case-insensitive transactionId match', async () => {
+      const harness = makeHarness();
+      const payment = await makePendingPayment(harness);
+
+      await expect(
+        harness.service.resolveCallbackPayment({
+          transactionId: TX_ID.toLowerCase(),
+        }),
+      ).resolves.toBe(payment);
+    });
+
+    it('falls back to the payment token when transactionId is missing', async () => {
+      const harness = makeHarness();
+      const payment = await makePendingPayment(harness);
+
+      await expect(
+        harness.service.resolveCallbackPayment({
+          paymentToken: PAYMENT_TOKEN,
+        }),
+      ).resolves.toBe(payment);
+    });
+
+    it('falls back to the order id as the last resort', async () => {
+      const harness = makeHarness();
+      const payment = await makePendingPayment(harness);
+
+      await expect(
+        harness.service.resolveCallbackPayment({ orderId: '10' }),
+      ).resolves.toBe(payment);
+    });
+
+    it('returns null for a callback that matches nothing', async () => {
+      const harness = makeHarness();
+
+      await expect(
+        harness.service.resolveCallbackPayment({
+          transactionId: 'UNKNOWN',
+          paymentToken: 'unknown-token',
+          orderId: 999,
+        }),
+      ).resolves.toBeNull();
+    });
+  });
+
+  it('reports the exact callback URL and the last attempts for diagnostics', async () => {
+    const harness = makeHarness();
+    await makePendingPayment(harness);
+
+    const diagnostics = await harness.service.getDiagnostics();
+
+    expect(diagnostics.callbackUrl).toBe(
+      'https://shop.example/api/payment/callback/snappay',
+    );
+    expect(diagnostics.callbackUrlSource).toBe('APP_URL');
+    expect(diagnostics.appUrl).toBe('https://shop.example');
+    expect(diagnostics.enabled).toBe(true);
   });
 
   it('refuses to start when the server-side eligibility recheck is false', async () => {
@@ -673,7 +772,7 @@ describe('SnappayPaymentService with the real SnappPayClient (contract flow)', (
       amount: AMOUNT_IRR,
       discountAmount: 2_000_000,
       externalSourceAmount: 0,
-      mobile: '09123456789',
+      mobile: '+989123456789',
       returnURL: 'https://shop.example/api/payment/callback/snappay',
       cartList: [
         {
