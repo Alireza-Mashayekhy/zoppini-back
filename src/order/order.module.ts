@@ -42,7 +42,7 @@ import { OrdersService } from './order.service';
     forwardRef(() => RahkaranModule),
     DiscountsModule,
     FirstPurchaseGiftModule,
-    PromotionsModule,
+    forwardRef(() => PromotionsModule),
     ClubModule,
     WalletModule,
     BotReportsModule,
