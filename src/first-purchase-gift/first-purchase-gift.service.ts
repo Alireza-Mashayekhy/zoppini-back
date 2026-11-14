@@ -194,6 +194,25 @@ export class FirstPurchaseGiftService implements OnModuleInit {
       claim.reservedUntil &&
       claim.reservedUntil > new Date()
     ) {
+      // اگر سفارش مربوطه دیگر در انتظار پرداخت نیست، رزرو منقضی منموده است
+      const order = await this.orderRepo.findOne({
+        where: { id: claim.orderId },
+        select: { id: true, status: true },
+      });
+      if (!order || order.status !== OrderStatus.PENDING) {
+        await this.claimRepo.update(claim.id, {
+          status: 'released',
+          reservedUntil: null,
+        });
+        return {
+          data: {
+            authenticated: true,
+            eligible: true,
+            reason: 'eligible',
+            config: publicConfig,
+          },
+        };
+      }
       return {
         data: {
           authenticated: true,
