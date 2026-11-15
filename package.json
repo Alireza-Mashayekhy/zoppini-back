@@ -19,6 +19,7 @@
     "start:prod": "node dist/src/main",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
+    "test:scripts": "node --require ts-node/register --test \"src/scripts/**/*.test.ts\"",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
@@ -26,6 +27,7 @@
     "seed": "ts-node -r tsconfig-paths/register seed.ts",
     "migration:run": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:run -d src/common/config/typeorm-datasource.ts",
     "migration:product-care-title": "ts-node -r tsconfig-paths/register src/scripts/migrate-product-care-title.ts",
+    "blog-links": "ts-node -r tsconfig-paths/register src/scripts/rewrite-blog-body-links.ts",
     "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/common/config/typeorm-datasource.ts",
     "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/common/config/typeorm-datasource.ts"
   },
