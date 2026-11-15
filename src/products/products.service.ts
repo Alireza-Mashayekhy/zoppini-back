@@ -666,6 +666,20 @@ export class ProductsService {
               ? Number(discount.maxDiscountAmount)
               : null,
         };
+
+        /**
+         * زمان انقضای تخفیف، صرفاً برای داده‌ی ساختاریافته (JSON-LD).
+         *
+         * فیلدِ `discount` بالا پیش‌تر یک آبجکتِ تو در تو بود و فرانت‌اند
+         * نمی‌توانست `priceValidUntil` را از آن بخواند؛ این مقدار به‌صورت
+         * یک فیلدِ جدا و **افزودنی** (بدون تغییر فیلدهای موجود) منتشر
+         * می‌شود تا JSON-LD بتواند «تا چه زمانی این قیمت معتبر است» را
+         * اعلام کند. `null` یعنی تخفیف بی‌پایان است و `priceValidUntil`
+         * منتشر نمی‌شود.
+         */
+        (variant as any).discountExpiresAt = discount.expiresAt
+          ? new Date(discount.expiresAt).toISOString()
+          : null;
       }
     }
 
