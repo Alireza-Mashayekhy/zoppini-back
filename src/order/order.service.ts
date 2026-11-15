@@ -39,11 +39,12 @@ import {
 } from 'src/torob/torob-attribution.util';
 import { User } from 'src/users/entities/user.entity';
 import { WalletService } from 'src/wallet/wallet.service';
-import { DataSource, In, Not, Repository } from 'typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 
 import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
 import { OrderItem } from './entities/order-item';
+import { summarizeOrderStatusCounts } from './order-status-summary';
 
 @Injectable()
 export class OrdersService {
@@ -1305,25 +1306,23 @@ export class OrdersService {
 
     const [data, total] = await qb.getManyAndCount();
 
-    // ۲. محاسبه آمار
-    const totalCount = await this.orderRepo.count({
-      where: { user: { id: userId } },
-    });
+    /**
+     * ۲. محاسبه آمار — شمارشِ صریحِ هر وضعیت در **یک** کوئری.
+     *
+     * چرا به‌جای چند `count()` جداگانه: شمارش‌ها باید با هم سازگار بمانند و
+     * هر وضعیت دقیقاً همان جایی شمرده شود که نامش می‌گوید. وضعیتِ ناشناس در
+     * سطلِ `unknown` می‌رود، نه در «تحویل شده»؛ بنابراین سفارشِ لغوشده یا در
+     * انتظار پرداخت نمی‌تواند «تحویل شده» دیده شود.
+     */
+    const statusRows = await this.orderRepo
+      .createQueryBuilder('order')
+      .select('order.status', 'status')
+      .addSelect('COUNT(order.id)', 'count')
+      .where('order.user = :userId', { userId })
+      .groupBy('order.status')
+      .getRawMany<{ status: string; count: string | number }>();
 
-    const cancelledCount = await this.orderRepo.count({
-      where: { user: { id: userId }, status: OrderStatus.CANCELLED },
-    });
-
-    const deliveredCount = await this.orderRepo.count({
-      where: { user: { id: userId }, status: OrderStatus.DELIVERED },
-    });
-
-    const inProgressCount = await this.orderRepo.count({
-      where: {
-        user: { id: userId },
-        status: Not(In([OrderStatus.CANCELLED, OrderStatus.DELIVERED])),
-      },
-    });
+    const counts = summarizeOrderStatusCounts(statusRows);
 
     return {
       data,
@@ -1334,10 +1333,15 @@ export class OrdersService {
         totalPages: Math.ceil(total / limit),
       },
       stats: {
-        total: totalCount,
-        cancelled: cancelledCount,
-        delivered: deliveredCount,
-        inProgress: inProgressCount,
+        total: counts.total,
+        awaitingPayment: counts.awaitingPayment,
+        processing: counts.processing,
+        shipped: counts.shipped,
+        delivered: counts.delivered,
+        cancelled: counts.cancelled,
+        unknown: counts.unknown,
+        /** برای سازگاری با مصرف‌کننده‌های قدیمی‌تر همان تعریف قبلی را دارد */
+        inProgress: counts.inProgress,
       },
     };
   }
