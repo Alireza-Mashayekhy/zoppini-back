@@ -1,6 +1,8 @@
 // src/orders/orders.service.ts
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,6 +17,11 @@ import {
 } from 'src/bot-reports/bot-events.service';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { ClubService } from 'src/club/club.service';
+import {
+  createCorrelationId,
+  serializeError,
+  structuredLog,
+} from 'src/common/logging/structured-logger';
 import { applySearch, getPagination, QueryDto } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
 import { Discount } from 'src/discounts/entities/discount.entity';
@@ -32,6 +39,7 @@ import { Variant } from 'src/products/entities/variant.entity';
 import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
 import { PromotionsService } from 'src/promotions/promotions.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
+import { RahkaranInvoiceSyncService } from 'src/rahkaran/rahkaran-invoice-sync.service';
 import { SmsService } from 'src/sms/sms.service';
 import {
   TOROB_CLICK_WINDOW_MS,
@@ -98,6 +106,14 @@ export class OrdersService {
 
     @Optional()
     private readonly firstPurchaseGiftService?: FirstPurchaseGiftService,
+
+    /**
+     * ردیابی + retry ثبت فاکتور راهکاران؛ اختیاری است تا سازندهٔ
+     * موجود و تست‌های قبلی نشکنند. در اپ واقعی همیشه با DI تزریق می‌شود.
+     */
+    @Optional()
+    @Inject(forwardRef(() => RahkaranInvoiceSyncService))
+    private readonly rahkaranInvoiceSyncService?: RahkaranInvoiceSyncService,
   ) {}
 
   // تولید شماره سفارش منحصربه‌فرد
@@ -861,57 +877,115 @@ export class OrdersService {
       // 6. ثبت فاکتور فروش در راهکاران
       // =========================================================
 
-      try {
-        const rahkaranInvoice = await this.rahkaranService.syncOrderToRahkaran(
-          await this.findOne(order.id),
-        );
+      const rahkaranCorrelationId = createCorrelationId('rah-inv');
 
-        this.logger.log(
-          `✅ سفارش ${order.id} در راهکاران ثبت شد. ` +
-            `Invoice ID: ${
-              rahkaranInvoice?.id ?? rahkaranInvoice?.invoiceId ?? 'unknown'
-            }`,
-        );
+      try {
+        if (this.rahkaranInvoiceSyncService) {
+          /**
+           * مسیر اصلی: ثبت ردیابی‌شده.
+           *
+           * وضعیت هر تلاش در جدول `rahkaran_invoice_sync` ثبت می‌شود و در
+           * صورت شکست، scheduler هر چند دقیقه retry می‌کند تا فاکتور
+           * گمشده‌ای در راهکاران باقی نماند. این متد throw نمی‌کند و
+           * سفارش سایت PAID باقی می‌ماند.
+           */
+          await this.rahkaranInvoiceSyncService.syncPaidOrder(
+            await this.findOne(order.id),
+            {
+              trigger: 'payment',
+              correlationId: rahkaranCorrelationId,
+            },
+          );
+        } else {
+          // Fallback برای سازندهٔ دستی/تست‌ها (بدون ردیابی دیتابیسی)
+          const rahkaranInvoice =
+            await this.rahkaranService.syncOrderToRahkaran(
+              await this.findOne(order.id),
+              { correlationId: rahkaranCorrelationId },
+            );
+
+          this.logger.log(
+            structuredLog('rahkaran.invoice.registration.success', {
+              correlationId: rahkaranCorrelationId,
+              orderId: order.id,
+              orderNumber: order.orderNumber,
+              trigger: 'payment',
+              tracked: false,
+              invoiceId:
+                rahkaranInvoice?.id ?? rahkaranInvoice?.invoiceId ?? null,
+              invoiceNumber: rahkaranInvoice?.number ?? null,
+            }),
+          );
+        }
       } catch (error) {
         this.logger.error(
-          `❌ ثبت فاکتور سفارش ${order.id} در راهکاران ناموفق بود.`,
-          error instanceof Error ? error.stack : String(error),
+          structuredLog('rahkaran.invoice.registration.failed', {
+            correlationId: rahkaranCorrelationId,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            trigger: 'payment',
+            error: serializeError(error),
+          }),
         );
 
-        // فعلاً سفارش سایت PAID باقی می‌ماند.
-        //
-        // چون تراکنش دیتابیس سایت قبلاً commit شده،
-        // نمی‌توانیم rollback کنیم.
-        //
-        // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
+        // سفارش سایت PAID باقی می‌ماند؛ چون تراکنش دیتابیس سایت قبلاً
+        // commit شده و rollback ممکن نیست. مسیر اصلی (syncPaidOrder) خطا
+        // را می‌بلعد و در جدول ردیابی ثبت می‌کند تا retry خودکار انجام شود.
       }
 
+      // =========================================================
+      // 7. ثبت فاکتور فروش در باشگاه دایاتک
+      // =========================================================
+
+      const diatechCorrelationId = createCorrelationId('diatech-inv');
+
+      let diatechInvoiceId: number | undefined;
+
       try {
-        const invoice = await this.clubService.createInvoice({
-          customerCode: order.user.phone,
-          finalPrice: order.finalPrice,
-          currentCredit: Number(order.clubCreditPayment ?? 0),
-        });
+        const invoice = await this.clubService.createInvoice(
+          {
+            customerCode: order.user.phone,
+            finalPrice: order.finalPrice,
+            currentCredit: Number(order.clubCreditPayment ?? 0),
+          },
+          { correlationId: diatechCorrelationId, orderId: order.id },
+        );
+
+        diatechInvoiceId = invoice?.Id;
 
         if (!invoice?.Id) {
           throw new Error('شناسه فاکتور دایاتک دریافت نشد.');
         }
         // تایید فاکتور باعث ثبت فروش و اعمال CurrentCredit مصرف‌شده در دایاتک می‌شود.
-        await this.clubService.approveInvoice(invoice.Id);
+        await this.clubService.approveInvoice(invoice.Id, {
+          correlationId: diatechCorrelationId,
+          orderId: order.id,
+        });
 
-        this.logger.log(`✅ سفارش ${order.id} در دایاتک ثبت شد. `);
+        this.logger.log(
+          structuredLog('diatech.invoice.registration.success', {
+            correlationId: diatechCorrelationId,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            invoiceId: invoice.Id,
+          }),
+        );
       } catch (error) {
         this.logger.error(
-          `❌ ثبت فاکتور سفارش ${order.id} در دایاتک ناموفق بود.`,
-          error instanceof Error ? error.stack : String(error),
+          structuredLog('diatech.invoice.registration.failed', {
+            correlationId: diatechCorrelationId,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            // اگر invoiceId داریم یعنی create موفق و approve ناموفق بوده است
+            stage: diatechInvoiceId ? 'approve_invoice' : 'create_invoice',
+            invoiceId: diatechInvoiceId ?? null,
+            error: serializeError(error),
+          }),
         );
 
-        // فعلاً سفارش سایت PAID باقی می‌ماند.
-        //
-        // چون تراکنش دیتابیس سایت قبلاً commit شده،
-        // نمی‌توانیم rollback کنیم.
-        //
-        // بعداً برای این قسمت retry/outbox اضافه می‌کنیم.
+        // سفارش سایت PAID باقی می‌ماند؛ تراکنش سایت commit شده و rollback
+        // ممکن نیست. لاگ ساختاریافتهٔ بالا (با correlationId) برای
+        // ردیابی و اقدام دستی در Production کافی است.
       }
 
       await this.smsService.sendOrderConfirmationToCustomer(

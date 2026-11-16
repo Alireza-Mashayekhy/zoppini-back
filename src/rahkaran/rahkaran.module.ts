@@ -13,14 +13,23 @@ import { Color } from '../products/entities/product-color.entity';
 import { Size } from '../products/entities/product-size.entity';
 import { ProductsModule } from '../products/products.module';
 import { UsersModule } from '../users/users.module';
+import { RahkaranInvoiceSync } from './entities/rahkaran-invoice-sync.entity';
 import { RahkaranController } from './rahkaran.controller';
 import { RahkaranService } from './rahkaran.service';
+import { RahkaranInvoiceSyncScheduler } from './rahkaran-invoice-sync.scheduler';
+import { RahkaranInvoiceSyncService } from './rahkaran-invoice-sync.service';
 import { RahkaranProductSyncService } from './rahkaran-product-sync.service';
 
 @Module({
   imports: [
     ConfigModule,
-    TypeOrmModule.forFeature([Color, Size, Product, Variant]),
+    TypeOrmModule.forFeature([
+      Color,
+      Size,
+      Product,
+      Variant,
+      RahkaranInvoiceSync,
+    ]),
     HttpModule.register({
       timeout: 30000,
       headers: {
@@ -32,8 +41,17 @@ import { RahkaranProductSyncService } from './rahkaran-product-sync.service';
     forwardRef(() => OrdersModule),
     BotReportsModule,
   ],
-  providers: [RahkaranService, RahkaranProductSyncService],
+  providers: [
+    RahkaranService,
+    RahkaranProductSyncService,
+    RahkaranInvoiceSyncService,
+    RahkaranInvoiceSyncScheduler,
+  ],
   controllers: [RahkaranController],
-  exports: [RahkaranService, RahkaranProductSyncService],
+  exports: [
+    RahkaranService,
+    RahkaranProductSyncService,
+    RahkaranInvoiceSyncService,
+  ],
 })
 export class RahkaranModule {}

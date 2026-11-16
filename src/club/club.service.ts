@@ -9,10 +9,24 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { AxiosError, AxiosRequestConfig } from 'axios';
 import { firstValueFrom } from 'rxjs';
+import {
+  createCorrelationId,
+  maskMobile,
+  serializeError,
+  structuredLog,
+} from 'src/common/logging/structured-logger';
 
 // ============================================================
 // Types
 // ============================================================
+
+/** زمینهٔ ردیابی برای لاگ‌های ساختاریافتهٔ یک درخواست به دایاتک. */
+export interface DiatechRequestContext {
+  correlationId?: string;
+  orderId?: number;
+  /** مرحلهٔ جاری فرآیند (برای لاگ خطا) */
+  stage?: string;
+}
 
 interface DiatechTokenResponse {
   access_token: string;
@@ -171,9 +185,20 @@ export interface DiatechInvoice {
   Id?: number;
   CustomerId: number;
   officeId: number;
+  /**
+   * جمع کل فاکتور (ریال) — طبق مستند دایاتک مبلغ کلی فاکتور است
+   * و کسورات (اعتبار/بن) از آن کم نمی‌شود.
+   */
   FinalPrice: number;
   /** اعتبار مصرف‌شده از کیف پول مشتری، ریال */
   CurrentCredit?: number;
+  /**
+   * مبلغ نهایی فاکتور بعد از کسورات (ریال) — طبق مستند دایاتک:
+   * `FinalValue = FinalPrice - CurrentCredit - CouponPrice`
+   *
+   * ارسال این فیلد الزامی است؛ بدون آن مبلغ نهایی در دایاتک
+   * صفر/نامعتبر ثبت می‌شود.
+   */
   FinalValue?: number;
 }
 
@@ -309,6 +334,8 @@ export class ClubService {
     config: AxiosRequestConfig,
     retryUnauthorized = true,
   ): Promise<T> {
+    const startedAt = Date.now();
+
     try {
       const token = await this.getAccessToken();
 
@@ -325,6 +352,15 @@ export class ClubService {
 
             'Content-Type': 'application/json',
           },
+        }),
+      );
+
+      this.logger.debug(
+        structuredLog('diatech.http.response', {
+          method: config.method,
+          url: this.maskUrl(config.url),
+          httpStatus: response.status,
+          durationMs: Date.now() - startedAt,
         }),
       );
 
@@ -350,8 +386,13 @@ export class ClubService {
       }
 
       this.logger.error(
-        `❌ Diatech API Error ${status || ''}`,
-        this.getErrorMessage(error),
+        structuredLog('diatech.http.error', {
+          method: config.method,
+          url: this.maskUrl(config.url),
+          httpStatus: status,
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
       );
 
       if (status === 404) {
@@ -432,12 +473,14 @@ export class ClubService {
 
       this.checkResponse(response, 'ثبت مشتری در باشگاه دایاتک');
 
-      this.logger.log(`✅ مشتری ${data.customerCode} در باشگاه دایاتک ثبت شد.`);
+      this.logger.log(
+        `✅ مشتری ${maskMobile(data.customerCode)} در باشگاه دایاتک ثبت شد.`,
+      );
 
       return response.Payload;
     } catch (error) {
       this.logger.error(
-        `❌ ثبت مشتری ${data.customerCode} در باشگاه دایاتک ناموفق بود.`,
+        `❌ ثبت مشتری ${maskMobile(data.customerCode)} در باشگاه دایاتک ناموفق بود.`,
         this.getErrorMessage(error),
       );
 
@@ -589,35 +632,156 @@ export class ClubService {
   // ============================================================
 
   /**
-   * ثبت یا ویرایش فاکتور فروش در دایاتک
+   * تبدیل مبلغ تومانی فرم سفارش به ریال با اعتبارسنجی.
    *
-   * POST /api/v1/invoices
+   * مبالغ نامعتبر (NaN/Infinity) یا منفی مجاز نیستند؛ هیچ‌وقت نباید
+   * مبلغ صفر/محاسبه‌نشده به دایاتک ارسال شود.
    */
-  async createInvoice(data: {
-    customerCode: string;
-    finalPrice: number;
-    currentCredit?: number;
-  }): Promise<DiatechInvoice> {
-    // ============================================================
-    // 1. پیدا کردن مشتری در دایاتک
-    // ============================================================
+  private toRialAmount(
+    value: unknown,
+    fieldName: string,
+    options: { allowZero?: boolean } = {},
+  ): number {
+    const toman = Number(value);
 
-    const customer = await this.getCustomer(data.customerCode);
-
-    if (!customer?.Id) {
+    if (!Number.isFinite(toman)) {
       throw new BadRequestException(
-        `مشتری با کد ${data.customerCode} در باشگاه دایاتک پیدا نشد.`,
+        `${fieldName} برای ثبت فاکتور دایاتک معتبر نیست (مقدار: ${String(
+          value,
+        )}).`,
       );
     }
 
+    if (toman < 0 || (toman === 0 && !options.allowZero)) {
+      throw new BadRequestException(
+        `${fieldName} برای ثبت فاکتور دایاتک نمی‌تواند ${
+          toman === 0 ? 'صفر' : 'منفی'
+        } باشد.`,
+      );
+    }
+
+    return Math.round(toman * 10);
+  }
+
+  /**
+   * ثبت یا ویرایش فاکتور فروش در دایاتک
+   *
+   * POST /api/v1/invoices
+   *
+   * قرارداد دایاتک (مستند InvoiceDto):
+   * - `FinalPrice` = جمع کل فاکتور (ریال)
+   * - `CurrentCredit` = میزان خرج اعتبار مشتری (ریال)
+   * - `FinalValue` = مبلغ نهایی بعد از کسورات = FinalPrice - CurrentCredit
+   *   (بن تخفیف/CouponPrice در این جریان استفاده نمی‌شود)
+   *
+   * هر دو فیلد FinalPrice و FinalValue باید همیشه با مقدار معتبر ارسال شوند.
+   */
+  async createInvoice(
+    data: {
+      customerCode: string;
+      finalPrice: number;
+      currentCredit?: number;
+    },
+    context?: DiatechRequestContext,
+  ): Promise<DiatechInvoice> {
+    const correlationId =
+      context?.correlationId ?? createCorrelationId('diatech-inv');
+
+    const startedAt = Date.now();
+
+    // ============================================================
+    // 1. اعتبارسنجی و تبدیل مبالغ (تومان -> ریال)
+    // ============================================================
+
+    const finalPriceRial = this.toRialAmount(data.finalPrice, 'FinalPrice');
+
+    const creditRial = this.toRialAmount(
+      data.currentCredit ?? 0,
+      'CurrentCredit',
+      { allowZero: true },
+    );
+
+    // اعتبار مصرف‌شده هرگز نمی‌تواند از جمع کل فاکتور بیشتر باشد.
+    const currentCreditRial = Math.min(creditRial, finalPriceRial);
+
+    if (creditRial > finalPriceRial) {
+      this.logger.warn(
+        structuredLog('diatech.invoice.credit_clamped', {
+          correlationId,
+          orderId: context?.orderId,
+          requestedCreditRial: creditRial,
+          finalPriceRial,
+        }),
+      );
+    }
+
+    // طبق قرارداد دایاتک: مبلغ نهایی بعد از کسورات (اعتبار مشتری)
+    const finalValueRial = finalPriceRial - currentCreditRial;
+
     this.logger.log(
-      `✅ مشتری دایاتک پیدا شد. ` +
-        `CustomerCode=${data.customerCode}, ` +
-        `CustomerId=${customer.Id}`,
+      structuredLog('diatech.invoice.create.start', {
+        correlationId,
+        orderId: context?.orderId,
+        customerCode: maskMobile(data.customerCode),
+        finalPriceRial,
+        currentCreditRial,
+        finalValueRial,
+      }),
     );
 
     // ============================================================
-    // 2. ساخت Payload فاکتور
+    // 2. پیدا کردن مشتری در دایاتک
+    // ============================================================
+
+    let customer: DiatechCustomer;
+
+    try {
+      customer = await this.getCustomer(data.customerCode);
+    } catch (error) {
+      this.logger.error(
+        structuredLog('diatech.invoice.create.failed', {
+          correlationId,
+          orderId: context?.orderId,
+          stage: 'resolve_customer',
+          customerCode: maskMobile(data.customerCode),
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
+      );
+
+      throw error;
+    }
+
+    if (!customer?.Id) {
+      const error = new BadRequestException(
+        `مشتری با کد ${data.customerCode} در باشگاه دایاتک پیدا نشد.`,
+      );
+
+      this.logger.error(
+        structuredLog('diatech.invoice.create.failed', {
+          correlationId,
+          orderId: context?.orderId,
+          stage: 'resolve_customer',
+          customerCode: maskMobile(data.customerCode),
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
+      );
+
+      throw error;
+    }
+
+    this.logger.log(
+      structuredLog('diatech.invoice.customer_resolved', {
+        correlationId,
+        orderId: context?.orderId,
+        customerId: customer.Id,
+        customerCode: maskMobile(data.customerCode),
+      }),
+    );
+
+    // ============================================================
+    // 3. ساخت Payload فاکتور
     // ============================================================
 
     const payload: DiatechInvoice = {
@@ -625,15 +789,25 @@ export class ClubService {
 
       officeId: 1,
 
-      FinalPrice: Number(data.finalPrice) * 10 || 0,
-      CurrentCredit: Math.min(
-        Number(data.finalPrice) * 10 || 0,
-        Math.max(0, Number(data.currentCredit) * 10 || 0),
-      ),
+      FinalPrice: finalPriceRial,
+      CurrentCredit: currentCreditRial,
+      FinalValue: finalValueRial,
     };
 
+    this.logger.debug(
+      structuredLog('diatech.invoice.payload', {
+        correlationId,
+        orderId: context?.orderId,
+        customerId: customer.Id,
+        officeId: payload.officeId,
+        FinalPrice: payload.FinalPrice,
+        CurrentCredit: payload.CurrentCredit,
+        FinalValue: payload.FinalValue,
+      }),
+    );
+
     // ============================================================
-    // 3. ثبت فاکتور
+    // 4. ثبت فاکتور
     // ============================================================
 
     try {
@@ -646,14 +820,31 @@ export class ClubService {
       this.checkResponse(response, 'ثبت فاکتور فروش در باشگاه دایاتک');
 
       this.logger.log(
-        `✅ فاکتور در دایاتک ثبت شد. ` + `CustomerId=${customer.Id}`,
+        structuredLog('diatech.invoice.create.response', {
+          correlationId,
+          orderId: context?.orderId,
+          customerId: customer.Id,
+          invoiceId: response.Payload?.Id ?? null,
+          finalPriceRial,
+          finalValueRial,
+          durationMs: Date.now() - startedAt,
+        }),
       );
 
       return response.Payload;
     } catch (error) {
       this.logger.error(
-        `❌ ثبت فاکتور  در دایاتک ناموفق بود.`,
-        this.getErrorMessage(error),
+        structuredLog('diatech.invoice.create.failed', {
+          correlationId,
+          orderId: context?.orderId,
+          stage: 'save_invoice',
+          customerId: customer.Id,
+          finalPriceRial,
+          currentCreditRial,
+          finalValueRial,
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
       );
 
       throw error;
@@ -683,17 +874,47 @@ export class ClubService {
    *
    * POST /api/v1/invoices/{id}/approve
    */
-  async approveInvoice(invoiceId: number): Promise<DiatechInvoice> {
-    const response = await this.request<DiatechResponse<DiatechInvoice>>({
-      method: 'POST',
-      url: `/api/v1/invoices/${invoiceId}/approve`,
-    });
+  async approveInvoice(
+    invoiceId: number,
+    context?: DiatechRequestContext,
+  ): Promise<DiatechInvoice> {
+    const correlationId =
+      context?.correlationId ?? createCorrelationId('diatech-inv');
 
-    this.checkResponse(response, 'تایید فاکتور در باشگاه دایاتک');
+    const startedAt = Date.now();
 
-    this.logger.log(`✅ فاکتور دایاتک ${invoiceId} تایید شد.`);
+    try {
+      const response = await this.request<DiatechResponse<DiatechInvoice>>({
+        method: 'POST',
+        url: `/api/v1/invoices/${invoiceId}/approve`,
+      });
 
-    return response.Payload;
+      this.checkResponse(response, 'تایید فاکتور در باشگاه دایاتک');
+
+      this.logger.log(
+        structuredLog('diatech.invoice.approved', {
+          correlationId,
+          orderId: context?.orderId,
+          invoiceId,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+
+      return response.Payload;
+    } catch (error) {
+      this.logger.error(
+        structuredLog('diatech.invoice.approve.failed', {
+          correlationId,
+          orderId: context?.orderId,
+          stage: 'approve_invoice',
+          invoiceId,
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
+      );
+
+      throw error;
+    }
   }
 
   /**
@@ -776,9 +997,7 @@ export class ClubService {
     return inner === undefined ? value : inner;
   }
 
-  private findListOrDto(
-    response: Record<string, unknown>,
-  ): unknown | undefined {
+  private findListOrDto(response: Record<string, unknown>): unknown {
     for (const key of [
       'Payload',
       'payload',
@@ -819,6 +1038,20 @@ export class ClubService {
         return [normalizedKey, this.normalizeDiatechKeys(item)];
       }),
     );
+  }
+
+  /**
+   * ماسک مقادیر طولانی عددی (مثل CustomerCode = شماره موبایل) در path
+   * endpoint تا اطلاعات کاربران در لاگ افشا نشود.
+   */
+  private maskUrl(url?: string): string | undefined {
+    if (!url) {
+      return url;
+    }
+
+    return url
+      .split('?')[0]
+      .replace(/\d{7,}/g, digits => maskMobile(digits) ?? '***');
   }
 
   private checkResponse(

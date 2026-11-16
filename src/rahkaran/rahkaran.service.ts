@@ -12,7 +12,31 @@ import { ConfigService } from '@nestjs/config';
 import { AxiosError, AxiosRequestConfig } from 'axios';
 import { constants, createPublicKey, publicEncrypt } from 'crypto';
 import { firstValueFrom } from 'rxjs';
+import {
+  createCorrelationId,
+  maskMobile,
+  sanitizeForLog,
+  serializeError,
+  stringifySafe,
+  structuredLog,
+  truncateForLog,
+} from 'src/common/logging/structured-logger';
 import { UsersService } from 'src/users/users.service';
+
+/**
+ * زمینهٔ ردیابی یک فرآیند راهکاران؛ در تمام گام‌های یک درخواست
+ * (lookup، ساخت payload، ارسال، retry) حفظ می‌شود تا با یک
+ * `correlationId` بتوان کل مسیر را در لاگ‌ها پیدا کرد.
+ */
+export interface RahkaranLogContext {
+  correlationId?: string;
+  orderId?: number;
+  orderNumber?: string;
+  /** شمارهٔ تلاش (۱ برای تلاش اول) */
+  attempt?: number;
+  /** مرحلهٔ جاری فرآیند ثبت فاکتور */
+  stage?: string;
+}
 
 interface RahkaranSession {
   id: string;
@@ -317,13 +341,19 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   private async performLogin(): Promise<void> {
     this.clearState();
 
-    this.logger.log('🔐 دریافت Session از راهکاران...');
+    this.logger.log(
+      structuredLog('rahkaran.auth.session_request', { baseUrl: this.baseUrl }),
+    );
 
     const session = await this.getSession();
 
-    this.logger.log(session);
-
-    this.logger.log(`✅ Session دریافت شد: ${session.id}`);
+    // توجه: SessionId و کلید RSA حامل اطلاعات احراز هویت هستند و هرگز
+    // به‌صورت کامل لاگ نمی‌شوند.
+    this.logger.log(
+      structuredLog('rahkaran.auth.session_received', {
+        sessionIdSuffix: session.id ? session.id.slice(-6) : null,
+      }),
+    );
 
     const encryptedPassword = this.encryptPassword(
       session.id,
@@ -343,7 +373,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       },
     );
 
-    this.logger.log(`Login response: ${JSON.stringify(loginResponse)}`);
+    // بدنهٔ پاسخ login ممکن است حامل اطلاعات Session باشد؛ فقط نتیجه لاگ می‌شود.
+    this.logger.debug(
+      structuredLog('rahkaran.auth.login_response', {
+        successful: this.isSuccessful(loginResponse),
+        errorMessage: this.getRahkaranError(loginResponse),
+      }),
+    );
 
     // Login موفق راهکاران با HTTP 200 + Cookie مشخص می‌شود.
     // Body این endpoint ممکن است خالی باشد.
@@ -601,7 +637,16 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   private async request<T>(
     url: string,
     config: AxiosRequestConfig = {},
+    ctx?: RahkaranLogContext,
   ): Promise<T> {
+    const method = String(config.method || 'GET').toUpperCase();
+
+    // فقط مسیر endpoint لاگ می‌شود؛ QueryString ممکن است دادهٔ جستجو
+    // (موبایل/بارکد) داشته باشد.
+    const endpointPath = this.toEndpointPath(url);
+
+    const startedAt = Date.now();
+
     try {
       const response = await firstValueFrom(
         this.httpService.request<T>({
@@ -614,13 +659,40 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         }),
       );
 
+      const durationMs = Date.now() - startedAt;
+
       this.captureCookies(response.headers);
 
       if (response.status < 200 || response.status >= 300) {
+        this.logger.warn(
+          structuredLog('rahkaran.http.non_2xx', {
+            correlationId: ctx?.correlationId,
+            orderId: ctx?.orderId,
+            stage: ctx?.stage,
+            method,
+            endpoint: endpointPath,
+            httpStatus: response.status,
+            durationMs,
+            responseBody: truncateForLog(stringifySafe(response.data), 500),
+          }),
+        );
+
         throw new BadRequestException(
           `Rahkaran HTTP ${response.status}: ${JSON.stringify(response.data)}`,
         );
       }
+
+      this.logger.debug(
+        structuredLog('rahkaran.http.response', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          method,
+          endpoint: endpointPath,
+          httpStatus: response.status,
+          durationMs,
+        }),
+      );
 
       return response.data;
     } catch (error) {
@@ -628,10 +700,24 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
       const status = axiosError.response?.status;
 
-      this.logger.error(
-        `❌ Rahkaran HTTP Error ${status || ''}: ${url}`,
-        this.getErrorMessage(error),
-      );
+      const durationMs = Date.now() - startedAt;
+
+      // خطای BadRequestException خودِ ما (رلهی non-2xx) دوباره با جزئیات
+      // کامل اینجا لاگ نمی‌شود؛ لاگ بالا کافی است.
+      if (!(error instanceof BadRequestException)) {
+        this.logger.error(
+          structuredLog('rahkaran.http.error', {
+            correlationId: ctx?.correlationId,
+            orderId: ctx?.orderId,
+            stage: ctx?.stage,
+            method,
+            endpoint: endpointPath,
+            httpStatus: status,
+            durationMs,
+            error: serializeError(error),
+          }),
+        );
+      }
 
       if (status === 401 || status === 403) {
         this.clearState();
@@ -642,6 +728,19 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       }
 
       throw error;
+    }
+  }
+
+  /**
+   * استخراج مسیر endpoint بدون QueryString برای لاگ‌گذاری امن.
+   */
+  private toEndpointPath(url: string): string {
+    try {
+      const parsed = new URL(url, this.baseUrl || undefined);
+
+      return parsed.pathname;
+    } catch {
+      return url.split('?')[0];
     }
   }
 
@@ -673,9 +772,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     const plainText = `${sessionId}**${password}`;
 
-    this.logger.debug(`RSA plainText length: ${plainText.length}`);
-    this.logger.debug(`RSA plainText: ${plainText}`);
-
+    // ⚠️ plainText شامل رمز عبور است و هرگز لاگ نمی‌شود.
     const encrypted = publicEncrypt(
       {
         key: publicKey,
@@ -881,6 +978,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     barcode: string,
     page = 1,
     count = 10,
+    ctx?: RahkaranLogContext,
   ): Promise<any> {
     const params = new URLSearchParams({
       barcode,
@@ -892,26 +990,37 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       `${this.baseUrl}/Retail/Api/Structure/ProductService.svc/` +
       `getProductByBarcode?${params.toString()}`;
 
-    let response = await this.authenticatedRequest<any>(url, {
-      method: 'GET',
-    });
-
-    this.logger.log(response);
+    let response = await this.authenticatedRequest<any>(
+      url,
+      {
+        method: 'GET',
+      },
+      ctx,
+    );
 
     // اگر Session منقضی شده باشد ولی HTTP 200 برگشته باشد
     if (this.isSessionExpiredResponse(response)) {
       this.logger.warn(
-        `⚠️ Session هنگام دریافت SKU=${barcode} منقضی شده بود. Login مجدد...`,
+        structuredLog('rahkaran.auth.session_expired_mid_request', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          operation: 'getProductByBarcode',
+        }),
       );
 
       this.clearState();
 
       await this.login();
 
-      response = await this.request<any>(url, {
-        method: 'GET',
-        headers: this.authHeaders(),
-      });
+      response = await this.request<any>(
+        url,
+        {
+          method: 'GET',
+          headers: this.authHeaders(),
+        },
+        ctx,
+      );
     }
 
     if (response?.metadata?.isSuccessfull !== true) {
@@ -967,6 +1076,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
   async getRemainingQuantityInfo(
     productId: number,
+    ctx?: RahkaranLogContext,
   ): Promise<RahkaranRemainingQuantity[]> {
     await this.ensureAuthenticated();
 
@@ -981,9 +1091,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         isSuccessful?: boolean;
         errorMessage?: string | null;
       };
-    }>(url, {
-      method: 'GET',
-    });
+    }>(
+      url,
+      {
+        method: 'GET',
+      },
+      ctx,
+    );
 
     // ==========================================================
     // Session Expired
@@ -991,8 +1105,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     if (this.isSessionExpiredResponse(response)) {
       this.logger.warn(
-        `⚠️ Session هنگام دریافت موجودی ` +
-          `ProductID=${productId} منقضی شده بود. Login مجدد...`,
+        structuredLog('rahkaran.auth.session_expired_mid_request', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          operation: 'GetRemainingQuantityInfo',
+          productId,
+        }),
       );
 
       this.clearState();
@@ -1000,10 +1119,14 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       await this.login();
 
       // Retry فقط همان درخواست
-      response = await this.request(url, {
-        method: 'GET',
-        headers: this.authHeaders(),
-      });
+      response = await this.request(
+        url,
+        {
+          method: 'GET',
+          headers: this.authHeaders(),
+        },
+        ctx,
+      );
     }
 
     // ==========================================================
@@ -1105,7 +1228,10 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     this.logger.log(`✅ ثبت کاربر در مشتریان وفادار موفق بود `);
   }
 
-  async getCustomerIdByMobile(mobile: string): Promise<number> {
+  async getCustomerIdByMobile(
+    mobile: string,
+    ctx?: RahkaranLogContext,
+  ): Promise<number> {
     const phone = mobile?.trim();
 
     if (!phone) {
@@ -1120,15 +1246,24 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     let response = await this.authenticatedRequest<
       RahkaranResponse<RahkaranCustomer[] | null>
-    >(url, { method: 'GET' });
+    >(url, { method: 'GET' }, ctx);
 
     // Some Rahkaran endpoints report an expired session with HTTP 200.
     if (this.isSessionExpiredResponse(response)) {
+      this.logger.warn(
+        structuredLog('rahkaran.auth.session_expired_mid_request', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          operation: 'customersByMobile',
+        }),
+      );
+
       this.clearState();
       await this.login();
       response = await this.request<
         RahkaranResponse<RahkaranCustomer[] | null>
-      >(url, { method: 'GET', headers: this.authHeaders() });
+      >(url, { method: 'GET', headers: this.authHeaders() }, ctx);
     }
 
     if (response?.metadata?.isSuccessfull !== true) {
@@ -1154,7 +1289,11 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
   async createSalesInvoice(
     input: CreateRahkaranInvoiceInput,
+    ctx?: RahkaranLogContext,
   ): Promise<RahkaranInvoiceResponse> {
+    const stage = 'save_invoice';
+    const startedAt = Date.now();
+
     await this.ensureAuthenticated();
 
     if (!input.customerId) {
@@ -1270,11 +1409,36 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       payments: [],
     };
 
-    this.logger.log(
-      `🧾 ثبت فاکتور فروش در راهکاران برای مشتری ${input.customerId}`,
+    const totalQuantity = input.items.reduce(
+      (sum, item) => sum + Number(item.quantity || 0),
+      0,
     );
 
-    this.logger.debug(`Rahkaran invoice payload: ${JSON.stringify(payload)}`);
+    this.logger.log(
+      structuredLog('rahkaran.invoice.create.start', {
+        correlationId: ctx?.correlationId,
+        orderId: ctx?.orderId,
+        orderNumber: ctx?.orderNumber,
+        attempt: ctx?.attempt,
+        stage,
+        customerId: input.customerId,
+        warehouseId: document.inventoryId,
+        itemsCount: items.length,
+        totalQuantity,
+        receiptAmount: Number(input.receiptAmount),
+      }),
+    );
+
+    // Payload کامل فقط در سطح DEBUG و پس از حذف داده‌های حساس لاگ می‌شود.
+    this.logger.debug(
+      structuredLog('rahkaran.invoice.create.payload', {
+        correlationId: ctx?.correlationId,
+        orderId: ctx?.orderId,
+        attempt: ctx?.attempt,
+        stage,
+        payload: sanitizeForLog(payload),
+      }),
+    );
 
     const response = await this.request<any>(
       `${this.baseUrl}/Retail/Api/RetailDocuments/InvoiceService.svc/SaveInvoice`,
@@ -1288,9 +1452,26 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
         data: payload,
       },
+      ctx,
     );
 
     if (!this.isSuccessful(response)) {
+      this.logger.error(
+        structuredLog('rahkaran.invoice.create.rejected', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          orderNumber: ctx?.orderNumber,
+          attempt: ctx?.attempt,
+          stage,
+          customerId: input.customerId,
+          itemsCount: items.length,
+          receiptAmount: Number(input.receiptAmount),
+          durationMs: Date.now() - startedAt,
+          rahkaranError: this.getRahkaranError(response),
+          responseBody: truncateForLog(stringifySafe(response), 500),
+        }),
+      );
+
       throw new BadRequestException(
         this.getRahkaranError(response) ||
           'ثبت فاکتور فروش در راهکاران ناموفق بود.',
@@ -1300,163 +1481,273 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     const result = response?.result ?? response;
 
     this.logger.log(
-      `✅ فاکتور راهکاران با موفقیت ثبت شد. ` +
-        `ID: ${result?.id ?? result?.invoiceId ?? 'unknown'} ` +
-        `Number: ${result?.number ?? 'unknown'}`,
+      structuredLog('rahkaran.invoice.create.success', {
+        correlationId: ctx?.correlationId,
+        orderId: ctx?.orderId,
+        orderNumber: ctx?.orderNumber,
+        attempt: ctx?.attempt,
+        stage,
+        customerId: input.customerId,
+        invoiceId: result?.id ?? result?.invoiceId ?? null,
+        invoiceNumber: result?.number ?? null,
+        durationMs: Date.now() - startedAt,
+      }),
     );
 
     return result;
   }
 
-  async syncOrderToRahkaran(order: {
-    id: number;
-    orderNumber: string;
-    finalPrice: number;
-    user: {
-      phone: string;
+  async syncOrderToRahkaran(
+    order: {
+      id: number;
+      orderNumber: string;
+      finalPrice: number;
+      user: {
+        phone: string;
+      };
+      items: Array<{
+        quantity: number;
+        price: number;
+        variant: {
+          sku: string | null;
+        } | null;
+      }>;
+    },
+    ctx?: RahkaranLogContext,
+  ) {
+    const correlationId = ctx?.correlationId ?? createCorrelationId('rah-inv');
+
+    // ctx محلی که stage در آن به‌روز می‌شود و به همهٔ فراخوان‌های
+    // پایین‌دستی منتقل می‌شود.
+    const logCtx: RahkaranLogContext = {
+      ...ctx,
+      correlationId,
+      orderId: order.id,
+      orderNumber: order.orderNumber,
+      stage: 'start',
     };
-    items: Array<{
-      quantity: number;
-      price: number;
-      variant: {
-        sku: string | null;
-      } | null;
-    }>;
-  }) {
-    await this.ensureAuthenticated();
 
-    if (!order.items?.length) {
-      throw new BadRequestException(
-        `سفارش ${order.id} آیتمی برای ثبت در راهکاران ندارد.`,
+    const startedAt = Date.now();
+
+    this.logger.log(
+      structuredLog('rahkaran.invoice.sync.start', {
+        correlationId,
+        orderId: order.id,
+        orderNumber: order.orderNumber,
+        attempt: ctx?.attempt ?? 1,
+        itemsCount: order.items?.length ?? 0,
+        finalPriceToman: Number(order.finalPrice),
+        customerMobile: maskMobile(order.user?.phone),
+      }),
+    );
+
+    try {
+      await this.ensureAuthenticated();
+
+      if (!order.items?.length) {
+        throw new BadRequestException(
+          `سفارش ${order.id} آیتمی برای ثبت در راهکاران ندارد.`,
+        );
+      }
+
+      logCtx.stage = 'resolve_customer';
+
+      const customerId = await this.getCustomerIdByMobile(
+        order.user?.phone,
+        logCtx,
       );
-    }
-
-    const customerId = await this.getCustomerIdByMobile(order.user?.phone);
-    const invoiceItems: CreateRahkaranInvoiceItem[] = [];
-
-    for (const item of order.items) {
-      const sku = item.variant?.sku?.trim();
-
-      if (!sku) {
-        throw new BadRequestException(
-          `برای آیتم سفارش ${order.id}، SKU/Barcode وجود ندارد.`,
-        );
-      }
-
-      // =====================================================
-      // دریافت اطلاعات محصول مستقیماً از راهکاران
-      // =====================================================
-
-      const productResponse = await this.getRetailProductByBarcode(sku);
-
-      const rahkaranProduct = productResponse?.product ?? productResponse;
-
-      if (!rahkaranProduct?.productId) {
-        throw new BadRequestException(
-          `محصول با بارکد ${sku} در راهکاران پیدا نشد.`,
-        );
-      }
-
-      const unitId = rahkaranProduct.RetailUnitRef ?? rahkaranProduct.unitRef;
-
-      if (!unitId) {
-        throw new BadRequestException(
-          `واحد فروش محصول ${rahkaranProduct.productId} در راهکاران مشخص نیست.`,
-        );
-      }
-
-      const rahkaranFee = Number(rahkaranProduct.fee);
-
-      if (!Number.isFinite(rahkaranFee)) {
-        throw new BadRequestException(
-          `قیمت محصول ${rahkaranProduct.productId} در راهکاران معتبر نیست.`,
-        );
-      }
-
-      const quantity = Number(item.quantity);
-
-      // =====================================================
-      // موجودی هر دو انبار
-      // =====================================================
-
-      const remainingQuantityInfo = await this.getRemainingQuantityInfo(
-        rahkaranProduct.productId,
-      );
-
-      const { hadishMall, retail, total } = extractBothWarehouseStocks(
-        remainingQuantityInfo,
-      );
-
-      // =====================================================
-      // بررسی کفایت موجودی (هدیش مال + خرده‌فروشی)
-      // =====================================================
-
-      if (total < quantity) {
-        throw new BadRequestException(
-          `موجودی کافی برای محصول ${rahkaranProduct.productName} ` +
-            `(SKU=${sku}) در انبارهای راهکاران وجود ندارد. ` +
-            `لازم: ${quantity} | ` +
-            `هدیش مال: ${hadishMall.quantity} | ` +
-            `خرده‌فروشی: ${retail.quantity}`,
-        );
-      }
-
-      // =====================================================
-      // تقسیم بین انبارها:
-      //
-      // اول انبار هدیش مال،
-      // اگر کافی نبود هرچقدر بود از هدیش مال،
-      // باقی از انبار خرده‌فروشی.
-      // =====================================================
-
-      const fromHadishMall = Math.min(quantity, hadishMall.quantity);
-
-      const fromRetail = quantity - fromHadishMall;
-
-      if (fromHadishMall > 0) {
-        invoiceItems.push({
-          productId: Number(rahkaranProduct.productId),
-          unitId: Number(unitId),
-          quantity: fromHadishMall,
-          fee: rahkaranFee,
-          price: Number(item.price),
-          inventoryId: HADISH_MALL_WAREHOUSE_ID,
-        });
-      }
-
-      if (fromRetail > 0) {
-        invoiceItems.push({
-          productId: Number(rahkaranProduct.productId),
-          unitId: Number(unitId),
-          quantity: fromRetail,
-          fee: rahkaranFee,
-          price: Number(item.price),
-          inventoryId: RETAIL_WAREHOUSE_ID,
-        });
-      }
 
       this.logger.log(
-        `🛒 Order ${order.id} -> ` +
-          `SKU ${sku} -> Rahkaran Product ${rahkaranProduct.productId} | ` +
-          `QTY ${quantity} = هدیش مال ${fromHadishMall} + خرده‌فروشی ${fromRetail}`,
+        structuredLog('rahkaran.invoice.customer_resolved', {
+          correlationId,
+          orderId: order.id,
+          attempt: ctx?.attempt,
+          stage: logCtx.stage,
+          customerId,
+          customerMobile: maskMobile(order.user?.phone),
+        }),
       );
+
+      logCtx.stage = 'prepare_items';
+
+      const invoiceItems: CreateRahkaranInvoiceItem[] = [];
+
+      for (const item of order.items) {
+        const sku = item.variant?.sku?.trim();
+
+        if (!sku) {
+          throw new BadRequestException(
+            `برای آیتم سفارش ${order.id}، SKU/Barcode وجود ندارد.`,
+          );
+        }
+
+        // =====================================================
+        // دریافت اطلاعات محصول مستقیماً از راهکاران
+        // =====================================================
+
+        const productResponse = await this.getRetailProductByBarcode(
+          sku,
+          1,
+          10,
+          logCtx,
+        );
+
+        const rahkaranProduct = productResponse?.product ?? productResponse;
+
+        if (!rahkaranProduct?.productId) {
+          throw new BadRequestException(
+            `محصول با بارکد ${sku} در راهکاران پیدا نشد.`,
+          );
+        }
+
+        const unitId = rahkaranProduct.RetailUnitRef ?? rahkaranProduct.unitRef;
+
+        if (!unitId) {
+          throw new BadRequestException(
+            `واحد فروش محصول ${rahkaranProduct.productId} در راهکاران مشخص نیست.`,
+          );
+        }
+
+        const rahkaranFee = Number(rahkaranProduct.fee);
+
+        if (!Number.isFinite(rahkaranFee)) {
+          throw new BadRequestException(
+            `قیمت محصول ${rahkaranProduct.productId} در راهکاران معتبر نیست.`,
+          );
+        }
+
+        const quantity = Number(item.quantity);
+
+        // =====================================================
+        // موجودی هر دو انبار
+        // =====================================================
+
+        const remainingQuantityInfo = await this.getRemainingQuantityInfo(
+          rahkaranProduct.productId,
+          logCtx,
+        );
+
+        const { hadishMall, retail, total } = extractBothWarehouseStocks(
+          remainingQuantityInfo,
+        );
+
+        // =====================================================
+        // بررسی کفایت موجودی (هدیش مال + خرده‌فروشی)
+        // =====================================================
+
+        if (total < quantity) {
+          throw new BadRequestException(
+            `موجودی کافی برای محصول ${rahkaranProduct.productName} ` +
+              `(SKU=${sku}) در انبارهای راهکاران وجود ندارد. ` +
+              `لازم: ${quantity} | ` +
+              `هدیش مال: ${hadishMall.quantity} | ` +
+              `خرده‌فروشی: ${retail.quantity}`,
+          );
+        }
+
+        // =====================================================
+        // تقسیم بین انبارها:
+        //
+        // اول انبار هدیش مال،
+        // اگر کافی نبود هرچقدر بود از هدیش مال،
+        // باقی از انبار خرده‌فروشی.
+        // =====================================================
+
+        const fromHadishMall = Math.min(quantity, hadishMall.quantity);
+
+        const fromRetail = quantity - fromHadishMall;
+
+        if (fromHadishMall > 0) {
+          invoiceItems.push({
+            productId: Number(rahkaranProduct.productId),
+            unitId: Number(unitId),
+            quantity: fromHadishMall,
+            fee: rahkaranFee,
+            price: Number(item.price),
+            inventoryId: HADISH_MALL_WAREHOUSE_ID,
+          });
+        }
+
+        if (fromRetail > 0) {
+          invoiceItems.push({
+            productId: Number(rahkaranProduct.productId),
+            unitId: Number(unitId),
+            quantity: fromRetail,
+            fee: rahkaranFee,
+            price: Number(item.price),
+            inventoryId: RETAIL_WAREHOUSE_ID,
+          });
+        }
+
+        this.logger.log(
+          structuredLog('rahkaran.invoice.item_prepared', {
+            correlationId,
+            orderId: order.id,
+            attempt: ctx?.attempt,
+            stage: logCtx.stage,
+            sku,
+            rahkaranProductId: rahkaranProduct.productId,
+            quantity,
+            fromHadishMall,
+            fromRetail,
+            hadishMallAvailable: hadishMall.quantity,
+            retailAvailable: retail.quantity,
+          }),
+        );
+      }
+
+      logCtx.stage = 'save_invoice';
+
+      // =====================================================
+      // ثبت فاکتور
+      // =====================================================
+
+      const invoice = await this.createSalesInvoice(
+        {
+          customerId,
+
+          items: invoiceItems,
+
+          receiptAmount: Number(order.finalPrice) * 10,
+
+          description: `Order ${order.orderNumber}`,
+        },
+        logCtx,
+      );
+
+      this.logger.log(
+        structuredLog('rahkaran.invoice.sync.completed', {
+          correlationId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          attempt: ctx?.attempt,
+          invoiceId: invoice?.id ?? invoice?.invoiceId ?? null,
+          invoiceNumber: invoice?.number ?? null,
+          itemsCount: invoiceItems.length,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+
+      return invoice;
+    } catch (error) {
+      // خطای نهایی فرآیند؛ در کنار لاگ‌های جزئی‌تر هر مرحله ثبت می‌شود تا
+      // مرحله‌ای که درخواست در آن شکست خورده دقیقاً مشخص باشد.
+      this.logger.error(
+        structuredLog('rahkaran.invoice.sync.failed', {
+          correlationId,
+          orderId: order.id,
+          orderNumber: order.orderNumber,
+          attempt: ctx?.attempt,
+          stage: logCtx.stage,
+          itemsCount: order.items?.length ?? 0,
+          finalPriceToman: Number(order.finalPrice),
+          durationMs: Date.now() - startedAt,
+          error: serializeError(error),
+        }),
+      );
+
+      throw error;
     }
-
-    // =====================================================
-    // ثبت فاکتور
-    // =====================================================
-
-    const invoice = await this.createSalesInvoice({
-      customerId,
-
-      items: invoiceItems,
-
-      receiptAmount: Number(order.finalPrice) * 10,
-
-      description: `Order ${order.orderNumber}`,
-    });
-
-    return invoice;
   }
 
   private isSessionExpiredResponse(response: any): boolean {
@@ -1481,17 +1772,22 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   private async authenticatedRequest<T>(
     url: string,
     config: AxiosRequestConfig = {},
+    ctx?: RahkaranLogContext,
   ): Promise<T> {
     await this.ensureAuthenticated();
 
     try {
-      return await this.request<T>(url, {
-        ...config,
-        headers: {
-          ...(config.headers || {}),
-          ...this.authHeaders(),
+      return await this.request<T>(
+        url,
+        {
+          ...config,
+          headers: {
+            ...(config.headers || {}),
+            ...this.authHeaders(),
+          },
         },
-      });
+        ctx,
+      );
     } catch (error) {
       const message = this.getErrorMessage(error);
 
@@ -1507,7 +1803,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       }
 
       this.logger.warn(
-        `⚠️ Session راهکاران معتبر نیست. Login مجدد انجام می‌شود. Error: ${message}`,
+        structuredLog('rahkaran.auth.session_invalid_retry', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          endpoint: this.toEndpointPath(url),
+          reason: truncateForLog(message, 200),
+        }),
       );
 
       this.clearState();
@@ -1515,16 +1817,25 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       await this.login();
 
       this.logger.log(
-        '🔄 Login مجدد موفق بود. درخواست Rahkaran دوباره ارسال می‌شود.',
+        structuredLog('rahkaran.auth.relogin_success', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          endpoint: this.toEndpointPath(url),
+        }),
       );
 
-      return await this.request<T>(url, {
-        ...config,
-        headers: {
-          ...(config.headers || {}),
-          ...this.authHeaders(),
+      return await this.request<T>(
+        url,
+        {
+          ...config,
+          headers: {
+            ...(config.headers || {}),
+            ...this.authHeaders(),
+          },
         },
-      });
+        ctx,
+      );
     }
   }
 }

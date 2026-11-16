@@ -211,12 +211,104 @@ describe('ClubService Diatech API contract', () => {
       CustomerId: 7,
       FinalPrice: 25000,
       CurrentCredit: 7000,
+      // طبق قرارداد دایاتک: مبلغ نهایی بعد از کسورات
+      FinalValue: 25000 - 7000,
     });
     expect(requests.slice(-2)).toEqual([
       { method: 'POST', url: '/api/v1/invoices' },
       { method: 'POST', url: '/api/v1/invoices/88/approve' },
     ]);
   });
+
+  it('sends FinalValue equal to FinalPrice when no club credit is used', async () => {
+    mockCustomerThenInvoiceResponses();
+
+    await service.createInvoice({
+      customerCode: '09120000000',
+      finalPrice: 2500,
+    });
+
+    expect(httpService.request.mock.calls[1][0].data).toMatchObject({
+      CustomerId: 7,
+      FinalPrice: 25000,
+      CurrentCredit: 0,
+      FinalValue: 25000,
+    });
+  });
+
+  it('clamps credit above the invoice total so FinalValue never goes negative', async () => {
+    mockCustomerThenInvoiceResponses();
+
+    await service.createInvoice({
+      customerCode: '09120000000',
+      finalPrice: 2500,
+      currentCredit: 5000,
+    });
+
+    expect(httpService.request.mock.calls[1][0].data).toMatchObject({
+      FinalPrice: 25000,
+      CurrentCredit: 25000,
+      FinalValue: 0,
+    });
+  });
+
+  it.each([
+    [{ finalPrice: 0 }],
+    [{ finalPrice: -100 }],
+    [{ finalPrice: NaN }],
+    [{ finalPrice: 'not-a-number' }],
+  ])(
+    'rejects invalid invoice amounts without calling Dayatek: %o',
+    async (data: any) => {
+      const before = httpService.request.mock.calls.length;
+
+      await expect(
+        service.createInvoice({
+          customerCode: '09120000000',
+          ...data,
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+
+      // نه lookup مشتری و نه ثبت فاکتور نباید فراخوانی شود
+      expect(httpService.request.mock.calls.length).toBe(before);
+    },
+  );
+
+  it('rejects non-numeric club credit without calling Dayatek', async () => {
+    const before = httpService.request.mock.calls.length;
+
+    await expect(
+      service.createInvoice({
+        customerCode: '09120000000',
+        finalPrice: 2500,
+        currentCredit: 'invalid' as any,
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(httpService.request.mock.calls.length).toBe(before);
+  });
+
+  function mockCustomerThenInvoiceResponses() {
+    httpService.request
+      .mockImplementationOnce(config => {
+        requests.push({ method: config.method, url: config.url });
+        return of({
+          data: {
+            Succeeded: true,
+            Payload: {
+              Id: 7,
+              CustomerCode: '09120000000',
+              FirstName: 'Test',
+              LastName: 'Customer',
+            },
+          },
+        });
+      })
+      .mockImplementationOnce(config => {
+        requests.push({ method: config.method, url: config.url });
+        return of({ data: { Succeeded: true, Payload: { Id: 88 } } });
+      });
+  }
 
   it('reports missing customers as 404 and preserves upstream validation failures', async () => {
     httpService.request.mockReturnValueOnce(

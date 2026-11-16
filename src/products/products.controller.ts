@@ -27,6 +27,30 @@ export class ProductsController {
     });
   }
 
+  /**
+   * گزینه‌های واقعی فیلتر یک دسته‌بندی مشخص (برای سایدبار صفحات آرشیو).
+   *
+   * - این مسیر جدید اجازه می‌دهد صفحاتِ دسته فقط سایزها/رنگ‌هایی را نشان
+   *   دهند که در همان دسته هستند و سیستم‌های سایزبندی سایت را با هم
+   *   مخلوط نمی‌کند. `GET /products/size` و `GET /products/color` برای
+   *   گزینه‌های سراسری (و بقیه‌ی قسمت‌های قدیمی) به همان شکل قبلی
+   *   باقی می‌مانند.
+   *
+   * فرمت پاسخ: `{ colors: [...], sizes: [...] }` — هر عنصر `{id, name}` است
+   * و رنگ‌ها علاوه بر آن `hexCode` دارند.
+   */
+  @Get('/filters')
+  filtersByCategory(@Query('categoryIds') categoryIds?: string) {
+    const ids = categoryIds
+      ? categoryIds
+          .split(',')
+          .map(Number)
+          .filter(n => Number.isFinite(n))
+      : [];
+
+    return this.productsService.findFiltersByCategory(ids);
+  }
+
   @Get('/color')
   allColors() {
     return this.productsService.allColors();

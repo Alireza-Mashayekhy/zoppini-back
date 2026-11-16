@@ -1259,6 +1259,83 @@ export class ProductsService {
     return this.colorRepo.find();
   }
 
+  /**
+   * رنگ‌ها و سایزهای واقعاً موجود در یک حوزه‌ی دسته‌بندی (برای فیلترهای صفحه‌ی
+   * دسته).
+   *
+   * به‌جای برگرداندن همه‌ی رنگ‌ها/سایزهای تعریف‌شده در سیستم، فقط همان‌هایی
+   * برمی‌گردند که دست‌کم یک variant از محصولاتِ درونِ حوزه‌ی دسته به آن‌ها متصل
+   * است؛ بنابراین مثلاً صفحه‌ی کفش گزینه‌های ۴۰–۴۵ و صفحه‌ی کت‌وشلوار ۴۶–۵۸
+   * نشان می‌دهد و دو سیستم سایزبندی هیچ‌وقت مخلوط نمی‌شوند.
+   *
+   * حوزه با `findWithDescendantIds` گسترش می‌یابد (همان منطق‌ی که خودِ لیست‌بندی
+   * استفاده می‌کند) تا زیردسته‌ها هم پوشش داده شوند. اگر categoryIds خالی یا
+   * ناموثر باشد، آرایه‌های خالی برمی‌گردد (صدا باعث اشتباه نمی‌شود، چون فیلتر
+   * نباید با گزینه‌های نامرتبط از بخش دیگر پر شود).
+   */
+  async findFiltersByCategory(categoryIds: number[]) {
+    const cleanIds = (categoryIds || []).filter(
+      id => Number.isFinite(id) && id > 0,
+    );
+
+    if (!cleanIds.length) {
+      return { colors: [], sizes: [] };
+    }
+
+    const categoryScope =
+      await this.categoriesService.findWithDescendantIds(cleanIds);
+
+    if (!categoryScope.length) {
+      return { colors: [], sizes: [] };
+    }
+
+    const colors = await this.colorRepo
+      .createQueryBuilder('color')
+      .select('color.id', 'id')
+      .addSelect('color.name', 'name')
+      .addSelect('color.hexCode', 'hexCode')
+      .where(
+        `EXISTS (
+          SELECT 1
+          FROM variants v
+          INNER JOIN product_categories pc ON pc.product_id = v.product_id
+          WHERE v.color_id = color.id
+            AND pc.category_id IN (:...ids)
+        )`,
+        { ids: categoryScope },
+      )
+      .groupBy('color.id')
+      .orderBy('color.id')
+      .getRawMany<{ id: number; name: string; hexCode: string }>();
+
+    const sizes = await this.sizeRepo
+      .createQueryBuilder('size')
+      .select('size.id', 'id')
+      .addSelect('size.name', 'name')
+      .where(
+        `EXISTS (
+          SELECT 1
+          FROM variants v
+          INNER JOIN product_categories pc ON pc.product_id = v.product_id
+          WHERE v.size_id = size.id
+            AND pc.category_id IN (:...ids)
+        )`,
+        { ids: categoryScope },
+      )
+      .groupBy('size.id')
+      .orderBy('size.id')
+      .getRawMany<{ id: number; name: string }>();
+
+    return {
+      colors: colors.map(color => ({
+        id: Number(color.id),
+        name: color.name,
+        hexCode: color.hexCode,
+      })),
+      sizes: sizes.map(size => ({ id: Number(size.id), name: size.name })),
+    };
+  }
+
   async updateColor(id: number, updateColorDto: UpdateColorDto) {
     const color = await this.colorRepo.findOne({ where: { id } });
     if (!color) {

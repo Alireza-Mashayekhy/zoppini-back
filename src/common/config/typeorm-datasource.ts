@@ -16,6 +16,8 @@ import { OrderUpdatedAtPrecision1800000000000 } from 'src/migrations/18000000000
 import { AddDigipayUgpFields1801000000000 } from 'src/migrations/1801000000000-AddDigipayUgpFields';
 import { PromotionSystem1802000000000 } from 'src/migrations/1802000000000-PromotionSystem';
 import { AddClubCreditPayment1803000000000 } from 'src/migrations/1803000000000-AddClubCreditPayment';
+import { FirstPurchaseGift1804000000000 } from 'src/migrations/1804000000000-FirstPurchaseGift';
+import { RahkaranInvoiceSync1805000000000 } from 'src/migrations/1805000000000-RahkaranInvoiceSync';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -39,6 +41,8 @@ export default new DataSource({
     AddDigipayUgpFields1801000000000,
     PromotionSystem1802000000000,
     AddClubCreditPayment1803000000000,
+    FirstPurchaseGift1804000000000,
+    RahkaranInvoiceSync1805000000000,
   ],
   synchronize: false,
 });

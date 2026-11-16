@@ -14,6 +14,7 @@ import { AddDigipayUgpFields1801000000000 } from 'src/migrations/1801000000000-A
 import { PromotionSystem1802000000000 } from 'src/migrations/1802000000000-PromotionSystem';
 import { AddClubCreditPayment1803000000000 } from 'src/migrations/1803000000000-AddClubCreditPayment';
 import { FirstPurchaseGift1804000000000 } from 'src/migrations/1804000000000-FirstPurchaseGift';
+import { RahkaranInvoiceSync1805000000000 } from 'src/migrations/1805000000000-RahkaranInvoiceSync';
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
@@ -65,6 +66,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         PromotionSystem1802000000000,
         AddClubCreditPayment1803000000000,
         FirstPurchaseGift1804000000000,
+        RahkaranInvoiceSync1805000000000,
       ],
       migrationsRun,
 
