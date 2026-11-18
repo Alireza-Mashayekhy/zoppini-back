@@ -623,6 +623,10 @@ export class CartsService {
               ? Number(result.discount.maxDiscountAmount)
               : null,
           discountAmount: itemDiscountPrice,
+          // تخفیف متوالی: مجموع مراحل همان چیزی است که در سبد/سفارش دیده می‌شود
+          stages: result.stages,
+          stacked: result.stacked,
+          effectivePercent: result.effectivePercent,
         };
       } else {
         (variant as any).discount = null;

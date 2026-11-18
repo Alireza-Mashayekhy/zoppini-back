@@ -665,6 +665,10 @@ export class ProductsService {
             discount.maxDiscountAmount != null
               ? Number(discount.maxDiscountAmount)
               : null,
+          // مراحل متوالی (برای تخفیف تک‌مرحله‌ای هم آرایهٔ یک‌عضوی است)
+          stages: discountResult.stages,
+          stacked: discountResult.stacked,
+          effectivePercent: discountResult.effectivePercent,
         };
 
         /**
@@ -677,9 +681,8 @@ export class ProductsService {
          * اعلام کند. `null` یعنی تخفیف بی‌پایان است و `priceValidUntil`
          * منتشر نمی‌شود.
          */
-        (variant as any).discountExpiresAt = discount.expiresAt
-          ? new Date(discount.expiresAt).toISOString()
-          : null;
+        // زودترین انقضای مراحل (تخفیف متوالی) تا priceValidUntil درست بماند.
+        (variant as any).discountExpiresAt = discountResult.validUntil;
       }
     }
 
@@ -1397,9 +1400,12 @@ export class ProductsService {
       .leftJoinAndSelect('variant.size', 'size')
       .leftJoinAndSelect('products.categories', 'category')
       .leftJoinAndSelect('products.colorImages', 'colorImages')
-      .leftJoinAndSelect('colorImages.color', 'imageColor')
+      .leftJoinAndSelect('colorImages.color', 'imageColor');
 
-      .where(
+    // اگر دست‌کم یک فروش ویژه روی «همهٔ محصولات» فعال باشد، فیلتر دامنه لازم
+    // نیست؛ در غیر این صورت فقط محصولات/دسته‌های مشمول نمایش داده می‌شوند.
+    if (!scope.appliesToAll) {
+      qb.where(
         `(
           ${scope.productIds.length ? 'products.id IN (:...saleProductIds)' : '1 = 0'}
           OR EXISTS (
@@ -1414,6 +1420,7 @@ export class ProductsService {
           saleCategoryIds: scope.categoryIds,
         },
       );
+    }
 
     // فقط محصولاتی که حداقل یک variant موجود دارند
     if (onlyInStock) {
@@ -1658,7 +1665,11 @@ export class ProductsService {
         discountAmount,
         originalPrice,
         finalPrice,
-        expiresAt: discount.expiresAt,
+        expiresAt: best.validUntil ?? discount.expiresAt,
+        // سازگاری کامل: قیمت نهایی همان است که سبد/سفارش محاسبه می‌کند.
+        stages: best.stages,
+        stacked: best.stacked,
+        effectivePercent: best.effectivePercent,
       };
     }
 

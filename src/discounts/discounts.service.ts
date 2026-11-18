@@ -20,9 +20,15 @@ import {
   DiscountKind,
   DiscountType,
   OPENING_DISCOUNT_CODE,
+  ProductDiscountStage,
 } from './entities/discount.entity';
 import { DiscountUsage } from './entities/discount-code-usage.entity';
 import { DiscountRedemption } from './entities/discount-redemption.entity';
+import {
+  calculateStageDiscount,
+  isProductInSaleScope,
+  resolveSequentialDiscountForProduct,
+} from './sale-stacking';
 
 const SURVEY_DISCOUNT_CODE_PREFIX = 'SURVEY-';
 
@@ -41,9 +47,25 @@ const SALES_CACHE_TTL_MS = 30_000;
 export type ActiveSale = Discount & { scopeCategoryIds: Set<number> };
 
 export interface SaleResult {
+  /**
+   * تخفیفِ مرحلهٔ اول (برای سازگاری با مصرف‌کننده‌های قبلی).
+   * مبلغ/قیمت نهایی همهٔ مراحل را شامل می‌شود.
+   */
   discount: ActiveSale;
+  /** مجموع تخفیف همهٔ مراحل روی هر واحد */
   discountAmount: number;
   finalPrice: number;
+  /** جزئیات مرحله‌به‌مرحله (برای نمایش و پشتیبانی) */
+  stages: ProductDiscountStage[];
+  /** true اگر بیش از یک مرحله اعمال شده باشد */
+  stacked: boolean;
+  /** درصد تخفیف مؤثر پس از همهٔ مراحل */
+  effectivePercent: number;
+  /**
+   * زودترین زمان پایان اعتبار میان مراحل اعمال‌شده (ISO).
+   * بعد از آن، دست‌کم یکی از تخفیف‌ها منقضی می‌شود و قیمت تغییر می‌کند.
+   */
+  validUntil: string | null;
 }
 
 export interface CartLineInput {
@@ -164,6 +186,9 @@ export class DiscountService implements OnModuleInit {
       categories: [],
       excludedProducts: [],
       excludedCategories: [],
+      stackable: false,
+      stackPriority: 0,
+      appliesToAllProducts: false,
     });
 
     if (kind === DiscountKind.SALE) {
@@ -173,6 +198,11 @@ export class DiscountService implements OnModuleInit {
       discount.maxUsesPerUser = null;
       discount.maxTotalUses = null;
       discount.excludeSaleItems = false;
+
+      // فیلدهای «تخفیف متوالی» فقط برای فروش ویژه معنا دارند.
+      discount.stackable = dto.stackable ?? false;
+      discount.stackPriority = this.normalizeStackPriority(dto.stackPriority);
+      discount.appliesToAllProducts = dto.appliesToAllProducts ?? false;
 
       discount.products = await this.loadProducts(dto.productIds);
       discount.categories = await this.loadCategories(dto.categoryIds);
@@ -373,6 +403,18 @@ export class DiscountService implements OnModuleInit {
         discount.categories = await this.loadCategories(dto.categoryIds);
       }
 
+      if (dto.stackable !== undefined) {
+        discount.stackable = dto.stackable;
+      }
+
+      if (dto.stackPriority !== undefined) {
+        discount.stackPriority = this.normalizeStackPriority(dto.stackPriority);
+      }
+
+      if (dto.appliesToAllProducts !== undefined) {
+        discount.appliesToAllProducts = dto.appliesToAllProducts;
+      }
+
       this.assertSaleRules(discount);
     } else {
       if (dto.title !== undefined) {
@@ -468,17 +510,42 @@ export class DiscountService implements OnModuleInit {
       throw new BadRequestException('درصد تخفیف نمی‌تواند بیشتر از 100 باشد.');
     }
 
-    if (value <= 0) {
+    if (!Number.isFinite(value) || value <= 0) {
       throw new BadRequestException('مقدار تخفیف باید بیشتر از صفر باشد.');
     }
   }
 
   private assertSaleRules(discount: Discount) {
+    // «همهٔ محصولات» یک دامنهٔ معتبر است و نیازی به انتخاب دستی ندارد.
+    if (discount.appliesToAllProducts) {
+      return;
+    }
+
     if (!discount.products?.length && !discount.categories?.length) {
       throw new BadRequestException(
         'برای فروش ویژه حداقل یک محصول یا دسته‌بندی انتخاب کنید.',
       );
     }
+  }
+
+  /**
+   * ترتیب مرحلهٔ تخفیف متوالی: عدد صحیح نامنفی.
+   * مقدارهای نامعتبر با خطای ۴۰۰ رد می‌شوند تا ترتیب محاسبات مبهم نماند.
+   */
+  private normalizeStackPriority(value?: number | null) {
+    if (value === undefined || value === null) {
+      return 0;
+    }
+
+    const priority = Number(value);
+
+    if (!Number.isInteger(priority) || priority < 0 || priority > 1000) {
+      throw new BadRequestException(
+        'ترتیب مرحلهٔ تخفیف باید عددی صحیح بین ۰ تا ۱۰۰۰ باشد.',
+      );
+    }
+
+    return priority;
   }
 
   private normalizeTitle(title?: string | null) {
@@ -783,27 +850,13 @@ export class DiscountService implements OnModuleInit {
   // CALCULATE DISCOUNT
   // =========================================================
 
+  /**
+   * محاسبهٔ مبلغ تخفیف «یک مرحله» روی یک مبلغ.
+   * پیاده‌سازی واقعی در `sale-stacking.ts` است تا همهٔ بخش‌های سایت
+   * (کد تخفیف، فروش ویژه، سفارش) از یک فرمول استفاده کنند.
+   */
   private calculateDiscountAmount(discount: Discount, amount: number) {
-    let discountAmount = 0;
-
-    if (discount.type === DiscountType.PERCENTAGE) {
-      discountAmount = (amount * Number(discount.value)) / 100;
-    }
-
-    if (discount.type === DiscountType.FIXED) {
-      discountAmount = Number(discount.value);
-    }
-
-    if (discount.maxDiscountAmount) {
-      discountAmount = Math.min(
-        discountAmount,
-        Number(discount.maxDiscountAmount),
-      );
-    }
-
-    discountAmount = Math.min(discountAmount, amount);
-
-    return Math.max(0, discountAmount);
+    return calculateStageDiscount(discount, amount);
   }
 
   calculateProductDiscount(discount: Discount, originalPrice: number) {
@@ -880,42 +933,77 @@ export class DiscountService implements OnModuleInit {
     productId: number,
     categoryIds: number[],
   ): boolean {
-    if ((sale.products ?? []).some(product => product.id === productId)) {
-      return true;
-    }
-
-    return categoryIds.some(id => sale.scopeCategoryIds.has(id));
+    return isProductInSaleScope(sale, productId, categoryIds);
   }
 
+  /**
+   * بهترین نتیجهٔ تخفیف برای یک محصول.
+   *
+   * نام متد برای سازگاری با مصرف‌کننده‌های قبلی حفظ شده است، اما نتیجه
+   * اکنون می‌تواند شامل چند مرحلهٔ متوالی باشد:
+   *  - اگر هیچ تخفیف متوالیِ مشمولی نباشد، دقیقاً مثل قبل فقط بهترین
+   *    تخفیف غیر متوالی برمی‌گردد.
+   *  - اگر تخفیف متوالی وجود داشته باشد، زنجیرهٔ مراحل (بهترین تخفیف قدیمی
+   *    + مراحل به ترتیب اولویت) به‌صورت پشت‌سرهم روی مبلغ باقی‌مانده اعمال
+   *    می‌شود و `discountAmount`/`finalPrice` مجموع کل را نشان می‌دهند.
+   */
   pickBestSale(
     sales: ActiveSale[],
     productId: number,
     categoryIds: number[],
     originalPrice: number,
   ): SaleResult | null {
-    let best: SaleResult | null = null;
+    const result = resolveSequentialDiscountForProduct(sales, {
+      productId,
+      categoryIds,
+      originalPrice,
+    });
 
-    for (const sale of sales) {
-      if (!this.isSaleApplicable(sale, productId, categoryIds)) {
+    if (!result || result.stages.length === 0) {
+      return null;
+    }
+
+    const stages: ProductDiscountStage[] = result.stages.map(stage => ({
+      discountId: stage.discount.id,
+      title: stage.discount.title ?? null,
+      type: stage.discount.type,
+      value: Number(stage.discount.value),
+      maxDiscountAmount:
+        stage.discount.maxDiscountAmount == null
+          ? null
+          : Number(stage.discount.maxDiscountAmount),
+      discountAmount: stage.discountAmount,
+      priceBefore: stage.priceBefore,
+      priceAfter: stage.priceAfter,
+    }));
+
+    // زودترین انقضا میان مراحل؛ بعد از آن قیمت قطعاً تغییر می‌کند.
+    let validUntil: string | null = null;
+
+    for (const stage of result.stages) {
+      const expiresAt = stage.discount.expiresAt
+        ? new Date(stage.discount.expiresAt).getTime()
+        : NaN;
+
+      if (Number.isNaN(expiresAt)) {
         continue;
       }
 
-      const discountAmount = this.calculateDiscountAmount(sale, originalPrice);
-
-      if (discountAmount <= 0) {
-        continue;
-      }
-
-      if (!best || discountAmount > best.discountAmount) {
-        best = {
-          discount: sale,
-          discountAmount,
-          finalPrice: Math.max(0, originalPrice - discountAmount),
-        };
+      if (validUntil === null || expiresAt < new Date(validUntil).getTime()) {
+        validUntil = new Date(expiresAt).toISOString();
       }
     }
 
-    return best;
+    return {
+      // مرحلهٔ اول؛ برای حفظ قرارداد قبلی `discount` یک تخفیف واقعی است.
+      discount: result.stages[0].discount,
+      discountAmount: result.discountAmount,
+      finalPrice: result.finalPrice,
+      stages,
+      stacked: result.stacked,
+      effectivePercent: result.effectivePercent,
+      validUntil,
+    };
   }
 
   async getBestDiscountForProduct(
@@ -949,7 +1037,14 @@ export class DiscountService implements OnModuleInit {
     const productIds = new Set<number>();
     const categoryIds = new Set<number>();
 
+    let appliesToAll = false;
+
     for (const sale of sales) {
+      // یک تخفیف سراسری کافی است تا همهٔ محصولات در صفحهٔ «فروش ویژه» بیایند.
+      if (sale.appliesToAllProducts) {
+        appliesToAll = true;
+      }
+
       for (const product of sale.products ?? []) {
         productIds.add(product.id);
       }
@@ -960,6 +1055,7 @@ export class DiscountService implements OnModuleInit {
     }
 
     return {
+      appliesToAll,
       productIds: Array.from(productIds),
       categoryIds: Array.from(categoryIds),
     };

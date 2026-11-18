@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
 } from 'class-validator';
 
@@ -105,4 +106,32 @@ export class CreateDiscountDto {
   @IsArray()
   @IsInt({ each: true })
   excludedCategoryIds?: number[];
+
+  // =========================================================
+  // تخفیف متوالی / مرحله‌ای (فقط فروش ویژه)
+  // =========================================================
+
+  /**
+   * آیا این فروش ویژه به‌عنوان یک «مرحله» روی مبلغ باقی‌ماندهٔ تخفیف‌های
+   * قبلی اعمال شود؟ پیش‌فرض false = رفتار قبلی (فقط بهترین تخفیف).
+   */
+  @IsOptional()
+  @IsBoolean()
+  stackable?: boolean;
+
+  /**
+   * ترتیب مرحله؛ عدد کوچک‌تر زودتر اعمال می‌شود (۰ تا ۱۰۰۰).
+   */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(1000)
+  stackPriority?: number;
+
+  /**
+   * اعمال روی همهٔ محصولات (بدون انتخاب محصول/دسته).
+   */
+  @IsOptional()
+  @IsBoolean()
+  appliesToAllProducts?: boolean;
 }

@@ -38,6 +38,24 @@ export interface ProductDiscount {
   discountAmount: number;
   finalPrice: number;
   originalPrice: number;
+  /** مراحل اعمال‌شده (برای تخفیف‌های متوالی بیش از یک عضو دارد) */
+  stages?: ProductDiscountStage[];
+  /** true اگر بیش از یک مرحله روی این محصول اعمال شده باشد */
+  stacked?: boolean;
+  /** درصد تخفیف مؤثر پس از همهٔ مراحل */
+  effectivePercent?: number;
+}
+
+/** یک مرحله در زنجیرهٔ تخفیف متوالی (برای نمایش/پشتیبانی) */
+export interface ProductDiscountStage {
+  discountId: number;
+  title: string | null;
+  type: DiscountType;
+  value: number;
+  maxDiscountAmount: number | null;
+  discountAmount: number;
+  priceBefore: number;
+  priceAfter: number;
 }
 
 @Entity('discounts')
@@ -112,6 +130,33 @@ export class Discount {
 
   @Column({ default: false })
   excludeSaleItems: boolean;
+
+  /**
+   * (فقط فروش ویژه) آیا این تخفیف به‌صورت «متوالی» روی مبلغ باقی‌ماندهٔ
+   * تخفیف‌های قبلی اعمال شود؟
+   *
+   * پیش‌فرض false است تا رفتار تخفیف‌های قدیمی (انتخاب بهترین تخفیف) دقیقاً
+   * حفظ شود. تخفیف‌هایی که از پنل به‌عنوان «مرحلهٔ جدید» ساخته می‌شوند
+   * این مقدار را true می‌گیرند و به ترتیب `stackPriority` اعمال می‌شوند.
+   */
+  @Column({ default: false })
+  stackable: boolean;
+
+  /**
+   * ترتیب اعمال مرحلهٔ متوالی؛ عدد کوچک‌تر زودتر اعمال می‌شود.
+   * در تساوی، شناسهٔ کوچک‌تر مقدم است (نتیجه همیشه قطعی است).
+   */
+  @Column({ type: 'int', default: 0 })
+  stackPriority: number;
+
+  /**
+   * (فقط فروش ویژه) اعمال روی همهٔ محصولات، بدون نیاز به انتخاب محصول/دسته.
+   *
+   * این فیلد عمداً جدا از رابطه‌های محصول/دسته است تا تخفیف‌های قدیمی که
+   * دامنهٔ خالی ندارند (و اگر خالی بودند نباید سراسری شوند) تغییر نکنند.
+   */
+  @Column({ default: false })
+  appliesToAllProducts: boolean;
 
   /**
    * فعال / غیرفعال بودن توسط ادمین
