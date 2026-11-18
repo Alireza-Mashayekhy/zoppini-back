@@ -26,6 +26,7 @@ describe('GET /api/products', () => {
     for (const method of [
       'leftJoinAndSelect',
       'andWhere',
+      'addSelect',
       'orderBy',
       'addOrderBy',
       'skip',
@@ -108,6 +109,31 @@ describe('GET /api/products', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('size.id IN (:...sizeIds)', {
       sizeIds: [5],
     });
+  });
+
+  it('applies the selected price range to variant prices', async () => {
+    await request(app.getHttpServer())
+      .get('/api/products?priceMin=100000&priceMax=900000')
+      .expect(200);
+
+    expect(qb.andWhere).toHaveBeenCalledWith('variant.price >= :priceMin', {
+      priceMin: 100000,
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('variant.price <= :priceMax', {
+      priceMax: 900000,
+    });
+  });
+
+  it('sorts best sellers with a real order-item aggregate', async () => {
+    await request(app.getHttpServer())
+      .get('/api/products?sort=sold:desc')
+      .expect(200);
+
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      expect.stringContaining('SUM(order_item.quantity)'),
+      'soldCount',
+    );
+    expect(qb.orderBy).toHaveBeenCalledWith('soldCount', 'DESC');
   });
 
   it('returns an empty list without invoking promotion queries unnecessarily', async () => {

@@ -1,7 +1,7 @@
 import { SelectQueryBuilder } from 'typeorm';
 
 /** فیلدهایی که مرتب‌سازی لیست محصولات روی آن‌ها مجاز است */
-const SORTABLE_FIELDS = ['title', 'price', 'createdAt', 'id'] as const;
+const SORTABLE_FIELDS = ['title', 'price', 'createdAt', 'id', 'sold'] as const;
 
 type SortableField = (typeof SORTABLE_FIELDS)[number];
 
@@ -13,12 +13,29 @@ interface ParsedProductSort {
 }
 
 /** ستون واقعی هر فیلد در کوئری محصولات */
-const FIELD_COLUMNS: Record<SortableField, string> = {
+const FIELD_COLUMNS: Record<Exclude<SortableField, 'sold'>, string> = {
   title: 'products.title',
   price: 'variant.price',
   createdAt: 'products.createdAt',
   id: 'products.id',
 };
+
+/**
+ * مجموع تعداد اقلام فروخته‌شدهٔ هر محصول از روی سفارش‌های واقعی.
+ *
+ * فقط وضعیت‌های پرداخت‌شده/ارسال‌شده/تحویل‌شده شمرده می‌شوند؛ سفارش‌های
+ * در انتظار پرداخت و لغوشده فروش محسوب نمی‌شوند. این یک زیرکوئری هم‌بسته
+ * است تا با joinهای واریانت (که هر محصول چند ردیف دارد) تعداد دوبار
+ * جمع نشود. نام جدول `order` در MySQL کلمهٔ رزرو است و باید backtick شود.
+ */
+export const PRODUCT_SOLD_COUNT_SQL = `(
+  SELECT COALESCE(SUM(order_item.quantity), 0)
+  FROM order_item
+  INNER JOIN \`order\` ON \`order\`.id = order_item.order_id
+  INNER JOIN variant ON variant.id = order_item.variant_id
+  WHERE variant.product_id = products.id
+    AND \`order\`.status IN ('paid', 'shipped', 'delivered')
+)`;
 
 /**
  * تجزیه‌ی پارامتر `sort` که به شکل `field:direction` می‌آید.
@@ -35,8 +52,9 @@ export function parseProductSort(sort?: string): ParsedProductSort | null {
   const normalizedField = (rawField || '').trim().toLowerCase();
 
   const field: SortableField =
-    SORTABLE_FIELDS.find(candidate => candidate.toLowerCase() === normalizedField) ??
-    'id';
+    SORTABLE_FIELDS.find(
+      candidate => candidate.toLowerCase() === normalizedField,
+    ) ?? 'id';
 
   const direction: SortDirection =
     (rawDirection || '').trim().toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
@@ -58,6 +76,13 @@ export function applyProductSort<T extends object>(
   const parsed = parseProductSort(sort);
 
   if (!parsed) return qb;
+
+  if (parsed.field === 'sold') {
+    qb.addSelect(PRODUCT_SOLD_COUNT_SQL, 'soldCount');
+    qb.orderBy('soldCount', parsed.direction);
+    qb.addOrderBy(FIELD_COLUMNS.id, 'DESC');
+    return qb;
+  }
 
   const column = FIELD_COLUMNS[parsed.field];
 

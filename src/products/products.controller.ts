@@ -36,8 +36,10 @@ export class ProductsController {
    *   گزینه‌های سراسری (و بقیه‌ی قسمت‌های قدیمی) به همان شکل قبلی
    *   باقی می‌مانند.
    *
-   * فرمت پاسخ: `{ colors: [...], sizes: [...] }` — هر عنصر `{id, name}` است
-   * و رنگ‌ها علاوه بر آن `hexCode` دارند.
+   * فرمت پاسخ: `{ colors: [...], sizes: [...], minPrice, maxPrice }` — هر
+   * عنصر `{id, name}` است و رنگ‌ها علاوه بر آن `hexCode` دارند. بدون
+   * `categoryIds` اجتماع گزینه‌های همهٔ محصولات موجود برمی‌گردد (صفحهٔ «همه
+   * محصولات»). `minPrice`/`maxPrice` بازهٔ واقعی همان دامنه‌اند.
    */
   @Get('/filters')
   filtersByCategory(@Query('categoryIds') categoryIds?: string) {

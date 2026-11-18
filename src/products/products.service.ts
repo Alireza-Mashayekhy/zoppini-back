@@ -61,6 +61,35 @@ const MAX_SEARCH_SUGGESTIONS = 20;
 /** تعداد پیشنهادهای پیش‌فرض */
 const DEFAULT_SEARCH_SUGGESTIONS = 8;
 
+/** تبدیل امن یک query param عددی به عدد نامنفی (برای بازهٔ قیمت). */
+function parseNonNegativeNumber(value: unknown): number | undefined {
+  const raw = Array.isArray(value) ? value[0] : value;
+
+  if (raw === undefined || raw === null || raw === '') return undefined;
+
+  const parsed = Number(raw);
+
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.floor(parsed)
+    : undefined;
+}
+
+/** خواندن لیست شناسه‌های جداشده با ویرگول از query string. */
+function parseIdList(value: unknown): number[] {
+  const raw = Array.isArray(value) ? value.join(',') : value;
+
+  if (typeof raw !== 'string' || !raw.trim()) return [];
+
+  return [
+    ...new Set(
+      raw
+        .split(',')
+        .map(Number)
+        .filter(id => Number.isSafeInteger(id) && id > 0),
+    ),
+  ];
+}
+
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
@@ -451,6 +480,19 @@ export class ProductsService {
       qb.andWhere('size.id IN (:...sizeIds)', {
         sizeIds: filters.sizeIds,
       });
+    }
+
+    // بازهٔ قیمت روی قیمت واریانت‌های همان محصول اعمال می‌شود؛ محصولی که
+    // دست‌کم یک واریانت در بازه دارد در نتایج می‌ماند.
+    const priceMin = parseNonNegativeNumber(query.priceMin);
+    const priceMax = parseNonNegativeNumber(query.priceMax);
+
+    if (priceMin !== undefined) {
+      qb.andWhere('variant.price >= :priceMin', { priceMin });
+    }
+
+    if (priceMax !== undefined) {
+      qb.andWhere('variant.price <= :priceMax', { priceMax });
     }
 
     applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
@@ -1263,71 +1305,118 @@ export class ProductsService {
   }
 
   /**
-   * رنگ‌ها و سایزهای واقعاً موجود در یک حوزه‌ی دسته‌بندی (برای فیلترهای صفحه‌ی
-   * دسته).
+   * گزینه‌های واقعی فیلتر (رنگ/سایز) و بازهٔ قیمت.
    *
-   * به‌جای برگرداندن همه‌ی رنگ‌ها/سایزهای تعریف‌شده در سیستم، فقط همان‌هایی
-   * برمی‌گردند که دست‌کم یک variant از محصولاتِ درونِ حوزه‌ی دسته به آن‌ها متصل
-   * است؛ بنابراین مثلاً صفحه‌ی کفش گزینه‌های ۴۰–۴۵ و صفحه‌ی کت‌وشلوار ۴۶–۵۸
-   * نشان می‌دهد و دو سیستم سایزبندی هیچ‌وقت مخلوط نمی‌شوند.
-   *
-   * حوزه با `findWithDescendantIds` گسترش می‌یابد (همان منطق‌ی که خودِ لیست‌بندی
-   * استفاده می‌کند) تا زیردسته‌ها هم پوشش داده شوند. اگر categoryIds خالی یا
-   * ناموثر باشد، آرایه‌های خالی برمی‌گردد (صدا باعث اشتباه نمی‌شود، چون فیلتر
-   * نباید با گزینه‌های نامرتبط از بخش دیگر پر شود).
+   * - با `categoryIds` فقط رنگ‌ها/سایزهای همان دسته (و زیردسته‌ها) برمی‌گردند.
+   * - بدون `categoryIds` (صفحهٔ «همه محصولات») اجتماع گزینه‌های همهٔ محصولات
+   *   موجود برمی‌گردد؛ هیچ لیست ثابت سراسری‌ای در فرانت استفاده نمی‌شود.
+   * - فقط واریانت‌های موجود (`stock > 0`) شمرده می‌شوند تا گزینه‌ای که
+   *   قابل خرید نیست نمایش داده نشود.
+   * - `minPrice`/`maxPrice` از همان دامنه (دسته یا همه) محاسبه می‌شوند؛
+   *   اسلایدر قیمت با همین دو عدد مقید می‌شود، نه با یک بازهٔ هاردکد.
    */
   async findFiltersByCategory(categoryIds: number[]) {
     const cleanIds = (categoryIds || []).filter(
       id => Number.isFinite(id) && id > 0,
     );
 
-    if (!cleanIds.length) {
-      return { colors: [], sizes: [] };
+    const categoryScope = cleanIds.length
+      ? await this.categoriesService.findWithDescendantIds(cleanIds)
+      : [];
+
+    // شناسه‌های نامعتبر → نتیجهٔ خالی، نه کل محصولات.
+    if (cleanIds.length && !categoryScope.length) {
+      return {
+        colors: [],
+        sizes: [],
+        minPrice: 0,
+        maxPrice: 0,
+        priceRange: { min: 0, max: 0 },
+      };
     }
 
-    const categoryScope =
-      await this.categoriesService.findWithDescendantIds(cleanIds);
+    const hasCategoryScope = categoryScope.length > 0;
 
-    if (!categoryScope.length) {
-      return { colors: [], sizes: [] };
-    }
+    const idsParam = hasCategoryScope ? { ids: categoryScope } : undefined;
 
-    const colors = await this.colorRepo
+    const colorExists = hasCategoryScope
+      ? `EXISTS (
+          SELECT 1
+          FROM variant v
+          INNER JOIN product_categories pc ON pc.product_id = v.product_id
+          WHERE v.color_id = color.id
+            AND v.stock > 0
+            AND pc.category_id IN (:...ids)
+        )`
+      : `EXISTS (
+          SELECT 1
+          FROM variant v
+          WHERE v.color_id = color.id
+            AND v.stock > 0
+        )`;
+
+    const sizeExists = hasCategoryScope
+      ? `EXISTS (
+          SELECT 1
+          FROM variant v
+          INNER JOIN product_categories pc ON pc.product_id = v.product_id
+          WHERE v.size_id = size.id
+            AND v.stock > 0
+            AND pc.category_id IN (:...ids)
+        )`
+      : `EXISTS (
+          SELECT 1
+          FROM variant v
+          WHERE v.size_id = size.id
+            AND v.stock > 0
+        )`;
+
+    const colorQuery = this.colorRepo
       .createQueryBuilder('color')
       .select('color.id', 'id')
       .addSelect('color.name', 'name')
       .addSelect('color.hexCode', 'hexCode')
-      .where(
-        `EXISTS (
-          SELECT 1
-          FROM variants v
-          INNER JOIN product_categories pc ON pc.product_id = v.product_id
-          WHERE v.color_id = color.id
-            AND pc.category_id IN (:...ids)
-        )`,
-        { ids: categoryScope },
-      )
+      .where(colorExists, idsParam)
       .groupBy('color.id')
-      .orderBy('color.id')
-      .getRawMany<{ id: number; name: string; hexCode: string }>();
+      .orderBy('color.id');
 
-    const sizes = await this.sizeRepo
+    const sizeQuery = this.sizeRepo
       .createQueryBuilder('size')
       .select('size.id', 'id')
       .addSelect('size.name', 'name')
-      .where(
+      .where(sizeExists, idsParam)
+      .groupBy('size.id')
+      .orderBy('size.id');
+
+    const priceQuery = this.variantRepo
+      .createQueryBuilder('variant')
+      .select('MIN(variant.price)', 'minPrice')
+      .addSelect('MAX(variant.price)', 'maxPrice')
+      .where('variant.stock > 0');
+
+    if (hasCategoryScope) {
+      priceQuery.andWhere(
         `EXISTS (
           SELECT 1
-          FROM variants v
-          INNER JOIN product_categories pc ON pc.product_id = v.product_id
-          WHERE v.size_id = size.id
+          FROM product_categories pc
+          WHERE pc.product_id = variant.product_id
             AND pc.category_id IN (:...ids)
         )`,
-        { ids: categoryScope },
-      )
-      .groupBy('size.id')
-      .orderBy('size.id')
-      .getRawMany<{ id: number; name: string }>();
+        idsParam,
+      );
+    }
+
+    const [colors, sizes, priceRange] = await Promise.all([
+      colorQuery.getRawMany<{ id: number; name: string; hexCode: string }>(),
+      sizeQuery.getRawMany<{ id: number; name: string }>(),
+      priceQuery.getRawOne<{
+        minPrice: string | null;
+        maxPrice: string | null;
+      }>(),
+    ]);
+
+    const minPrice = Number(priceRange?.minPrice ?? 0) || 0;
+    const maxPrice = Number(priceRange?.maxPrice ?? 0) || 0;
 
     return {
       colors: colors.map(color => ({
@@ -1336,6 +1425,12 @@ export class ProductsService {
         hexCode: color.hexCode,
       })),
       sizes: sizes.map(size => ({ id: Number(size.id), name: size.name })),
+      minPrice: Math.floor(minPrice),
+      maxPrice: Math.floor(maxPrice),
+      priceRange: {
+        min: Math.floor(minPrice),
+        max: Math.floor(maxPrice),
+      },
     };
   }
 
@@ -1425,6 +1520,44 @@ export class ProductsService {
     // فقط محصولاتی که حداقل یک variant موجود دارند
     if (onlyInStock) {
       qb.andWhere('variant.stock > 0');
+    }
+
+    const categoryIds = parseIdList(query.categoryIds);
+    if (categoryIds.length) {
+      const categoryScope =
+        await this.categoriesService.findWithDescendantIds(categoryIds);
+      if (!categoryScope.length) {
+        qb.andWhere('1 = 0');
+      } else {
+        qb.andWhere('category.id IN (:...filterCategoryIds)', {
+          filterCategoryIds: categoryScope,
+        });
+      }
+    }
+
+    const colorIds = parseIdList(query.colorIds);
+    if (colorIds.length) {
+      qb.andWhere('color.id IN (:...filterColorIds)', {
+        filterColorIds: colorIds,
+      });
+    }
+
+    const sizeIds = parseIdList(query.sizeIds);
+    if (sizeIds.length) {
+      qb.andWhere('size.id IN (:...filterSizeIds)', {
+        filterSizeIds: sizeIds,
+      });
+    }
+
+    const priceMin = parseNonNegativeNumber(query.priceMin);
+    const priceMax = parseNonNegativeNumber(query.priceMax);
+
+    if (priceMin !== undefined) {
+      qb.andWhere('variant.price >= :priceMin', { priceMin });
+    }
+
+    if (priceMax !== undefined) {
+      qb.andWhere('variant.price <= :priceMax', { priceMax });
     }
 
     applyTokenizedSearch(qb, query.search, SEARCH_FIELDS);
