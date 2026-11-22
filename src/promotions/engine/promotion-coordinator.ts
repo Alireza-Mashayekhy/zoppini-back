@@ -1,10 +1,16 @@
-import { FreeItemSelection, Promotion, PromotionRewardType, PromotionType } from '../entities/promotion.entity';
+import {
+  FreeItemSelection,
+  Promotion,
+  PromotionRewardType,
+  PromotionType,
+} from '../entities/promotion.entity';
 import {
   EvaluateOptions,
   evaluatePromotion,
   ExpandedUnit,
   isProductInScope,
   isPromotionLive,
+  lineHasProductDiscount,
   orderDiscountCandidates,
   PromotionCartLine,
   PromotionCartResult,
@@ -54,6 +60,8 @@ export function expandPromotionUnits(
 
     const quantity = Math.max(0, Math.floor(Number(line.quantity) || 0));
     const unitPrice = toToman(line.unitPrice);
+    const listPrice = toToman(line.listPrice ?? line.unitPrice);
+    const hasProductDiscount = lineHasProductDiscount(line);
 
     for (let index = 0; index < quantity; index += 1) {
       units.push({
@@ -62,10 +70,11 @@ export function expandPromotionUnits(
         productId: line.productId,
         categoryIds: line.categoryIds ?? [],
         unitPrice,
-        listPrice: toToman(line.listPrice ?? line.unitPrice),
+        listPrice,
         addedAt: Number(line.addedAt ?? 0) + index,
         unitIndex: index,
         quantity,
+        hasProductDiscount,
       });
     }
   }
@@ -93,7 +102,9 @@ function evaluationValue(evaluation: PromotionEvaluation): number {
   return evaluation.discountAmount + evaluation.freeItemValue;
 }
 
-function withPromotion(promotion: Promotion): (e: PromotionEvaluation) => PromotionEvaluation {
+function withPromotion(
+  promotion: Promotion,
+): (e: PromotionEvaluation) => PromotionEvaluation {
   return evaluation => ({
     ...evaluation,
     promotionId: promotion.id,
@@ -416,7 +427,9 @@ export function coordinatePromotions(
     0,
   );
 
-  const freeShipping = visible.some(evaluation => evaluation.grantsFreeShipping);
+  const freeShipping = visible.some(
+    evaluation => evaluation.grantsFreeShipping,
+  );
 
   const notices: string[] = [];
 
@@ -563,9 +576,7 @@ function suggestionFor(
 
       const nearest = orderDiscountCandidates(eligible)[0];
       const missing =
-        promotion.requiredQuantity +
-        promotion.freeQuantity -
-        eligible.length;
+        promotion.requiredQuantity + promotion.freeQuantity - eligible.length;
 
       return {
         promotionId: promotion.id,

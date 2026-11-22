@@ -66,6 +66,22 @@ export enum PromotionScope {
 }
 
 /**
+ * مبنای محاسبهٔ «تخفیف عمومی سبد» روی محصولاتی که خودشان تخفیف دارند.
+ *
+ * - DISCOUNTED_PRICE (پیش‌فرض): تخفیف سبد روی قیمت پس از تخفیف محصول
+ *   محاسبه می‌شود (متوالی).
+ *   مثال: ۱۰٬۰۰۰٬۰۰۰ × (۱ − ۰٫۵) × (۱ − ۰٫۲) = ۴٬۰۰۰٬۰۰۰
+ *
+ * - ORIGINAL_PRICE: تخفیف سبد روی قیمت فهرست (قبل از تخفیف محصول) محاسبه
+ *   می‌شود؛ دو تخفیف جمعی هستند نه متوالی.
+ *   مثال: ۱۰٬۰۰۰٬۰۰۰ × (۱ − ۰٫۵ − ۰٫۲) = ۳٬۰۰۰٬۰۰۰
+ */
+export enum CartDiscountBase {
+  DISCOUNTED_PRICE = 'discounted_price',
+  ORIGINAL_PRICE = 'original_price',
+}
+
+/**
  * نحوه‌ی انتخاب کالای رایگان سوم:
  * - AUTO  → سیستم خودش ارزان‌ترین کالای Eligible را هدیه می‌دهد
  * - CUSTOMER → مشتری از بین کالاهای Eligible انتخاب می‌کند
@@ -288,6 +304,26 @@ export class Promotion {
   /** اولویت اعمال؛ عدد بزرگ‌تر زودتر */
   @Column({ type: 'int', default: 0 })
   priority: number;
+
+  /**
+   * صلاحیت محصولات دارای تخفیف برای «تخفیف عمومی سبد».
+   *
+   * false (پیش‌فرض): محصولی که خودش تخفیف دارد از تخفیف سبد مستثنی است.
+   * true: محصولات دارای تخفیف هم از تخفیف سبد بهره‌مند می‌شوند.
+   */
+  @Column({ type: 'boolean', default: false })
+  applyToDiscountedProducts: boolean;
+
+  /**
+   * مبنای محاسبهٔ تخفیف سبد (فقط وقتی applyToDiscountedProducts روشن
+   * است معنا دارد). مقدار پیش‌فرض DISCOUNTED_PRICE رفتار قبلی را حفظ می‌کند.
+   */
+  @Column({
+    type: 'enum',
+    enum: CartDiscountBase,
+    default: CartDiscountBase.DISCOUNTED_PRICE,
+  })
+  cartDiscountBase: CartDiscountBase;
 
   // =========================================================
   // نمایش به مشتری

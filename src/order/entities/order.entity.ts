@@ -87,6 +87,9 @@ export class Order {
         discountAmount: number;
         freeItemValue: number;
         grantsFreeShipping: boolean;
+        /** روش محاسبهٔ تخفیف سبد (فقط برای cart_discount) */
+        cartDiscountBase?: 'discounted_price' | 'original_price' | null;
+        applyToDiscountedProducts?: boolean | null;
         qualifyingVariantIds: number[];
         rewardVariantIds: number[];
         rewardProductIds: number[];

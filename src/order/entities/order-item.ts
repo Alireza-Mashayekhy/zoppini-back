@@ -51,6 +51,16 @@ export class OrderItem {
   })
   promotionDiscount: number;
 
+  /** تخفیف سطح محصول (فروش ویژه) روی این ردیف (تومان) */
+  @Column({
+    name: 'sale_discount',
+    type: 'decimal',
+    precision: 15,
+    scale: 2,
+    default: 0,
+  })
+  saleDiscount: number;
+
   /** آیا این ردیف کالای رایگان پروموشن است */
   @Column({ name: 'is_promotion_reward', type: 'boolean', default: false })
   isPromotionReward: boolean;

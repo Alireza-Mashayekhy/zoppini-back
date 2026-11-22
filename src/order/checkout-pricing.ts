@@ -87,10 +87,7 @@ export function calculateCheckoutTotals(input: {
       Math.min(round(line.promotionDiscount ?? 0), sale * quantity),
     );
 
-    const payableTotal = Math.max(
-      0,
-      sale * quantity - linePromotionDiscount,
-    );
+    const payableTotal = Math.max(0, sale * quantity - linePromotionDiscount);
 
     originalPrice += list;
     saleDiscount += lineSaleDiscount;
@@ -101,8 +98,7 @@ export function calculateCheckoutTotals(input: {
       quantity,
       originalPrice: round(line.originalPrice),
       salePrice: sale,
-      payablePerUnit:
-        quantity > 0 ? Math.round(payableTotal / quantity) : 0,
+      payablePerUnit: quantity > 0 ? Math.round(payableTotal / quantity) : 0,
       payableTotal,
       promotionDiscount: linePromotionDiscount,
       isFreeReward: !!line.isFreeReward,
@@ -183,6 +179,17 @@ export function buildPromotionSnapshot(
       discountAmount: evaluation.discountAmount,
       freeItemValue: evaluation.freeItemValue,
       grantsFreeShipping: evaluation.grantsFreeShipping,
+      // روش محاسبهٔ تخفیف سبد (فقط برای CART_DISCOUNT) — برای پشتیبانی و
+      // گزارش: «discounted_price» یعنی متوالی روی قیمت پس از تخفیف محصول،
+      // «original_price» یعنی جمعی روی قیمت فهرست.
+      cartDiscountBase:
+        evaluation.meta?.cartDiscountBase != null
+          ? evaluation.meta.cartDiscountBase
+          : null,
+      applyToDiscountedProducts:
+        evaluation.meta?.applyToDiscountedProducts != null
+          ? evaluation.meta.applyToDiscountedProducts
+          : null,
       qualifyingVariantIds: [...qualifyingVariantIds],
       rewardVariantIds: [...rewardVariantIds],
       rewardProductIds: evaluation.freeItems.map(item => item.productId),

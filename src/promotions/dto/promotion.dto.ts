@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 
 import {
+  CartDiscountBase,
   FreeItemSelection,
   PromotionRewardType,
   PromotionScope,
@@ -217,6 +218,16 @@ export class CreatePromotionDto {
   @IsBoolean()
   showPreCartPopup?: boolean;
 
+  /** صلاحیت «تخفیف عمومی سبد» برای محصولات دارای تخفیف سطح محصول */
+  @IsOptional()
+  @IsBoolean()
+  applyToDiscountedProducts?: boolean;
+
+  /** مبنای محاسبهٔ تخفیف سبد (فقط وقتی applyToDiscountedProducts روشن است) */
+  @IsOptional()
+  @IsEnum(CartDiscountBase)
+  cartDiscountBase?: CartDiscountBase;
+
   @IsOptional()
   @IsString()
   @MaxLength(150)
@@ -329,7 +340,11 @@ export class PromotionCartStateDto {
 
   @IsOptional()
   @IsArray()
-  selectedRewards?: { promotionId: number; productId: number; variantId: number }[];
+  selectedRewards?: {
+    promotionId: number;
+    productId: number;
+    variantId: number;
+  }[];
 }
 
 export class AddRewardToCartDto {

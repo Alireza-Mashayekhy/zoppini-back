@@ -37,6 +37,7 @@ import {
 import { describeDigipayPurchase } from 'src/payment/utils/digipay-instrument.util';
 import { Variant } from 'src/products/entities/variant.entity';
 import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
+import { buildPricedPromotionCart } from 'src/promotions/promotion-cart.util';
 import { PromotionsService } from 'src/promotions/promotions.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranInvoiceSyncService } from 'src/rahkaran/rahkaran-invoice-sync.service';
@@ -206,9 +207,27 @@ export class OrdersService {
     // 4-b. پروموشن‌ها (قبل از محاسبه ارسال و کد تخفیف)
     // =====================================================
 
+    /*
+     * سبد «قیمت‌گذاری‌شده» به موتور داده می‌شود تا با چیزی که مشتری در سبد
+     * دیده یکی باشد: قیمت پس از فروش ویژه + قیمت فهرست برای مبنای
+     * «original_price». ردیف‌های pricedLines و cart.items هم‌ردیف‌اند.
+     */
+    const promotionCart = buildPricedPromotionCart(
+      cart,
+      cart.items.map((item, index) => {
+        const line = pricedLines[index];
+
+        return {
+          item,
+          originalPrice: line?.originalPrice ?? Number(item.variant.price),
+          unitPrice: line?.unitPrice ?? Number(item.variant.price),
+        };
+      }),
+    );
+
     const promotionResult = this.promotionsService
       ? await this.promotionsService.evaluateCart({
-          cart,
+          cart: promotionCart,
           userId,
           forCheckout: true,
         })
@@ -314,6 +333,8 @@ export class OrdersService {
           item.quantity > 0 ? Math.round(itemTotal / item.quantity) : salePrice,
         originalPrice: line.originalPrice,
         totalPrice: itemTotal,
+        // تخفیف سطح محصول (فروش ویژه) روی این ردیف — برای فاکتور/پشتیبانی
+        saleDiscount: line.saleDiscountPerUnit * item.quantity,
         promotionDiscount: linePromotionDiscount,
         isPromotionReward: !!item.promotionRewardId || !!promotionLine?.isFree,
         promotionRewardId: item.promotionRewardId ?? null,
@@ -1136,8 +1157,24 @@ export class OrdersService {
       })),
     );
 
+    const promotionCart = buildPricedPromotionCart(
+      cart,
+      cart.items.map((item, index) => {
+        const priced = pricedLines[index];
+
+        return {
+          item,
+          originalPrice: priced?.originalPrice ?? Number(item.variant.price),
+          unitPrice: priced?.unitPrice ?? Number(item.variant.price),
+        };
+      }),
+    );
+
     const promotionResult = this.promotionsService
-      ? await this.promotionsService.evaluateCart({ cart, userId })
+      ? await this.promotionsService.evaluateCart({
+          cart: promotionCart,
+          userId,
+        })
       : EMPTY_PROMOTION_RESULT;
 
     const promotionByLine = new Map<
@@ -1202,6 +1239,8 @@ export class OrdersService {
       const priced = pricedLines[index];
       const promotion = promotionByLine.get(item.id);
       const saleTotal = priced.unitPrice * item.quantity;
+      const lineSaleDiscount =
+        (priced.originalPrice - priced.unitPrice) * item.quantity;
 
       return {
         lineId: item.id,
@@ -1215,6 +1254,7 @@ export class OrdersService {
         quantity: item.quantity,
         originalPrice: priced.originalPrice,
         salePrice: priced.unitPrice,
+        saleDiscount: lineSaleDiscount,
         promotionDiscount: promotion?.isFree
           ? saleTotal
           : Math.min(promotion?.amount ?? 0, saleTotal),
@@ -1307,11 +1347,7 @@ export class OrdersService {
             (sum, line) => sum + line.originalPrice * line.quantity,
             0,
           ),
-          saleDiscount: lines.reduce(
-            (sum, line) =>
-              sum + (line.originalPrice - line.salePrice) * line.quantity,
-            0,
-          ),
+          saleDiscount: lines.reduce((sum, line) => sum + line.saleDiscount, 0),
           promotionDiscount: lines.reduce(
             (sum, line) => sum + line.promotionDiscount,
             0,

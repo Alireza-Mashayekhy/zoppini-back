@@ -7,6 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { Category } from 'src/categories/entities/category.entity';
+import { DiscountService } from 'src/discounts/discounts.service';
 import { Product } from 'src/products/entities/product.entity';
 import { Variant } from 'src/products/entities/variant.entity';
 import { In, Repository } from 'typeorm';
@@ -31,6 +32,7 @@ import {
   isProductInScope,
 } from './engine/promotion-engine';
 import {
+  CartDiscountBase,
   FreeItemSelection,
   Promotion,
   PromotionRewardType,
@@ -42,7 +44,11 @@ import {
   PromotionEventKind,
   PromotionRedemption,
 } from './entities/promotion-redemption.entity';
-import { PreparedPromotion, PromotionsRepository } from './promotions.repository';
+import { buildPricedPromotionCart } from './promotion-cart.util';
+import {
+  PreparedPromotion,
+  PromotionsRepository,
+} from './promotions.repository';
 
 export interface PromotionCartContext {
   cart: Cart;
@@ -71,6 +77,8 @@ export class PromotionsService {
     private readonly cartRepo: Repository<Cart>,
 
     private readonly promotionsRepository: PromotionsRepository,
+
+    private readonly discountService: DiscountService,
   ) {}
 
   // =========================================================
@@ -130,7 +138,10 @@ export class PromotionsService {
         break;
     }
 
-    qb.orderBy('promotion.createdAt', 'DESC').addOrderBy('promotion.id', 'DESC');
+    qb.orderBy('promotion.createdAt', 'DESC').addOrderBy(
+      'promotion.id',
+      'DESC',
+    );
 
     const data = await qb.getMany();
     const usage = await this.countUsageFor(data.map(item => item.id));
@@ -166,7 +177,9 @@ export class PromotionsService {
 
     const usage = await this.countUsageFor([promotion.id]);
 
-    return { data: this.present(promotion, new Date(), usage.get(promotion.id)) };
+    return {
+      data: this.present(promotion, new Date(), usage.get(promotion.id)),
+    };
   }
 
   async create(dto: CreatePromotionDto) {
@@ -208,6 +221,15 @@ export class PromotionsService {
       customerDescription: dto.customerDescription ?? null,
       showBadgeOnProductCard: dto.showBadgeOnProductCard ?? false,
       showBadgeOnProductPage: dto.showBadgeOnProductPage ?? false,
+      /* صلاحیت/مبنای تخفیف سبد فقط برای CART_DISCOUNT معنا دارد */
+      applyToDiscountedProducts:
+        dto.type === PromotionType.CART_DISCOUNT
+          ? (dto.applyToDiscountedProducts ?? false)
+          : false,
+      cartDiscountBase:
+        dto.type === PromotionType.CART_DISCOUNT
+          ? (dto.cartDiscountBase ?? CartDiscountBase.DISCOUNTED_PRICE)
+          : CartDiscountBase.DISCOUNTED_PRICE,
       showPreCartPopup: dto.showPreCartPopup ?? false,
       popupTitle: dto.popupTitle ?? null,
       popupDescription: dto.popupDescription ?? null,
@@ -276,11 +298,15 @@ export class PromotionsService {
       ...(dto.type !== undefined ? { type: dto.type } : {}),
       ...(dto.scope !== undefined ? { scope: dto.scope } : {}),
       ...(dto.rewardType !== undefined ? { rewardType: dto.rewardType } : {}),
-      ...(dto.rewardValue !== undefined ? { rewardValue: dto.rewardValue } : {}),
+      ...(dto.rewardValue !== undefined
+        ? { rewardValue: dto.rewardValue }
+        : {}),
       ...(dto.maxDiscountAmount !== undefined
         ? { maxDiscountAmount: dto.maxDiscountAmount }
         : {}),
-      ...(dto.minQuantity !== undefined ? { minQuantity: dto.minQuantity } : {}),
+      ...(dto.minQuantity !== undefined
+        ? { minQuantity: dto.minQuantity }
+        : {}),
       ...(dto.minCartValue !== undefined
         ? { minCartValue: dto.minCartValue }
         : {}),
@@ -319,7 +345,9 @@ export class PromotionsService {
         ? { removeRewardWhenTriggerRemoved: dto.removeRewardWhenTriggerRemoved }
         : {}),
       ...(dto.isActive !== undefined ? { isActive: dto.isActive } : {}),
-      ...(dto.startsAt !== undefined ? { startsAt: new Date(dto.startsAt) } : {}),
+      ...(dto.startsAt !== undefined
+        ? { startsAt: new Date(dto.startsAt) }
+        : {}),
       ...(dto.expiresAt !== undefined
         ? { expiresAt: new Date(dto.expiresAt) }
         : {}),
@@ -345,6 +373,20 @@ export class PromotionsService {
       ...(dto.showBadgeOnProductPage !== undefined
         ? { showBadgeOnProductPage: dto.showBadgeOnProductPage }
         : {}),
+      // صلاحیت/مبنای تخفیف سبد فقط وقتی نوعِ نهایی «تخفیف عمومی سبد» باشد
+      ...((dto.type ?? promotion.type) === PromotionType.CART_DISCOUNT
+        ? {
+            ...(dto.applyToDiscountedProducts !== undefined
+              ? { applyToDiscountedProducts: dto.applyToDiscountedProducts }
+              : {}),
+            ...(dto.cartDiscountBase !== undefined
+              ? { cartDiscountBase: dto.cartDiscountBase }
+              : {}),
+          }
+        : {
+            applyToDiscountedProducts: false,
+            cartDiscountBase: CartDiscountBase.DISCOUNTED_PRICE,
+          }),
       ...(dto.showPreCartPopup !== undefined
         ? { showPreCartPopup: dto.showPreCartPopup }
         : {}),
@@ -621,7 +663,10 @@ export class PromotionsService {
       for (const productId of dto.productIds ?? []) {
         const product = await this.promotionRepo.manager.findOne(Product, {
           where: { id: productId },
-          relations: { variants: { color: true, size: true }, categories: true },
+          relations: {
+            variants: { color: true, size: true },
+            categories: true,
+          },
         });
 
         if (!product) {
@@ -697,7 +742,8 @@ export class PromotionsService {
       },
     });
 
-    if (!cart || !cart.items?.length) {
+    if (!cart || !cart.items?.length || (!context.userId && !context.guestId)) {
+      // هیچ شناسه‌ای نداریم (مهمان تازه)؛ نباید سبدِ دیگران را بخوانیم
       return { data: { suggestions: [], applied: [], notices: [] } };
     }
 
@@ -791,8 +837,7 @@ export class PromotionsService {
           slug: product.slug,
           image: product.image ?? null,
           price:
-            suggested.price ??
-            (fallback ? Number(fallback.price) : undefined),
+            suggested.price ?? (fallback ? Number(fallback.price) : undefined),
         },
       };
     });
@@ -801,6 +846,55 @@ export class PromotionsService {
   // =========================================================
   // مشتری: ارزیابی سبد
   // =========================================================
+
+  /**
+   * اطمینان از این‌که سبد با «قیمت پس از تخفیف سطح محصول» به موتور داده
+   * می‌شود.
+   *
+   * ردیفی که از قبل `listPrice` دارد (کلون buildPricedPromotionCart) دست
+   * نمی‌خورد؛ ردیف‌های خام سبد با DiscountService قیمت‌گذاری می‌شوند تا
+   * سبد، چک‌اوت، ثبت سفارش و پاپ‌آپ همیشه یک عدد ببینند.
+   */
+  private async ensurePricedCart(cart: Cart): Promise<Cart> {
+    const unpriced = (cart.items ?? []).some(
+      item =>
+        (item.variant as unknown as { listPrice?: number } | null)?.listPrice ==
+        null,
+    );
+
+    if (!unpriced) {
+      return cart;
+    }
+
+    const items = (cart.items ?? []).filter(item => item.variant?.product);
+
+    if (items.length !== (cart.items ?? []).length) {
+      // ردیف‌های خراب را موتور خودش فیلتر می‌کند؛ فقط ردیف‌های سالم را قیمت‌گذاری کن
+      this.logger.warn(
+        `سبد ${cart.id ?? '?'}: ${(cart.items?.length ?? 0) - items.length} ردیف بدون محصول/واریانت از قیمت‌گذاری پروموشن کنار گذاشته شد.`,
+      );
+    }
+
+    const pricedLines = await this.discountService.priceCartLines(
+      items.map(item => ({
+        productId: item.variant.product.id,
+        quantity: item.quantity,
+        price: Number(item.variant.price),
+        categoryIds:
+          item.variant.product.categories?.map(category => category.id) ?? [],
+      })),
+    );
+
+    return buildPricedPromotionCart(
+      cart,
+      items.map((item, index) => ({
+        item,
+        originalPrice:
+          pricedLines[index]?.originalPrice ?? Number(item.variant.price),
+        unitPrice: pricedLines[index]?.unitPrice ?? Number(item.variant.price),
+      })),
+    );
+  }
 
   /** ارزیابی همهٔ پروموشن‌های فعال روی سبد مشتری */
   async evaluateCart(
@@ -811,8 +905,12 @@ export class PromotionsService {
     const prepared = await this.promotionsRepository.getActivePrepared();
     const promotions = prepared.map(item => item.promotion);
 
-    const lines = this.toCartLines(cart);
-    const usage = await this.loadUsage(promotions.map(item => item.id), context.userId);
+    const pricedCart = await this.ensurePricedCart(cart);
+    const lines = this.toCartLines(pricedCart);
+    const usage = await this.loadUsage(
+      promotions.map(item => item.id),
+      context.userId,
+    );
 
     const selectedRewards: Record<
       number,
@@ -847,9 +945,7 @@ export class PromotionsService {
         usageByPromotion: usage,
         allowStacking: true,
         variantStock: (variantId, productId) => {
-          const line = cart.items?.find(
-            item => item.variant?.id === variantId,
-          );
+          const line = cart.items?.find(item => item.variant?.id === variantId);
 
           if (line?.variant) {
             return Math.max(0, line.variant.stock ?? 0);
@@ -893,14 +989,17 @@ export class PromotionsService {
    */
   async addRewardToCart(
     cart: Cart,
-    params: { promotionId: number; variantId?: number; productId?: number; quantity?: number },
+    params: {
+      promotionId: number;
+      variantId?: number;
+      productId?: number;
+      quantity?: number;
+    },
   ) {
     const promotion = await this.findPromotionEntity(params.promotionId);
 
     if (!isPromotionLive(promotion, new Date())) {
-      throw new BadRequestException(
-        'این پیشنهاد در حال حاضر فعال نیست.',
-      );
+      throw new BadRequestException('این پیشنهاد در حال حاضر فعال نیست.');
     }
 
     const prepared = await this.promotionsRepository.getActivePrepared();
@@ -955,12 +1054,11 @@ export class PromotionsService {
     );
 
     if (!inRewardScope) {
-      throw new BadRequestException(
-        'این محصول در محدودهٔ پیشنهاد قرار ندارد.',
-      );
+      throw new BadRequestException('این محصول در محدودهٔ پیشنهاد قرار ندارد.');
     }
 
-    const variant = foundVariant ?? pickCheapestVariant(product, { requireStock: true });
+    const variant =
+      foundVariant ?? pickCheapestVariant(product, { requireStock: true });
 
     if (!variant) {
       throw new BadRequestException('این محصول موجود نیست.');
@@ -979,9 +1077,7 @@ export class PromotionsService {
     const maxApplications = Math.max(1, promotion.maxApplicationsPerCart || 1);
 
     if (existingRewards.length >= maxApplications) {
-      throw new BadRequestException(
-        'هدیهٔ این پیشنهاد قبلاً در سبد شما هست.',
-      );
+      throw new BadRequestException('هدیهٔ این پیشنهاد قبلاً در سبد شما هست.');
     }
 
     return {
@@ -1057,10 +1153,20 @@ export class PromotionsService {
     const categoryIds = (product.categories ?? []).map(c => c.id);
     const variant = pickCheapestVariant(product);
     const price = Number(variant?.price ?? 0);
+    /*
+     * آیا این محصول «تخفیف سطح محصول» دارد؟ (فیلدهای discountAmount توسط
+     * لایهٔ فروش ویژه روی variantها ست می‌شوند)
+     */
+    const hasProductDiscount = (product.variants ?? []).some(
+      item =>
+        Number(
+          (item as unknown as { discountAmount?: number | string })
+            .discountAmount ?? 0,
+        ) > 0,
+    );
 
     const badgeText = (promotion: Promotion) =>
-      promotion.badgeText?.trim() ||
-      defaultBadgeText(promotion);
+      promotion.badgeText?.trim() || defaultBadgeText(promotion);
 
     const badges: {
       promotionId: number;
@@ -1079,6 +1185,15 @@ export class PromotionsService {
         !promotion.showBadgeOnProductCard &&
         !promotion.showBadgeOnProductPage
       ) {
+        continue;
+      }
+
+      if (
+        promotion.type === PromotionType.CART_DISCOUNT &&
+        !promotion.applyToDiscountedProducts &&
+        hasProductDiscount
+      ) {
+        // صلاحیت «تخفیف سبد» برای محصولات دارای تخفیف خاموش است
         continue;
       }
 
@@ -1107,24 +1222,141 @@ export class PromotionsService {
     return badges;
   }
 
-  /** شناسهٔ پروموشن‌هایی که ادمین برای آن‌ها نشان محصول را روشن کرده */
-  async getProductCardBadgeMap(): Promise<
-    Map<number, { promotionId: number; text: string }>
+  /**
+   * نشان‌های کارت محصول برای دسته‌ای از محصولات (لیست/دسته‌بندی/جست‌وجو).
+   *
+   * برخلاف نسخهٔ قبلی که فقط محصولات در دامنهٔ صریح پروموشن را پوشش می‌داد،
+   * حالا برای هر محصول جداگانه و با درنظر گرفتن «صلاحیت تخفیف عمومی سبد روی
+   * محصولات دارای تخفیف» محاسبه می‌شود؛ شکلی که در جای دیگر سبد/چک‌اوت
+   * استفاده می‌شود.
+   */
+  async getProductCardBadgesFor(
+    products: Product[],
+    discountedIds: Set<number>,
+  ): Promise<
+    Map<
+      number,
+      {
+        promotionBadge: {
+          promotionId: number;
+          text: string;
+          type: PromotionType;
+          /** فقط برای تخفیف سبد: آیا روی محصولات دارای تخفیف اعمال می‌شود */
+          appliesToDiscounted?: boolean;
+        } | null;
+        /** نشان قرمز «تخفیف بیشتر» — فقط وقتی تخفیف سبد روی کالای دارای تخفیف اعمال می‌شود */
+        extraDiscountBadge: {
+          promotionId: number;
+          text: string;
+          type: PromotionType;
+        } | null;
+      }
+    >
   > {
     const prepared = await this.promotionsRepository.getActivePrepared();
     const now = new Date();
-    const map = new Map<number, { promotionId: number; text: string }>();
+    const map = new Map<
+      number,
+      {
+        promotionBadge: {
+          promotionId: number;
+          text: string;
+          type: PromotionType;
+          appliesToDiscounted?: boolean;
+        } | null;
+        extraDiscountBadge: {
+          promotionId: number;
+          text: string;
+          type: PromotionType;
+        } | null;
+      }
+    >();
 
-    for (const { promotion, scope } of prepared) {
-      if (!promotion.showBadgeOnProductCard || !isPromotionLive(promotion, now)) {
-        continue;
+    if (!products.length) {
+      return map;
+    }
+
+    for (const product of products) {
+      const categoryIds = (product.categories ?? []).map(c => c.id);
+      const discounted = discountedIds.has(product.id);
+
+      let promotionBadge: {
+        promotionId: number;
+        text: string;
+        type: PromotionType;
+        appliesToDiscounted?: boolean;
+      } | null = null;
+      let extraDiscountBadge: {
+        promotionId: number;
+        text: string;
+        type: PromotionType;
+      } | null = null;
+
+      for (const { promotion, scope } of prepared) {
+        if (
+          !promotion.showBadgeOnProductCard ||
+          !isPromotionLive(promotion, now)
+        ) {
+          continue;
+        }
+
+        if (
+          !isProductInScope(promotion, product.id, categoryIds, {
+            products: scope.products,
+            categories: scope.categories,
+            excludedProducts: scope.excludedProducts,
+            excludedCategories: scope.excludedCategories,
+          })
+        ) {
+          continue;
+        }
+
+        const isCartDiscount = promotion.type === PromotionType.CART_DISCOUNT;
+        const stacksOnDiscounted =
+          isCartDiscount && promotion.applyToDiscountedProducts;
+
+        if (isCartDiscount && !stacksOnDiscounted && discounted) {
+          // صلاحیت «تخفیف سبد» برای محصولات دارای تخفیف خاموش است
+          continue;
+        }
+
+        if (!promotionBadge) {
+          promotionBadge = {
+            promotionId: promotion.id,
+            text: promotion.badgeText?.trim() || defaultBadgeText(promotion),
+            type: promotion.type,
+            ...(isCartDiscount
+              ? { appliesToDiscounted: promotion.applyToDiscountedProducts }
+              : {}),
+          };
+        }
+
+        /*
+         * نشان قرمز «تخفیف بیشتر»: فقط وقتی محصول از قبل تخفیف سطح
+         * محصول دارد و تخفیف سبد (با تنظیم ادمین) روی آن اعمال می‌شود.
+         * قیمت کارت بدون تغییر می‌ماند؛ این فقط سیگنالِ «در سبد بیشتر هم
+         * تخفیف می‌گیری» است.
+         */
+        if (!extraDiscountBadge && stacksOnDiscounted && discounted) {
+          const percent = Number(promotion.rewardValue ?? 0);
+          const isPercentage =
+            promotion.rewardType === 'percentage' && percent > 0;
+
+          extraDiscountBadge = {
+            promotionId: promotion.id,
+            text: isPercentage
+              ? `${percent.toLocaleString('fa-IR')}٪ تخفیف بیشتر`
+              : 'تخفیف بیشتر',
+            type: promotion.type,
+          };
+        }
+
+        if (promotionBadge && extraDiscountBadge) {
+          break;
+        }
       }
 
-      const text = promotion.badgeText?.trim() || defaultBadgeText(promotion);
-
-      for (const productId of scope.products) {
-        map.set(productId, { promotionId: promotion.id, text });
-      }
+      map.set(product.id, { promotionBadge, extraDiscountBadge });
     }
 
     return map;
@@ -1248,6 +1480,13 @@ export class PromotionsService {
         const variant = item.variant;
         const product = variant.product;
         const price = Number(variant.price);
+        /*
+         * `listPrice` روی کلون‌های قیمت‌گذاری‌شده توسط buildPricedPromotionCart
+         * ست می‌شود؛ سبد خام (بدون کلون) آن را ندارد و قیمت خودش فهرست است.
+         */
+        const listPrice = Number(
+          (variant as { listPrice?: number }).listPrice ?? variant.price,
+        );
 
         return {
           lineId: item.id,
@@ -1255,7 +1494,7 @@ export class PromotionsService {
           productId: product.id,
           categoryIds: (product.categories ?? []).map(c => c.id),
           unitPrice: price,
-          listPrice: price,
+          listPrice,
           quantity: item.quantity,
           addedAt: item.id ?? index,
           title: product.title,
@@ -1266,6 +1505,7 @@ export class PromotionsService {
           sizeName: variant.size?.name,
           isFreeReward: !!item.promotionRewardId,
           rewardPromotionId: item.promotionRewardId,
+          hasProductDiscount: listPrice > price,
         } satisfies PromotionCartLine;
       });
   }
@@ -1293,7 +1533,11 @@ export class PromotionsService {
       .where('redemption.promotionId IN (:...promotionIds)', { promotionIds })
       .setParameter('userId', userId ?? -1)
       .groupBy('redemption.promotionId')
-      .getRawMany<{ promotionId: number; total: string; perCustomer: string }>();
+      .getRawMany<{
+        promotionId: number;
+        total: string;
+        perCustomer: string;
+      }>();
 
     for (const row of rows) {
       usage[Number(row.promotionId)] = {
@@ -1338,9 +1582,7 @@ export class PromotionsService {
     const expiresAt = dto.expiresAt ? new Date(dto.expiresAt) : null;
 
     if (startsAt && expiresAt && startsAt >= expiresAt) {
-      throw new BadRequestException(
-        'زمان پایان باید بعد از زمان شروع باشد.',
-      );
+      throw new BadRequestException('زمان پایان باید بعد از زمان شروع باشد.');
     }
 
     if (
@@ -1384,9 +1626,7 @@ export class PromotionsService {
       }
 
       if (!dto.minQuantity || dto.minQuantity < 2) {
-        throw new BadRequestException(
-          'تعداد اقلام باندل باید حداقل ۲ باشد.',
-        );
+        throw new BadRequestException('تعداد اقلام باندل باید حداقل ۲ باشد.');
       }
     }
 
@@ -1519,11 +1759,13 @@ export function pickCheapestVariant(
     ? variants.filter(variant => (variant.stock ?? 0) > 0)
     : variants;
 
-  const pool = candidates.length ? candidates : options.requireStock ? [] : variants;
+  const pool = candidates.length
+    ? candidates
+    : options.requireStock
+      ? []
+      : variants;
 
-  return (
-    pool.sort((a, b) => Number(a.price) - Number(b.price))[0] ?? null
-  );
+  return pool.sort((a, b) => Number(a.price) - Number(b.price))[0] ?? null;
 }
 
 /** متن نشان پیش‌فرض، اگر ادمین آن را وارد نکرده باشد */
@@ -1556,7 +1798,7 @@ export function defaultBadgeText(promotion: Promotion): string {
 
     case PromotionType.CART_DISCOUNT:
       return promotion.rewardType === PromotionRewardType.PERCENTAGE
-        ? `${percent}٪ تخفیف سبد`
+        ? `${percent.toLocaleString('fa-IR')} درصد تخفیف سبد`
         : 'تخفیف سبد';
 
     default:

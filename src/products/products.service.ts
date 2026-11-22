@@ -25,6 +25,7 @@ import {
 } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
 import { PromotionsService } from 'src/promotions/promotions.service';
+import { PromotionType } from 'src/promotions/entities/promotion.entity';
 import { FilesService } from 'src/files/files.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { extractBothWarehouseStocks } from 'src/rahkaran/rahkaran.service';
@@ -1821,15 +1822,39 @@ export class ProductsService {
     }
 
     const badges =
-      (await this.promotionsService?.getProductCardBadgeMap()) ??
-      new Map<number, { promotionId: number; text: string }>();
+      (await this.promotionsService?.getProductCardBadgesFor(
+        products,
+        new Set(
+          products
+            .filter(
+              product =>
+                (product as unknown as { discount?: unknown }).discount != null,
+            )
+            .map(product => product.id),
+        ),
+      )) ??
+      new Map<
+        number,
+        {
+          promotionBadge: {
+            promotionId: number;
+            text: string;
+            type: PromotionType;
+            appliesToDiscounted?: boolean;
+          } | null;
+          extraDiscountBadge: {
+            promotionId: number;
+            text: string;
+            type: PromotionType;
+          } | null;
+        }
+      >();
 
     for (const product of products) {
       const badge = badges.get(product.id);
 
-      (product as any).promotionBadge = badge
-        ? { promotionId: badge.promotionId, text: badge.text }
-        : null;
+      (product as any).promotionBadge = badge?.promotionBadge ?? null;
+      (product as any).extraDiscountBadge = badge?.extraDiscountBadge ?? null;
     }
 
     return products;

@@ -1,6 +1,10 @@
-import { calculateCheckoutTotals } from 'src/order/checkout-pricing';
+import {
+  buildPromotionSnapshot,
+  calculateCheckoutTotals,
+} from 'src/order/checkout-pricing';
 
 import {
+  CartDiscountBase,
   FreeItemSelection,
   Promotion,
   PromotionRewardType,
@@ -148,7 +152,9 @@ describe('cart, checkout and order totals match exactly', () => {
       (sum, entry) => sum + entry.payableTotal,
       0,
     );
-    expect(orderItemTotals).toBe(checkout.originalPrice - checkout.promotionDiscount);
+    expect(orderItemTotals).toBe(
+      checkout.originalPrice - checkout.promotionDiscount,
+    );
   });
 
   it('keeps totals identical when a free reward line exists', () => {
@@ -363,5 +369,200 @@ describe('stacking enabled vs disabled totals', () => {
 
     // هر دو مسیر با همان قیمت پایه شروع می‌کنند
     expect(onCheckout.originalPrice).toBe(2_000_000);
+  });
+});
+
+describe('تخفیف سطح محصول + تخفیف سبد: سازگاری سبد=چک‌اوت=سفارش', () => {
+  const saleLine = line('sale', 5_000_000, 1, {
+    variantId: 41,
+    productId: 400,
+    listPrice: 10_000_000,
+  });
+  const plainLine = line('plain', 4_000_000, 1, {
+    variantId: 42,
+    productId: 401,
+    listPrice: 4_000_000,
+  });
+
+  const cartDiscount = makePromotion({
+    id: 77,
+    name: 'تخفیف عمومی سبد',
+    type: PromotionType.CART_DISCOUNT,
+    rewardType: PromotionRewardType.PERCENTAGE,
+    rewardValue: 20,
+    scope: PromotionScope.ALL,
+    applyToDiscountedProducts: true,
+    cartDiscountBase: CartDiscountBase.ORIGINAL_PRICE,
+    canStack: true,
+    stackable: true,
+  });
+
+  it('اعمال جمعی روی قیمت فهرست با هر دو ردیف، دقیقاً در چک‌اوت بازتاب می‌یابد', () => {
+    const result = coordinatePromotions({
+      promotions: [cartDiscount],
+      lines: [saleLine, plainLine],
+      options: { now },
+    });
+
+    // 20% از 10,000,000 + 20% از 4,000,000 = 2,800,000
+    expect(result.totalDiscount).toBe(2_800_000);
+
+    const promotionByLine = new Map(
+      result.applied
+        .flatMap(evaluation => evaluation.allocations)
+        .map(allocation => [String(allocation.lineId), allocation.amount]),
+    );
+
+    expect(promotionByLine.get('sale')).toBe(2_000_000);
+    expect(promotionByLine.get('plain')).toBe(800_000);
+
+    const checkout = calculateCheckoutTotals({
+      lines: [
+        {
+          lineId: saleLine.lineId,
+          variantId: saleLine.variantId,
+          productId: saleLine.productId,
+          quantity: 1,
+          originalPrice: 10_000_000,
+          salePrice: 5_000_000,
+          promotionDiscount: promotionByLine.get('sale') ?? 0,
+        },
+        {
+          lineId: plainLine.lineId,
+          variantId: plainLine.variantId,
+          productId: plainLine.productId,
+          quantity: 1,
+          originalPrice: 4_000_000,
+          salePrice: 4_000_000,
+          promotionDiscount: promotionByLine.get('plain') ?? 0,
+        },
+      ],
+      shippingCost: 0,
+    });
+
+    expect(checkout.consistency.ok).toBe(true);
+    expect(checkout.promotionDiscount).toBe(2_800_000);
+    // مجموع تخفیف محصول + تخفیف سبد ≤ قیمت فهرست ردیف‌ها (هرگز منفی نمی‌شود)
+    expect(checkout.lines.every(entry => entry.payableTotal >= 0)).toBe(true);
+    // پرداختی = قیمت فهرست − فروش ویژه − سبد = 3,000,000 + 3,200,000
+    expect(checkout.finalPrice).toBe(6_200_000);
+  });
+
+  it('اعمال متوالی روی قیمت پس از تخفیف محصول', () => {
+    const sequential = {
+      ...cartDiscount,
+      cartDiscountBase: CartDiscountBase.DISCOUNTED_PRICE,
+    };
+
+    const result = coordinatePromotions({
+      promotions: [sequential],
+      lines: [saleLine, plainLine],
+      options: { now },
+    });
+
+    // 20% از 5,000,000 + 20% از 4,000,000 = 1,800,000
+    expect(result.totalDiscount).toBe(1_800_000);
+
+    const checkout = calculateCheckoutTotals({
+      lines: [
+        {
+          lineId: saleLine.lineId,
+          variantId: saleLine.variantId,
+          productId: saleLine.productId,
+          quantity: 1,
+          originalPrice: 10_000_000,
+          salePrice: 5_000_000,
+          promotionDiscount: 1_000_000,
+        },
+        {
+          lineId: plainLine.lineId,
+          variantId: plainLine.variantId,
+          productId: plainLine.productId,
+          quantity: 1,
+          originalPrice: 4_000_000,
+          salePrice: 4_000_000,
+          promotionDiscount: 800_000,
+        },
+      ],
+      shippingCost: 0,
+    });
+
+    expect(checkout.consistency.ok).toBe(true);
+    // 4,000,000 + 3,200,000
+    expect(checkout.finalPrice).toBe(7_200_000);
+  });
+
+  it('اسنپ‌شات سفارش روش محاسبهٔ تخفیف سبد را حفظ می‌کند', () => {
+    const result = coordinatePromotions({
+      promotions: [cartDiscount],
+      lines: [saleLine, plainLine],
+      options: { now },
+    });
+
+    const snapshot = buildPromotionSnapshot(
+      result.applied,
+      new Map([
+        ['sale', 41],
+        ['plain', 42],
+      ]),
+    );
+
+    expect(snapshot).toHaveLength(1);
+    expect(snapshot[0].cartDiscountBase).toBe(CartDiscountBase.ORIGINAL_PRICE);
+    expect(snapshot[0].applyToDiscountedProducts).toBe(true);
+  });
+
+  it('سوییچ خاموش: کالای دارای تخفیف از تخفیف سبد مستثنا می‌شود اما کالای عادی می‌گیرد', () => {
+    const gateOff = { ...cartDiscount, applyToDiscountedProducts: false };
+
+    const result = coordinatePromotions({
+      promotions: [gateOff],
+      lines: [saleLine, plainLine],
+      options: { now },
+    });
+
+    // فقط ردیف بدون تخفیف: 20% از 4,000,000
+    expect(result.totalDiscount).toBe(800_000);
+
+    const saleAllocation = result.applied[0]?.allocations.find(
+      allocation => String(allocation.lineId) === 'sale',
+    );
+    expect(saleAllocation).toBeUndefined();
+  });
+
+  it('مجموع تخفیف هرگز از قیمت فهرست ردیف‌ها بیشتر نمی‌شود (تخفیف ۹۰٪ + سبد ۲۰٪)', () => {
+    const heavySale = line('heavy', 1_000_000, 1, {
+      variantId: 43,
+      productId: 402,
+      listPrice: 10_000_000,
+    });
+
+    const result = coordinatePromotions({
+      promotions: [cartDiscount],
+      lines: [heavySale],
+      options: { now },
+    });
+
+    // خام: 20% از 10M = 2M؛ سقف: تنها 1M قابل پرداخت باقی است
+    expect(result.totalDiscount).toBe(1_000_000);
+
+    const checkout = calculateCheckoutTotals({
+      lines: [
+        {
+          lineId: heavySale.lineId,
+          variantId: heavySale.variantId,
+          productId: heavySale.productId,
+          quantity: 1,
+          originalPrice: 10_000_000,
+          salePrice: 1_000_000,
+          promotionDiscount: result.totalDiscount,
+        },
+      ],
+      shippingCost: 0,
+    });
+
+    expect(checkout.consistency.ok).toBe(true);
+    expect(checkout.finalPrice).toBe(0);
+    expect(checkout.lines[0].payableTotal).toBe(0);
   });
 });

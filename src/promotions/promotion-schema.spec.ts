@@ -4,6 +4,7 @@ import { DataSource, getMetadataArgsStorage } from 'typeorm';
 jest.mock('uuid', () => ({ v4: () => 'test-id' }));
 
 import { PromotionSystem1802000000000 } from '../migrations/1802000000000-PromotionSystem';
+import { CartDiscountEligibility1807000000000 } from '../migrations/1807000000000-CartDiscountEligibility';
 import { Promotion } from './entities/promotion.entity';
 
 class MetadataDataSource extends DataSource {
@@ -15,20 +16,47 @@ class MetadataDataSource extends DataSource {
 describe('promotion production schema compatibility', () => {
   it('can SELECT every mapped promotion column from the migration schema', async () => {
     const statements: string[] = [];
-    await new PromotionSystem1802000000000().up({
-      query: (sql: string) => {
+    const fakeRunner = {
+      query: (sql: string, params?: unknown[]) => {
+        if (sql.includes('INFORMATION_SCHEMA.TABLES')) {
+          // promotions بعد از ثبت CREATE آن موجود در نظر گرفته می‌شود
+          const table = params?.[0];
+          const exists =
+            table === 'promotions' &&
+            statements.some(s => s.includes('CREATE TABLE `promotions`'));
+          return Promise.resolve([{ COUNT: exists ? 1 : 0 }]);
+        }
+
         if (sql.includes('INFORMATION_SCHEMA'))
           return Promise.resolve([{ COUNT: 0 }]);
         statements.push(sql);
         return Promise.resolve([]);
       },
-    } as never);
+    } as never;
+
+    await new PromotionSystem1802000000000().up(fakeRunner);
+    await new CartDiscountEligibility1807000000000().up(fakeRunner);
     const createTable = statements.find(sql =>
       sql.includes('CREATE TABLE `promotions`'),
     )!;
     const columns = [...createTable.matchAll(/^\s*`([^`]+)`\s+/gm)].map(
       match => match[1],
     );
+
+    /*
+     * ستون‌های اضافه‌شده با ALTER TABLE ... ADD COLUMN در مایگریشن‌های بعدی
+     * را هم به فهرست ستون‌های نهایی اضافه می‌کنیم؛ production همین‌طور
+     * ساخته می‌شود.
+     */
+    for (const statement of statements) {
+      const alter = statement.match(
+        /ALTER TABLE `promotions` ADD COLUMN `([^`]+)`/,
+      );
+
+      if (alter && !columns.includes(alter[1])) {
+        columns.push(alter[1]);
+      }
+    }
     expect(columns.length).toBeGreaterThan(40);
 
     // Build genuine MySQL ORM metadata without connecting to a production database.

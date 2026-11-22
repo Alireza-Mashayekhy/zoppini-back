@@ -1,4 +1,5 @@
 import {
+  CartDiscountBase,
   FreeItemSelection,
   Promotion,
   PromotionRewardType,
@@ -42,6 +43,11 @@ export interface PromotionCartLine {
   isFreeReward?: boolean;
   /** پروموشنی که این ردیف را رایگان کرده است */
   rewardPromotionId?: number | null;
+  /**
+   * آیا روی این ردیف «تخفیف سطح محصول» (فروش ویژه) اعمال شده است.
+   * اگر تعریف نشود، از روی unitPrice/listPrice استنتاج می‌شود.
+   */
+  hasProductDiscount?: boolean;
 }
 
 /** یک واحد بسط‌یافته از سبد (برای الگوریتم «ارزان‌ترین در هر جفت») */
@@ -57,6 +63,8 @@ export interface ExpandedUnit {
   /** شمارهٔ واحد در همان ردیف (برای تمایز واحدهای هم‌قیمت) */
   unitIndex: number;
   quantity: number;
+  /** آیا «تخفیف سطح محصول» روی این ردیف اعمال شده است */
+  hasProductDiscount: boolean;
 }
 
 export interface PromotionDiscountAllocation {
@@ -101,6 +109,16 @@ export interface PromotionEvaluation {
   autoAddReward: boolean;
   /** آیا با پارامترهای دیگر قابل ترکیب است (توسط هماهنگ‌کننده تعیین می‌شود) */
   canStack: boolean;
+  /**
+   * روش محاسبهٔ این پروموشن (برای اسنپ‌شات سفارش/پشتیبانی).
+   * فقط برای تخفیف عمومی سبد پر می‌شود.
+   */
+  meta?: {
+    /** مبنای محاسبه: «discounted_price» یا «original_price» */
+    cartDiscountBase?: CartDiscountBase | null;
+    /** آیا روی محصولات دارای تخفیف سطح محصول اعمال شد */
+    applyToDiscountedProducts?: boolean | null;
+  } | null;
 }
 
 export interface PromotionFreeItem {
@@ -249,7 +267,11 @@ export function isPromotionLive(
 export function isProductInScope(
   promotion: Pick<
     Promotion,
-    'scope' | 'products' | 'categories' | 'excludedProducts' | 'excludedCategories'
+    | 'scope'
+    | 'products'
+    | 'categories'
+    | 'excludedProducts'
+    | 'excludedCategories'
   >,
   productId: number,
   categoryIds: number[],
@@ -395,6 +417,18 @@ export function isProductInRewardScope(
  * ردیف‌های یکسان (same variant) ادغام نمی‌شوند تا «زمان افزودن» هر واحد
  * حفظ شود. برای ردیف با quantity>1، واحدهای بعدی زمان جدیدتری می‌گیرند.
  */
+/** آیا «تخفیف سطح محصول» روی ردیف اعمال شده است */
+export function lineHasProductDiscount(line: PromotionCartLine): boolean {
+  if (line.hasProductDiscount != null) {
+    return line.hasProductDiscount;
+  }
+
+  const unitPrice = toToman(line.unitPrice);
+  const listPrice = toToman(line.listPrice ?? line.unitPrice);
+
+  return listPrice > unitPrice;
+}
+
 export function expandCartLines(
   lines: PromotionCartLine[],
   options: { includeFreeRewards?: boolean } = {},
@@ -409,6 +443,8 @@ export function expandCartLines(
 
     const quantity = Math.max(0, Math.floor(Number(line.quantity) || 0));
     const unitPrice = toToman(line.unitPrice);
+    const listPrice = toToman(line.listPrice ?? line.unitPrice);
+    const hasProductDiscount = lineHasProductDiscount(line);
 
     for (let index = 0; index < quantity; index += 1) {
       units.push({
@@ -417,10 +453,11 @@ export function expandCartLines(
         productId: line.productId,
         categoryIds: line.categoryIds ?? [],
         unitPrice,
-        listPrice: toToman(line.listPrice ?? line.unitPrice),
+        listPrice,
         addedAt: Number(line.addedAt ?? 0) + index,
         unitIndex: index,
         quantity,
+        hasProductDiscount,
       });
     }
   }
@@ -717,9 +754,7 @@ export function evaluateTriggerReward(
   const rewardQuantity = Math.max(1, Math.floor(promotion.rewardQuantity || 1));
   const unitValue =
     options.priceOf?.(
-      promotion.suggestedProductId ??
-        promotion.rewardProducts?.[0]?.id ??
-        0,
+      promotion.suggestedProductId ?? promotion.rewardProducts?.[0]?.id ?? 0,
       null,
     ) ?? 0;
 
@@ -756,9 +791,7 @@ export function evaluateTriggerReward(
     }
 
     const productId =
-      promotion.suggestedProductId ??
-      promotion.rewardProducts?.[0]?.id ??
-      null;
+      promotion.suggestedProductId ?? promotion.rewardProducts?.[0]?.id ?? null;
 
     if (productId == null) {
       return null;
@@ -788,7 +821,10 @@ export function evaluateTriggerReward(
 
   const reward = freeItem();
 
-  if (reward && options.isRewardOutOfStock?.(reward.productId, reward.variantId)) {
+  if (
+    reward &&
+    options.isRewardOutOfStock?.(reward.productId, reward.variantId)
+  ) {
     evaluation.reasons.push(
       'کالای هدیه در این لحظه موجود نیست؛ به‌جای آن از گزینه‌های دیگر پیشنهاد استفاده کنید.',
     );
@@ -798,15 +834,10 @@ export function evaluateTriggerReward(
   }
 
   if (reward && options.variantStock) {
-    const stock = options.variantStock(
-      reward.variantId,
-      reward.productId,
-    );
+    const stock = options.variantStock(reward.variantId, reward.productId);
 
     if (stock !== Infinity && stock < reward.quantity) {
-      evaluation.reasons.push(
-        `از کالای هدیه فقط ${stock} عدد در انبار است.`,
-      );
+      evaluation.reasons.push(`از کالای هدیه فقط ${stock} عدد در انبار است.`);
 
       return evaluation;
     }
@@ -829,9 +860,7 @@ export function evaluateTriggerReward(
     // تا وقتی مشتری نپذیرفته، چیزی «رایگان» نشده است؛ ارزش هدیه در سبد و
     // صورت‌حساب نباید کم شود.
     evaluation.freeItemValue = 0;
-    evaluation.freeItems = reward
-      ? [{ ...reward, quantity: rewardCount }]
-      : [];
+    evaluation.freeItems = reward ? [{ ...reward, quantity: rewardCount }] : [];
 
     return evaluation;
   }
@@ -956,7 +985,12 @@ export function evaluateSpendAndSave(
   const allocations: PromotionDiscountAllocation[] = [];
   const lineTotals = new Map<
     string | number,
-    { amount: number; units: number; variantId: number | null; productId: number }
+    {
+      amount: number;
+      units: number;
+      variantId: number | null;
+      productId: number;
+    }
   >();
 
   for (const unit of base) {
@@ -1012,7 +1046,8 @@ export function evaluateSpendAndSave(
     0,
   );
   evaluation.message =
-    promotion.badgeText?.trim() || `${evaluation.discountAmount.toLocaleString('fa-IR')} تومان تخفیف خرید.`;
+    promotion.badgeText?.trim() ||
+    `${evaluation.discountAmount.toLocaleString('fa-IR')} تومان تخفیف خرید.`;
 
   return evaluation;
 }
@@ -1230,6 +1265,98 @@ export function evaluateFreeShipping(
   return evaluation;
 }
 
+/**
+ * توزیع مبلغی دلخواه بین ردیف‌ها، متناسب با `weight` و با سقف `cap` برای
+ * هر ردیف (water-filling).
+ *
+ * - خروجی هر ردیف هرگز از سقفش بیشتر نمی‌شود.
+ * - جمع خروجی برابر با min(discount, جمع سقف‌ها) است (به‌جز ریزدانه‌های
+ *   گرد کردن که در پایان، یک‌به‌یک روی ردیف‌های دارای باقیماندهٔ سقف پخش
+ *   می‌شوند).
+ */
+export function distributeProportionalCap(
+  discount: number,
+  entries: { key: string | number; weight: number; cap: number }[],
+): Map<string | number, number> {
+  const allocations = new Map<string | number, number>();
+  let remaining = Math.max(0, Math.floor(discount));
+
+  const active = entries.map(entry => ({
+    ...entry,
+    allocated: 0,
+    cap: Math.max(0, Math.floor(entry.cap)),
+    weight: Math.max(0, entry.weight),
+  }));
+
+  for (const entry of active) {
+    allocations.set(entry.key, 0);
+  }
+
+  for (let pass = 0; pass < 16 && remaining > 0; pass += 1) {
+    const open = active.filter(entry => entry.cap > entry.allocated);
+
+    if (!open.length) {
+      break;
+    }
+
+    const weightSum = open.reduce((sum, entry) => sum + entry.weight, 0);
+
+    if (weightSum <= 0) {
+      // هیچ وزن مثبتی نیست؛ باقیمانده را به ترتیب روی سقف‌ها پخش کن
+      for (const entry of open) {
+        if (remaining <= 0) {
+          break;
+        }
+
+        const add = Math.min(entry.cap - entry.allocated, remaining);
+        entry.allocated += add;
+        remaining -= add;
+      }
+
+      break;
+    }
+
+    let distributed = 0;
+
+    for (const entry of open) {
+      const spare = entry.cap - entry.allocated;
+      const share = Math.min(
+        spare,
+        Math.floor((remaining * entry.weight) / weightSum),
+      );
+
+      if (share > 0) {
+        entry.allocated += share;
+        distributed += share;
+      }
+    }
+
+    remaining -= distributed;
+
+    if (distributed === 0) {
+      // پایین‌روندهای floor باعث صفر شدن سهم همه شد؛ باقیمانده را
+      // تومان‌به‌تومان روی ردیف‌های دارای سقف پخش کن
+      for (const entry of open) {
+        if (remaining <= 0) {
+          break;
+        }
+
+        const add = Math.min(entry.cap - entry.allocated, remaining);
+        entry.allocated += add;
+        remaining -= add;
+      }
+
+      break;
+    }
+  }
+
+  for (const entry of active) {
+    allocations.set(entry.key, entry.allocated);
+  }
+
+  return allocations;
+}
+
 // =========================================================
 // نوع D-5 — تخفیف عمومی سبد
 // =========================================================
@@ -1241,18 +1368,53 @@ export function evaluateCartDiscount(
   const evaluation = emptyEvaluation(promotion);
 
   const minCartValue = toToman(promotion.minCartValue);
-  const eligible = units.filter(unit =>
+  const applyToDiscounted = promotion.applyToDiscountedProducts === true;
+  const cartDiscountBase =
+    promotion.cartDiscountBase === CartDiscountBase.ORIGINAL_PRICE
+      ? CartDiscountBase.ORIGINAL_PRICE
+      : CartDiscountBase.DISCOUNTED_PRICE;
+
+  const inScope = units.filter(unit =>
     isProductInScope(promotion, unit.productId, unit.categoryIds),
   );
 
-  if (!eligible.length) {
+  if (!inScope.length) {
     evaluation.reasons.push('هیچ کالای مشمولی در سبد نیست.');
 
     return evaluation;
   }
 
+  /*
+   * صلاحیت محصولات دارای «تخفیف سطح محصول»:
+   * - خاموش (پیش‌فرض): ردیف‌هایی که خودشان تخفیف دارند از این پروموشن
+   *   مستثنی‌اند.
+   * - روشن: مبنای محاسبه از تنظیمات پروموشن می‌آید.
+   */
+  const eligible = applyToDiscounted
+    ? inScope
+    : inScope.filter(unit => !unit.hasProductDiscount);
+
+  if (!eligible.length) {
+    evaluation.reasons.push(
+      'همهٔ کالاهای مشمول خودشان تخفیف دارند و این تخفیف روی آن‌ها اعمال نمی‌شود.',
+    );
+
+    return evaluation;
+  }
+
+  /** مبنای محاسبهٔ تخفیف: قیمت فهرست یا قیمت پس از تخفیف محصول */
+  const baseOf = (unit: ExpandedUnit) =>
+    cartDiscountBase === CartDiscountBase.ORIGINAL_PRICE
+      ? unit.listPrice
+      : unit.unitPrice;
+
   const eligibleQuantity = eligible.length;
-  const eligibleValue = eligible.reduce((sum, unit) => sum + unit.unitPrice, 0);
+  const eligibleValue = eligible.reduce((sum, unit) => sum + baseOf(unit), 0);
+  /** باقی‌ماندهٔ قابل پرداخت ردیف‌های مشمول؛ سقف قطعی تخفیف سبد */
+  const remainingValue = eligible.reduce(
+    (sum, unit) => sum + unit.unitPrice,
+    0,
+  );
 
   if (promotion.minQuantity > 0 && eligibleQuantity < promotion.minQuantity) {
     evaluation.reasons.push(
@@ -1272,59 +1434,81 @@ export function evaluateCartDiscount(
 
   let discount =
     promotion.rewardType === PromotionRewardType.PERCENTAGE
-      ? percentOf(eligibleValue, clampPercent(Number(promotion.rewardValue ?? 0)))
+      ? percentOf(
+          eligibleValue,
+          clampPercent(Number(promotion.rewardValue ?? 0)),
+        )
       : toToman(promotion.rewardValue);
 
   if (promotion.maxDiscountAmount != null) {
     discount = Math.min(discount, toToman(promotion.maxDiscountAmount));
   }
 
+  /*
+   * سقف قطعی: تخفیف سبد هرگز از باقی‌ماندهٔ قابل پرداخت ردیف‌های مشمول
+   * بیشتر نمی‌شود؛ یعنی جمع تخفیف سطح محصول + تخفیف سبد هرگز از قیمت فهرست
+   * ردیف بیشتر نمی‌شود و قیمت نهایی هرگز منفی نمی‌شود.
+   */
+  discount = Math.min(discount, remainingValue);
+
   if (discount <= 0) {
     return evaluation;
   }
 
-  const allocations: PromotionDiscountAllocation[] = [];
   const lineTotals = new Map<
     string | number,
-    { amount: number; units: number; variantId: number | null; productId: number }
+    {
+      base: number;
+      budget: number;
+      units: number;
+      variantId: number | null;
+      productId: number;
+    }
   >();
 
   for (const unit of eligible) {
     const current = lineTotals.get(unit.lineId) ?? {
-      amount: 0,
+      base: 0,
+      budget: 0,
       units: 0,
       variantId: unit.variantId,
       productId: unit.productId,
     };
 
-    current.amount += unit.unitPrice;
+    current.base += baseOf(unit);
+    current.budget += unit.unitPrice;
     current.units += 1;
     lineTotals.set(unit.lineId, current);
   }
 
-  let distributed = 0;
-  const entries = [...lineTotals.entries()];
+  const distributedAmounts = distributeProportionalCap(
+    discount,
+    [...lineTotals.entries()].map(([lineId, info]) => ({
+      key: lineId,
+      weight: info.base,
+      cap: info.budget,
+    })),
+  );
 
-  entries.forEach(([lineId, info], index) => {
-    const isLast = index === entries.length - 1;
-    const share = isLast
-      ? discount - distributed
-      : Math.round((discount * info.amount) / eligibleValue);
+  const allocations: PromotionDiscountAllocation[] = [];
 
-    distributed += share;
+  for (const [lineId, info] of lineTotals) {
+    const amount = distributedAmounts.get(lineId) ?? 0;
 
-    if (share > 0) {
-      allocations.push({
-        lineId,
-        variantId: info.variantId,
-        productId: info.productId,
-        amount: share,
-        discountedUnits: info.units,
-        isFree: false,
-        label: 'تخفیف سبد',
-      });
+    if (amount <= 0) {
+      continue;
     }
-  });
+
+    allocations.push({
+      lineId,
+      variantId: info.variantId,
+      productId: info.productId,
+      amount,
+      discountedUnits: info.units,
+      isFree: false,
+      label: 'تخفیف سبد',
+    });
+  }
 
   const merged = mergeAllocations(allocations);
 
@@ -1334,6 +1518,10 @@ export function evaluateCartDiscount(
     (sum, allocation) => sum + allocation.amount,
     0,
   );
+  evaluation.meta = {
+    cartDiscountBase,
+    applyToDiscountedProducts: applyToDiscounted,
+  };
   evaluation.message =
     promotion.badgeText?.trim() ||
     `${evaluation.discountAmount.toLocaleString('fa-IR')} تومان تخفیف روی سبد.`;

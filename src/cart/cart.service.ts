@@ -14,6 +14,7 @@ import {
   PromotionSuggestion,
 } from 'src/promotions/engine/promotion-engine';
 import { PromotionsService } from 'src/promotions/promotions.service';
+import { buildPricedPromotionCart } from 'src/promotions/promotion-cart.util';
 import { Repository } from 'typeorm';
 
 import { AddToCartDto } from './dto/add-to-cart.dto';
@@ -257,7 +258,10 @@ export class CartsService {
     });
 
     const after = await this.promotionsService.evaluateCart({
-      cart: refreshed ?? { ...cart, items: cart.items.filter(i => i.id !== itemId) },
+      cart: refreshed ?? {
+        ...cart,
+        items: cart.items.filter(i => i.id !== itemId),
+      },
       userId,
     });
 
@@ -454,7 +458,12 @@ export class CartsService {
   async addRewardToCart(
     userId: number | undefined,
     guestId: string | undefined,
-    params: { promotionId: number; variantId?: number; productId?: number; quantity?: number },
+    params: {
+      promotionId: number;
+      variantId?: number;
+      productId?: number;
+      quantity?: number;
+    },
   ) {
     const cart = await this.getOrCreateCart(userId, guestId);
 
@@ -728,9 +737,7 @@ export class CartsService {
       (item as any).promotion = promotionState;
 
       // قیمت قابل پرداخت هر واحد = قیمت پس از فروش ویژه − سهم پروموشن
-      const payableUnit = info.isFree
-        ? 0
-        : Math.max(0, saleUnit - perUnit);
+      const payableUnit = info.isFree ? 0 : Math.max(0, saleUnit - perUnit);
 
       (item.variant as any).payablePrice = payableUnit;
       (item as any).payableTotal = payableUnit * quantity;
@@ -819,24 +826,8 @@ export class CartsService {
       saleDiscountPerUnit: number;
     }[],
   ): Cart {
-    const clones = salePricedLines.map(line => {
-      const clone = Object.create(
-        Object.getPrototypeOf(line.item),
-      ) as CartItem;
-
-      Object.assign(clone, line.item, {
-        variant: {
-          ...line.item.variant,
-          price: line.unitPrice,
-        },
-      });
-
-      return clone;
-    });
-
-    return Object.assign(Object.create(Object.getPrototypeOf(cart)), cart, {
-      items: clones,
-    }) as Cart;
+    // کلون مشترک سبد برای ارزیابی پروموشن (همان چیزی که چک‌اوت/سفارش می‌بینند)
+    return buildPricedPromotionCart(cart, salePricedLines);
   }
 
   private presentEvaluation(evaluation: PromotionEvaluation) {
@@ -914,9 +905,9 @@ export class CartsService {
         continue;
       }
 
-      const reason = after.rejected
-        .find(item => item.promotionId === evaluation.promotionId)
-        ?.reasons?.[0];
+      const reason = after.rejected.find(
+        item => item.promotionId === evaluation.promotionId,
+      )?.reasons?.[0];
 
       messages.push(
         `${evaluation.name} با تغییر سبد حذف شد${reason ? `: ${reason}` : ''}`,
@@ -934,9 +925,7 @@ export class CartsService {
       .filter(
         item =>
           item.freeItems.length > 0 &&
-          !after.applied.some(
-            entry => entry.promotionId === item.promotionId,
-          ),
+          !after.applied.some(entry => entry.promotionId === item.promotionId),
       )
       .map(item => ({
         promotionId: item.promotionId,

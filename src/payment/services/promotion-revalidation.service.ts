@@ -121,7 +121,9 @@ export class PromotionRevalidationService {
    * فرمول قیمت نهایی باید دقیقاً با همان چیزی که هنگام ساخت سفارش استفاده شد
    * یکی باشد:
    *
-   *   final = totalPrice − saleDiscount − promotionDiscount − discount + shipping
+   *   final = totalPrice − saleDiscount − promotionDiscount − discount
+   *           − firstPurchaseGiftDiscount + shipping
+   *
    *
    * اگر فقط `discount` کم شود، تمام تخفیف‌های دیگر (فروش ویژه، پروموشن و کد
    * تخفیف) از قیمت جدید حذف می‌شوند و مشتری مبلغی بسیار بیشتر از واقعیت
@@ -202,6 +204,13 @@ export class PromotionRevalidationService {
     const orderTotal = Number(order.totalPrice ?? 0);
     const saleDiscount = Number(order.saleDiscount ?? 0);
     const codeDiscount = Number(order.discount ?? 0);
+    /*
+     * فرمول باید دقیقاً با زمان ساخت سفارش یکی باشد؛ حذف این بخش یعنی مشتری
+     * مبلغی بیشتر از چیزی که تأیید کرده می‌بیند.
+     */
+    const firstPurchaseGiftDiscount = Number(
+      order.firstPurchaseGiftDiscount ?? 0,
+    );
     const shipping = Number(order.shippingCost ?? 0);
 
     const nextPromotionDiscount = Math.max(
@@ -220,7 +229,12 @@ export class PromotionRevalidationService {
 
     const finalPrice = Math.max(
       0,
-      orderTotal - saleDiscount - nextPromotionDiscount - codeDiscount + shippingCost,
+      orderTotal -
+        saleDiscount -
+        nextPromotionDiscount -
+        codeDiscount -
+        firstPurchaseGiftDiscount +
+        shippingCost,
     );
 
     order.promotionDiscount = nextPromotionDiscount as never;
@@ -266,7 +280,9 @@ export class PromotionRevalidationService {
     const result = await this.revalidateOrder(order);
 
     if (!result.ok) {
-      throw new BadRequestException(result.message ?? 'شرایط سفارش تغییر کرده است.');
+      throw new BadRequestException(
+        result.message ?? 'شرایط سفارش تغییر کرده است.',
+      );
     }
 
     return result;
