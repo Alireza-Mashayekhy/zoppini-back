@@ -8,7 +8,6 @@ import { Product } from 'src/products/entities/product.entity';
 import { ProductsModule } from 'src/products/products.module';
 
 import { AdminPromotionsController } from './admin/admin-promotions.controller';
-import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Promotion } from './entities/promotion.entity';
 import {
   PromotionEvent,

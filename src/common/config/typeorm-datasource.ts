@@ -19,6 +19,7 @@ import { AddClubCreditPayment1803000000000 } from 'src/migrations/1803000000000-
 import { FirstPurchaseGift1804000000000 } from 'src/migrations/1804000000000-FirstPurchaseGift';
 import { RahkaranInvoiceSync1805000000000 } from 'src/migrations/1805000000000-RahkaranInvoiceSync';
 import { SequentialSaleDiscounts1806000000000 } from 'src/migrations/1806000000000-SequentialSaleDiscounts';
+import { CartDiscountEligibility1807000000000 } from 'src/migrations/1807000000000-CartDiscountEligibility';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -45,6 +46,7 @@ export default new DataSource({
     FirstPurchaseGift1804000000000,
     RahkaranInvoiceSync1805000000000,
     SequentialSaleDiscounts1806000000000,
+    CartDiscountEligibility1807000000000,
   ],
   synchronize: false,
 });
