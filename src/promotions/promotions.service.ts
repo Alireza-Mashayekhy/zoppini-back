@@ -1142,9 +1142,12 @@ export class PromotionsService {
   async getProductBadges(product: Product): Promise<
     {
       promotionId: number;
+      name: string;
       badgeText: string;
       description: string | null;
       type: PromotionType;
+      rewardType: PromotionRewardType;
+      rewardValue: number | null;
       hint: string;
     }[]
   > {
@@ -1170,9 +1173,12 @@ export class PromotionsService {
 
     const badges: {
       promotionId: number;
+      name: string;
       badgeText: string;
       description: string | null;
       type: PromotionType;
+      rewardType: PromotionRewardType;
+      rewardValue: number | null;
       hint: string;
     }[] = [];
 
@@ -1212,9 +1218,18 @@ export class PromotionsService {
 
       badges.push({
         promotionId: promotion.id,
+        name: promotion.name,
         badgeText: text,
         description: promotion.customerDescription ?? null,
         type: promotion.type,
+        /*
+         * «نام» و «مقدار پاداش» برای بنر پروموشن صفحهٔ محصول لازم‌اند تا
+         * درصد نمایش‌داده‌شده از دادهٔ واقعی پروموشن بیاید و در فرانت
+         * هاردکد نشود. هیچ محاسبه یا قاعدهٔ صلاحیتی تغییر نمی‌کند.
+         */
+        rewardType: promotion.rewardType,
+        rewardValue:
+          promotion.rewardValue == null ? null : Number(promotion.rewardValue),
         hint: describePromotion(promotion, price),
       });
     }
