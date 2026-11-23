@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Cart } from 'src/cart/entities/cart.entity';
 import { CartItem } from 'src/cart/entities/cart-item.entity';
 import { Category } from 'src/categories/entities/category.entity';
+import { DiscountsModule } from 'src/discounts/discounts.module';
 import { Product } from 'src/products/entities/product.entity';
 import { ProductsModule } from 'src/products/products.module';
 
@@ -29,6 +30,7 @@ import { PromotionsService } from './promotions.service';
       Category,
     ]),
     forwardRef(() => ProductsModule),
+    DiscountsModule,
   ],
   controllers: [AdminPromotionsController, PromotionsController],
   providers: [PromotionsService, PromotionsRepository],
