@@ -29,7 +29,8 @@
     "migration:product-care-title": "ts-node -r tsconfig-paths/register src/scripts/migrate-product-care-title.ts",
     "blog-links": "ts-node -r tsconfig-paths/register src/scripts/rewrite-blog-body-links.ts",
     "migration:revert": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:revert -d src/common/config/typeorm-datasource.ts",
-    "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/common/config/typeorm-datasource.ts"
+    "migration:show": "ts-node -r tsconfig-paths/register ./node_modules/typeorm/cli.js migration:show -d src/common/config/typeorm-datasource.ts",
+    "promotions:audit-base": "ts-node -r tsconfig-paths/register src/scripts/audit-cart-discount-base.ts"
   },
   "dependencies": {
     "@nestjs/axios": "4.0.1",

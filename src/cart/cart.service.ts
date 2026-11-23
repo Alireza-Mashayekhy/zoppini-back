@@ -13,8 +13,8 @@ import {
   PromotionEvaluation,
   PromotionSuggestion,
 } from 'src/promotions/engine/promotion-engine';
-import { PromotionsService } from 'src/promotions/promotions.service';
 import { buildPricedPromotionCart } from 'src/promotions/promotion-cart.util';
+import { PromotionsService } from 'src/promotions/promotions.service';
 import { Repository } from 'typeorm';
 
 import { AddToCartDto } from './dto/add-to-cart.dto';
@@ -641,7 +641,6 @@ export class CartsService {
         (variant as any).discount = null;
       }
 
-      const itemFinalTotal = itemFinalPrice * quantity;
       const itemDiscountTotal = itemDiscountPrice * quantity;
 
       // برای نمایش قیمت هر محصول
@@ -739,7 +738,18 @@ export class CartsService {
       // قیمت قابل پرداخت هر واحد = قیمت پس از فروش ویژه − سهم پروموشن
       const payableUnit = info.isFree ? 0 : Math.max(0, saleUnit - perUnit);
 
+      /*
+       * سه فیلد هم‌معنا برای سه مصرف‌کننده:
+       * - `variant.payablePrice` → واحد قابل پرداخت (برای محاسبات بعدی)
+       * - `item.payablePrice`    → همان واحد، در سطح ردیف
+       * - `item.payableTotal`    → جمع ردیف؛ همان عددی که کارت سبد نشان می‌دهد
+       *
+       * `item.payablePrice` حتماً باید ست شود، وگرنه حلقهٔ پایین («ردیف‌هایی
+       * که تخفیف نگرفتند») ردیف را تخفیف‌نخورده فرض می‌کند، جمع ردیف را به
+       * قیمت پس از فروش ویژه برمی‌گرداند و تخفیف سبد را از ردیف حذف می‌کند.
+       */
       (item.variant as any).payablePrice = payableUnit;
+      (item as any).payablePrice = payableUnit;
       (item as any).payableTotal = payableUnit * quantity;
 
       if (info.isFree) {
@@ -753,11 +763,18 @@ export class CartsService {
       }
     }
 
-    // ردیف‌هایی که تخفیف نگرفتند هم payable بگیرند
+    /*
+     * ردیف‌هایی که هیچ سهم پروموشنی نگرفتند هم قیمت قابل پرداخت بگیرند.
+     *
+     * شرط روی `payableTotal` است (نه `payablePrice`) چون حلقهٔ بالا هر دو را
+     * ست می‌کند؛ با شرط قبلی، این حلقه همیشه اجرا می‌شد و جمع ردیفِ
+     * تخفیف‌خورده را با قیمت پیش از تخفیف سبد بازنویسی می‌کرد — یعنی جمع
+     * ردیف‌ها با «جمع کل» سبد یکی نمی‌ماند.
+     */
     for (const line of salePricedLines) {
       const item = line.item as any;
 
-      if (item.payablePrice == null) {
+      if (item.payableTotal == null) {
         item.payablePrice = line.unitPrice;
         item.payableTotal = line.unitPrice * line.item.quantity;
         item.promotion = {
@@ -842,6 +859,16 @@ export class CartsService {
       message: evaluation.message,
       reasons: evaluation.reasons,
       requiresAction: evaluation.requiresAction,
+      /*
+       * روشی که سرور واقعاً برای «تخفیف عمومی سبد» استفاده کرده است.
+       *
+       * برای پروموشن‌های دیگر `null` است. با این دو فیلد، پاسخ سبد خودش
+       * گواهی می‌دهد کدام فرمول اجرا شده: «discounted_price» یعنی ۲۰٪ روی
+       * قیمت پس از فروش ویژه، «original_price» یعنی ۲۰٪ روی قیمت فهرست.
+       */
+      cartDiscountBase: evaluation.meta?.cartDiscountBase ?? null,
+      applyToDiscountedProducts:
+        evaluation.meta?.applyToDiscountedProducts ?? null,
       allocations: evaluation.allocations.map(allocation => ({
         lineId: allocation.lineId,
         amount: allocation.amount,
