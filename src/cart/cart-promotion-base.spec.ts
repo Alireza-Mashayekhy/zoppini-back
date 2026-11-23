@@ -258,6 +258,7 @@ function checkoutTotals(cart: Cart) {
     id: number;
     quantity: number;
     payableTotal: number;
+    saleTotal?: number;
     variant: { id: number; originalPrice: number };
     promotion: { promotionDiscount: number; promotionIds: number[] };
     promotionRewardId?: number | null;
@@ -273,7 +274,9 @@ function checkoutTotals(cart: Cart) {
        * سبد، تا «جمع ردیف‌ها» با «جمع کل» یکی بماند.
        */
       const salePrice =
-        (Number(item.payableTotal) + promotionDiscount) / quantity;
+        item.saleTotal != null
+          ? Number(item.saleTotal) / quantity
+          : (Number(item.payableTotal) + promotionDiscount) / quantity;
 
       return {
         lineId: item.id,
@@ -320,6 +323,53 @@ describe('cart promotion calculation base (sequential vs additive)', () => {
     expect(pricing.discountPrice).toBe(P1_DISCOUNT);
     expect(pricing.promotionDiscountPrice).toBe(998_000);
     expect(pricing.finalPrice).toBe(3_992_000);
+  });
+
+  // ---------------------------------------------
+  // Test A2 — presentation fields for the checkout line
+  // ---------------------------------------------
+  it('A2: the row exposes the product-level price next to the cart promotion', async () => {
+    const { price } = makeCartsService({
+      items: [
+        {
+          lineId: 1,
+          productId: 1001,
+          categoryIds: [CATEGORY_BLACK_FRIDAY],
+          originalPrice: P1_ORIGINAL,
+          salePrice: P1_SALE,
+        },
+      ],
+      promotion: makePromotion({
+        ...scopedToBlackFriday(),
+        applyToDiscountedProducts: true,
+        cartDiscountBase: CartDiscountBase.DISCOUNTED_PRICE,
+      }),
+      scopeCategoryIds: [CATEGORY_BLACK_FRIDAY],
+    });
+
+    const cart = await price();
+    const item = (cart.items ?? [])[0] as unknown as {
+      quantity: number;
+      payablePrice: number;
+      payableTotal: number;
+      saleTotal: number;
+      variant: { salePrice: number; originalPrice: number; discountedPrice: number };
+      promotion: { promotionDiscount: number };
+    };
+
+    // قیمت سطح محصول (پیش از پروموشن سبد)
+    expect(item.saleTotal).toBe(P1_SALE);
+    expect(item.variant.salePrice).toBe(P1_SALE);
+    // قیمت فهرست دست‌نخورده
+    expect(item.variant.originalPrice).toBe(P1_ORIGINAL);
+    // قیمت پس از پروموشن سبد
+    expect(item.promotion.promotionDiscount).toBe(998_000);
+    expect(item.payablePrice).toBe(3_992_000);
+    expect(item.payableTotal).toBe(3_992_000);
+    // رابطهٔ نمایشی ردیف: قیمت سطح محصول − تخفیف سبد = پرداختی ردیف
+    expect(item.saleTotal - item.promotion.promotionDiscount).toBe(
+      item.payableTotal,
+    );
   });
 
   // ---------------------------------------------

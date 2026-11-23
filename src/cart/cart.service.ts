@@ -647,6 +647,17 @@ export class CartsService {
       (variant as any).originalPrice = itemOriginalPrice;
       (variant as any).discountedPrice = itemFinalPrice;
 
+      /*
+       * قیمت «سطح محصول» (پس از فروش ویژه، پیش از پروموشن سبد) برای نمایش.
+       *
+       * `variant.discountedPrice` در ادامهٔ همین متد با قیمتِ پس از پروموشن
+       * سبد بازنویسی می‌شود؛ پس یک فیلد صریح و تغییرناپذیر لازم است تا
+       * خلاصهٔ سفارش بتواند قیمت محصول را جدا از تخفیف سبد نشان دهد.
+       * هیچ محاسبه‌ای تغییر نمی‌کند؛ فقط همان عدد در فیلدی جدا هم منتشر می‌شود.
+       */
+      (variant as any).salePrice = itemFinalPrice;
+      (item as any).saleTotal = itemFinalPrice * quantity;
+
       // جمع کل سبد
       originalPrice += itemOriginalTotal;
       saleDiscountTotal += itemDiscountTotal;
