@@ -14,18 +14,25 @@ import {
 } from 'src/common/logging/structured-logger';
 import { Order } from 'src/order/entities/order.entity';
 import { OrdersService } from 'src/order/order.service';
-import { Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 
 import {
   RahkaranInvoiceSync,
   RahkaranInvoiceSyncStatus,
 } from './entities/rahkaran-invoice-sync.entity';
-import { RahkaranService } from './rahkaran.service';
+import { isRahkaranUnknownOutcome, RahkaranService } from './rahkaran.service';
 
 export interface RahkaranSyncTriggerContext {
   /** منبع تلاش: پرداخت موفق، retry خودکار، یا retry دستی ادمین */
   trigger?: 'payment' | 'scheduler' | 'admin';
   correlationId?: string;
+
+  /**
+   * اجازهٔ ارسال دوباره برای رکوردی که نتیجهٔ تلاش قبلی‌اش «نامعلوم» بوده
+   * است. فقط وقتی true شود که انسان تأیید کرده فاکتور در راهکاران وجود
+   * ندارد (retry دستی با `force`).
+   */
+  allowReconciliation?: boolean;
 }
 
 export interface RahkaranSyncResult {
@@ -34,7 +41,8 @@ export interface RahkaranSyncResult {
    * true یعنی هیچ درخواستی به راهکاران ارسال نشد:
    * یا فاکتور قبلاً ثبت شده، یا تلاش دیگری هم‌اکنون در حال انجام است.
    */
-  skipped?: 'already_registered' | 'already_in_progress';
+  skipped?:
+    'already_registered' | 'already_in_progress' | 'needs_reconciliation';
   correlationId: string;
   invoiceId?: number | null;
   invoiceNumber?: string | null;
@@ -132,6 +140,41 @@ export class RahkaranInvoiceSyncService {
       // Claim: فقط یک تلاش همزمان اجازهٔ ادامه دارد
       // ==========================================================
 
+      // ==========================================================
+      // نتیجهٔ نامعلوم: تا بررسی دستی، ارسال دوباره ممنوع است
+      // ==========================================================
+
+      /*
+       * تلاش قبلی به راهکاران رسیده ولی پاسخ معتبری برنگشته است؛ ممکن است
+       * فاکتور ثبت شده باشد. retry خودکار یا پرداخت دوباره نباید فاکتور
+       * تکراری بسازد، پس فقط با تأیید صریح انسان ادامه می‌دهیم.
+       */
+      if (row.reconcileRequiredAt && !context?.allowReconciliation) {
+        this.logger.warn(
+          structuredLog('rahkaran.invoice.registration.skipped', {
+            correlationId,
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            trigger: context?.trigger,
+            reason: 'needs_reconciliation',
+            reconcileRequiredAt: row.reconcileRequiredAt,
+            reconcileReason: row.reconcileReason,
+            attempts: row.attempts,
+            note: 'بررسی کنید فاکتور در راهکاران ثبت شده یا نه؛ سپس از پنل مدیریت با force=true دوباره بفرستید.',
+          }),
+        );
+
+        return {
+          success: false,
+          skipped: 'needs_reconciliation',
+          correlationId,
+          attempts: row.attempts,
+          error:
+            row.reconcileReason ??
+            'نتیجهٔ تلاش قبلی در راهکاران نامعلوم است؛ نیاز به بررسی دستی دارد.',
+        };
+      }
+
       const claimed = await this.tryClaimSync(order.id, correlationId);
 
       if (!claimed) {
@@ -195,6 +238,8 @@ export class RahkaranInvoiceSyncService {
               succeededAt: new Date(),
               lastError: null,
               lastCorrelationId: correlationId,
+              reconcileRequiredAt: null,
+              reconcileReason: null,
             },
           );
         } catch (persistError) {
@@ -235,6 +280,17 @@ export class RahkaranInvoiceSyncService {
       } catch (error) {
         const serialized = serializeError(error);
 
+        /*
+         * تفکیک حیاتی: خطایی که «رد صریح» راهکاران است با خیال راحت retry
+         * می‌شود، ولی خطایی که نتیجه‌اش نامعلوم است (Timeout/پاسخ بدشکل)
+         * ممکن است فاکتور را ساخته باشد. فقط دومی «نیازمند تطبیق» می‌شود.
+         */
+        const outcomeUnknown = isRahkaranUnknownOutcome(error);
+
+        const reconcileReason = outcomeUnknown
+          ? `${serialized.type}: ${serialized.message}`.slice(0, 250)
+          : null;
+
         await this.syncRepo.update(
           { orderId: order.id },
           {
@@ -245,6 +301,12 @@ export class RahkaranInvoiceSyncService {
               0,
               4000,
             ),
+            ...(outcomeUnknown
+              ? {
+                  reconcileRequiredAt: new Date(),
+                  reconcileReason,
+                }
+              : {}),
           },
         );
 
@@ -256,9 +318,26 @@ export class RahkaranInvoiceSyncService {
             attempt,
             trigger: context?.trigger ?? 'payment',
             durationMs: Date.now() - startedAt,
+            outcomeUnknown,
             error: serialized,
           }),
         );
+
+        if (outcomeUnknown) {
+          this.logger.error(
+            structuredLog(
+              'rahkaran.invoice.registration.needs_reconciliation',
+              {
+                correlationId,
+                orderId: order.id,
+                orderNumber: order.orderNumber,
+                attempt,
+                note: 'نتیجهٔ ثبت نامعلوم است؛ retry خودکار متوقف شد. ابتدا در راهکاران بررسی کنید فاکتور با این شمارهٔ سفارش وجود دارد یا نه.',
+                reason: reconcileReason,
+              },
+            ),
+          );
+        }
 
         if (attempt >= RahkaranInvoiceSyncService.MAX_AUTO_ATTEMPTS) {
           this.logger.error(
@@ -312,25 +391,40 @@ export class RahkaranInvoiceSyncService {
       Date.now() - RahkaranInvoiceSyncService.STALE_PROCESSING_MS,
     );
 
-    return this.syncRepo
-      .createQueryBuilder('sync')
-      .where('sync.status = :pending', {
-        pending: RahkaranInvoiceSyncStatus.PENDING,
-      })
-      .orWhere('sync.status = :failed AND sync.attempts < :maxAttempts', {
-        failed: RahkaranInvoiceSyncStatus.FAILED,
-        maxAttempts: RahkaranInvoiceSyncService.MAX_AUTO_ATTEMPTS,
-      })
-      .orWhere(
-        'sync.status = :processing AND (sync.last_attempt_at IS NULL OR sync.last_attempt_at < :staleCutoff)',
-        {
-          processing: RahkaranInvoiceSyncStatus.PROCESSING,
-          staleCutoff,
-        },
-      )
-      .orderBy('sync.updatedAt', 'ASC')
-      .take(limit)
-      .getMany();
+    return (
+      this.syncRepo
+        .createQueryBuilder('sync')
+        /*
+         * رکوردهای «نیازمند تطبیق» عمداً از retry خودکار خارج‌اند؛ فرستادن
+         * دوبارهٔ فاکتوری که ممکن است ثبت شده باشد، فاکتور تکراری می‌سازد.
+         * این رکوردها فقط با تأیید دستی ادمین (force) ارسال می‌شوند.
+         */
+        .where('sync.reconcile_required_at IS NULL')
+        .andWhere(
+          new Brackets(qb => {
+            qb.where('sync.status = :pending', {
+              pending: RahkaranInvoiceSyncStatus.PENDING,
+            })
+              .orWhere(
+                'sync.status = :failed AND sync.attempts < :maxAttempts',
+                {
+                  failed: RahkaranInvoiceSyncStatus.FAILED,
+                  maxAttempts: RahkaranInvoiceSyncService.MAX_AUTO_ATTEMPTS,
+                },
+              )
+              .orWhere(
+                'sync.status = :processing AND (sync.last_attempt_at IS NULL OR sync.last_attempt_at < :staleCutoff)',
+                {
+                  processing: RahkaranInvoiceSyncStatus.PROCESSING,
+                  staleCutoff,
+                },
+              );
+          }),
+        )
+        .orderBy('sync.updatedAt', 'ASC')
+        .take(limit)
+        .getMany()
+    );
   }
 
   /**
@@ -395,10 +489,51 @@ export class RahkaranInvoiceSyncService {
    * retry دستی از پنل مدیریت؛ سقف تلاش خودکار را دور می‌زند ولی
    * باز هم از ثبت تکراری (status=success) جلوگیری می‌کند.
    */
-  async retryOrderSync(orderId: number): Promise<RahkaranSyncResult> {
+  async retryOrderSync(
+    orderId: number,
+    options: { force?: boolean } = {},
+  ): Promise<RahkaranSyncResult> {
     const order = await this.loadOrderForSync(orderId);
 
-    return this.syncPaidOrder(order, { trigger: 'admin' });
+    const forced = options.force === true;
+
+    if (forced) {
+      this.logger.warn(
+        structuredLog('rahkaran.invoice.registration.retry_forced', {
+          orderId,
+          orderNumber: order?.orderNumber,
+          trigger: 'admin',
+          note: 'ارسال دوباره با تأیید صریح ادمین، حتی اگر نتیجهٔ تلاش قبلی نامعلوم بوده باشد.',
+        }),
+      );
+    }
+
+    return this.syncPaidOrder(order, {
+      trigger: 'admin',
+      allowReconciliation: forced,
+    });
+  }
+
+  /**
+   * وضعیت ثبت فاکتور برای چند سفارش با یک کوئری؛ برای فهرست
+   * `/admin/orders` که نمی‌تواند برای هر ردیف یک درخواست جدا بزند.
+   */
+  async getSyncStatusesForOrders(
+    orderIds: number[],
+  ): Promise<Map<number, RahkaranInvoiceSync>> {
+    const ids = (orderIds ?? []).filter(
+      id => Number.isFinite(id) && Number(id) > 0,
+    );
+
+    if (!ids.length) {
+      return new Map();
+    }
+
+    const rows = await this.syncRepo.find({
+      where: { orderId: In(ids) },
+    });
+
+    return new Map(rows.map(row => [row.orderId, row]));
   }
 
   /** وضعیت ثبت فاکتور راهکاران یک سفارش برای پنل مدیریت. */

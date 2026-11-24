@@ -20,6 +20,7 @@ import { FirstPurchaseGift1804000000000 } from 'src/migrations/1804000000000-Fir
 import { RahkaranInvoiceSync1805000000000 } from 'src/migrations/1805000000000-RahkaranInvoiceSync';
 import { SequentialSaleDiscounts1806000000000 } from 'src/migrations/1806000000000-SequentialSaleDiscounts';
 import { CartDiscountEligibility1807000000000 } from 'src/migrations/1807000000000-CartDiscountEligibility';
+import { RahkaranReconciliationAndLoyaltyTracking1808000000000 } from 'src/migrations/1808000000000-RahkaranReconciliationAndLoyaltyTracking';
 import { DataSource } from 'typeorm';
 
 export default new DataSource({
@@ -47,6 +48,7 @@ export default new DataSource({
     RahkaranInvoiceSync1805000000000,
     SequentialSaleDiscounts1806000000000,
     CartDiscountEligibility1807000000000,
+    RahkaranReconciliationAndLoyaltyTracking1808000000000,
   ],
   synchronize: false,
 });

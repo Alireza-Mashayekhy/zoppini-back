@@ -38,8 +38,28 @@ export class User {
   @Column({ nullable: true })
   nationalCode: string;
 
+  /**
+   * شناسهٔ مشتری در راهکاران (`CustomerService`).
+   * بعد از اولین ثبت/یافتن مشتری پر می‌شود تا ثبت دوباره انجام نشود.
+   */
   @Column({ nullable: true })
   rahkaranId: number;
+
+  /**
+   * زمان موفقیت ثبت این کاربر در «مشتریان وفادار» راهکاران.
+   *
+   * ثبت مشتری و ثبت عضویت وفاداری دو عملیات جدا هستند؛ این ستون فقط بعد
+   * از موفقیت عضویت پر می‌شود تا فراخوانی‌های بعدی (ثبت‌نام دوباره،
+   * نظرسنجی، retry دستی) عضویت تکراری نسازند و عملیات نیمه‌تمام قابل
+   * تکمیل باشد.
+   */
+  @Column({
+    name: 'loyalty_member_synced_at',
+    type: 'datetime',
+    precision: 6,
+    nullable: true,
+  })
+  loyaltyMemberSyncedAt: Date | null;
 
   @Column({
     type: 'timestamp',

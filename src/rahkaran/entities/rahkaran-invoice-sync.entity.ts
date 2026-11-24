@@ -87,6 +87,31 @@ export class RahkaranInvoiceSync {
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError: string | null;
 
+  /**
+   * «نتیجهٔ نامعلوم» — زمان تشخیصِ وضعیتی که در آن درخواست به راهکاران
+   * رسیده ولی پاسخ معتبر برنگشته است (Timeout/قطع اتصال/پاسخ بدشکل).
+   *
+   * در چنین حالتی ممکن است فاکتور در راهکاران ثبت شده باشد؛ پس ارسال دوباره
+   * ممنوع است تا وقتی انسان وجود/عدم وجود فاکتور را در راهکاران بررسی کند.
+   * `null` یعنی نتیجه قطعی بوده و retry خودکار مجاز است.
+   */
+  @Column({
+    name: 'reconcile_required_at',
+    type: 'datetime',
+    precision: 6,
+    nullable: true,
+  })
+  reconcileRequiredAt: Date | null;
+
+  /** دلیل کوتاه «نیازمند تطبیق» (برای نمایش در پنل مدیریت) */
+  @Column({
+    name: 'reconcile_reason',
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+  })
+  reconcileReason: string | null;
+
   @Column({
     name: 'last_attempt_at',
     type: 'datetime',

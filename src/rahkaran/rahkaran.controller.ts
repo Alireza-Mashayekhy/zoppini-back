@@ -1,6 +1,7 @@
 // src/rahkaran/rahkaran.controller.ts
 
 import {
+  Body,
   Controller,
   Get,
   Param,
@@ -85,9 +86,18 @@ export class RahkaranController {
    *
    * اگر فاکتور قبلاً با موفقیت ثبت شده باشد، درخواستی ارسال نمی‌شود
    * (skipped=already_registered) تا فاکتور تکراری ثبت نشود.
+   *
+   * اگر نتیجهٔ تلاش قبلی «نامعلوم» باشد (Timeout/پاسخ بدشکل)، بدون
+   * `force: true` هیچ درخواستی ارسال نمی‌شود (skipped=needs_reconciliation).
+   * `force` را فقط پس از بررسی دستی در راهکاران بفرستید.
    */
   @Post('invoice-sync/order/:orderId/retry')
-  async retryInvoiceSync(@Param('orderId', ParseIntPipe) orderId: number) {
-    return this.invoiceSyncService.retryOrderSync(orderId);
+  async retryInvoiceSync(
+    @Param('orderId', ParseIntPipe) orderId: number,
+    @Body('force') force?: boolean,
+  ) {
+    return this.invoiceSyncService.retryOrderSync(orderId, {
+      force: force === true,
+    });
   }
 }

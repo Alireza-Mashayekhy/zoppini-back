@@ -7,7 +7,14 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomBytes } from 'crypto';
 import { ClubService } from 'src/club/club.service';
+import {
+  createCorrelationId,
+  maskMobile,
+  serializeError,
+  structuredLog,
+} from 'src/common/logging/structured-logger';
 import {
   applySearch,
   applySort,
@@ -107,7 +114,16 @@ export class GamificationService {
 
     let newUser;
     if (!user) {
-      const hashedPassword = await bcrypt.hash('123456789', 10);
+      /*
+       * کاربر نظرسنجی با ورود پیامکی (OTP) وارد می‌شود؛ رمز عبور فقط برای
+       * پر کردن ستون اجباری است. قبلاً مقدار ثابت `123456789` هش می‌شد و
+       * چون ورود با رمز عبور برای همه باز است، هر کسی با دانستن شماره
+       * موبایل می‌توانست وارد حساب این کاربران شود. حالا رمز تصادفی است.
+       */
+      const hashedPassword = await bcrypt.hash(
+        randomBytes(32).toString('hex'),
+        10,
+      );
 
       newUser = await this.usersService.create({
         fullName,
@@ -115,14 +131,52 @@ export class GamificationService {
         email: null,
         birthDate: dto.birthDate,
         password: hashedPassword,
+        // فیلد DTO برای تأیید کد پیامکی است و در entity ستون ندارد؛
+        // اینجا فقط برای تکمیل نوع ارسال می‌شود.
         code: '12345',
       });
     }
 
-    try {
-      await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
-    } catch (err) {
-      this.logger.log(err);
+    const correlationId = createCorrelationId('rah-loyalty');
+
+    /*
+     * اگر کاربر قبلاً ثبت‌نام کرده باشد (`user` موجود و `newUser` تعریف‌نشده)،
+     * قبلاً همین‌جا `newUser.id` خطای TypeError می‌داد، catch آن را بی‌صدا
+     * می‌خورد و در نتیجه عضویت وفاداری برای کاربران موجود هیچ‌وقت ثبت نمی‌شد.
+     * حالا از کاربر موجود استفاده می‌کنیم و `createLoyaltyMemberForUser`
+     * خودش idempotent است (ثبت دوباره انجام نمی‌شود).
+     */
+    const loyaltyUserId = newUser?.id ?? user?.id;
+
+    if (!loyaltyUserId) {
+      this.logger.warn(
+        structuredLog('rahkaran.loyalty.skipped', {
+          correlationId,
+          stage: 'survey',
+          reason: 'user_id_missing',
+          customerMobile: maskMobile(dto.phone),
+        }),
+      );
+    } else {
+      try {
+        await this.rahkaranService.createLoyaltyMemberForUser(loyaltyUserId);
+      } catch (err) {
+        /*
+         * ثبت عضویت وفاداری نباید ثبت نظرسنجی را بشکند؛ ولی خطا باید
+         * قابل پیگیری باشد (قبلاً فقط `log(err)` بود و correlationId،
+         * شناسهٔ کاربر و مرحله مشخص نبود).
+         */
+        this.logger.error(
+          structuredLog('rahkaran.loyalty.failed', {
+            correlationId,
+            stage: 'survey',
+            userId: loyaltyUserId,
+            customerMobile: maskMobile(dto.phone),
+            error: serializeError(err),
+            note: 'ثبت نظرسنجی ادامه می‌یابد؛ در صورت نیاز retry دستی.',
+          }),
+        );
+      }
     }
 
     try {
@@ -134,7 +188,15 @@ export class GamificationService {
         officeId: 3,
       });
     } catch (err) {
-      this.logger.log(err);
+      this.logger.error(
+        structuredLog('diatech.customer.registration.failed', {
+          correlationId,
+          stage: 'survey',
+          userId: loyaltyUserId ?? null,
+          customerMobile: maskMobile(dto.phone),
+          error: serializeError(err),
+        }),
+      );
     }
 
     const saved = await this.participationRepo.save(participation);

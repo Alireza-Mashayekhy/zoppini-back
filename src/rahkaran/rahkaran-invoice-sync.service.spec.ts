@@ -1,4 +1,5 @@
 import { RahkaranInvoiceSyncStatus } from './entities/rahkaran-invoice-sync.entity';
+import { RahkaranUnknownOutcomeError } from './rahkaran.service';
 import { RahkaranInvoiceSyncService } from './rahkaran-invoice-sync.service';
 
 function buildUpdateQueryBuilder(affected: number) {
@@ -230,6 +231,7 @@ describe('RahkaranInvoiceSyncService', () => {
 
     const selectQb = {
       where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
       orWhere: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
@@ -272,5 +274,146 @@ describe('RahkaranInvoiceSyncService', () => {
       expect.objectContaining({ attempt: 31 }),
     );
     expect(result.success).toBe(true);
+  });
+
+  // ============================================================
+  // نتیجهٔ نامعلوم → نیازمند تطبیق (جلوگیری از فاکتور تکراری)
+  // ============================================================
+
+  it('marks the row as needing reconciliation when the outcome is unknown', async () => {
+    syncRepo.findOne.mockResolvedValue({
+      id: 1,
+      orderId: 42,
+      status: RahkaranInvoiceSyncStatus.PENDING,
+      attempts: 0,
+    });
+    rahkaranService.syncOrderToRahkaran.mockRejectedValue(
+      new RahkaranUnknownOutcomeError('timeout after send'),
+    );
+
+    const result = await service.syncPaidOrder(order, {
+      trigger: 'payment',
+      correlationId: 'corr-unknown',
+    });
+
+    expect(result.success).toBe(false);
+    expect(syncRepo.update).toHaveBeenLastCalledWith(
+      { orderId: 42 },
+      expect.objectContaining({
+        status: RahkaranInvoiceSyncStatus.FAILED,
+        reconcileRequiredAt: expect.any(Date),
+        reconcileReason: expect.stringContaining('timeout after send'),
+      }),
+    );
+  });
+
+  it('does not flag a plain rejection (no side effect) as needing reconciliation', async () => {
+    syncRepo.findOne.mockResolvedValue({
+      id: 1,
+      orderId: 42,
+      status: RahkaranInvoiceSyncStatus.PENDING,
+      attempts: 0,
+    });
+    rahkaranService.syncOrderToRahkaran.mockRejectedValue(
+      new Error('موجودی کالا کافی نیست'),
+    );
+
+    await service.syncPaidOrder(order, { trigger: 'payment' });
+
+    const payload = syncRepo.update.mock.calls.at(-1)[1];
+
+    expect(payload.status).toBe(RahkaranInvoiceSyncStatus.FAILED);
+    expect(payload.reconcileRequiredAt).toBeUndefined();
+  });
+
+  it('refuses to resend a row that needs reconciliation unless forced', async () => {
+    syncRepo.findOne.mockResolvedValue({
+      id: 1,
+      orderId: 42,
+      orderNumber: 'ORD-12345678-1234',
+      status: RahkaranInvoiceSyncStatus.FAILED,
+      attempts: 1,
+      reconcileRequiredAt: new Date(),
+      reconcileReason: 'RahkaranUnknownOutcomeError: timeout',
+    });
+
+    const result = await service.retryOrderSync(42);
+
+    expect(result.skipped).toBe('needs_reconciliation');
+    expect(result.success).toBe(false);
+    expect(rahkaranService.syncOrderToRahkaran).not.toHaveBeenCalled();
+    expect(syncRepo.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('resends a reconciliation row only when the admin forces it', async () => {
+    syncRepo.findOne.mockResolvedValue({
+      id: 1,
+      orderId: 42,
+      orderNumber: 'ORD-12345678-1234',
+      status: RahkaranInvoiceSyncStatus.FAILED,
+      attempts: 1,
+      reconcileRequiredAt: new Date(),
+      reconcileReason: 'timeout',
+    });
+    rahkaranService.syncOrderToRahkaran.mockResolvedValue({ id: 777 });
+
+    const result = await service.retryOrderSync(42, { force: true });
+
+    expect(result.success).toBe(true);
+    expect(rahkaranService.syncOrderToRahkaran).toHaveBeenCalled();
+    expect(syncRepo.update).toHaveBeenLastCalledWith(
+      { orderId: 42 },
+      expect.objectContaining({
+        status: RahkaranInvoiceSyncStatus.SUCCESS,
+        reconcileRequiredAt: null,
+        reconcileReason: null,
+      }),
+    );
+  });
+
+  it('excludes rows that need reconciliation from the automatic retry query', async () => {
+    const selectQb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn().mockResolvedValue([]),
+    };
+
+    syncRepo.createQueryBuilder.mockReturnValueOnce(selectQb);
+
+    const rows = await service.findRetryableSyncs();
+
+    expect(rows).toEqual([]);
+    expect(selectQb.where).toHaveBeenCalledWith(
+      'sync.reconcile_required_at IS NULL',
+    );
+    expect(selectQb.andWhere).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the sync status of many orders with a single query for the admin list', async () => {
+    syncRepo.find.mockResolvedValue([
+      { orderId: 1, status: RahkaranInvoiceSyncStatus.SUCCESS },
+      { orderId: 3, status: RahkaranInvoiceSyncStatus.FAILED },
+    ]);
+
+    const map = await service.getSyncStatusesForOrders([1, 2, 3]);
+
+    expect(syncRepo.find).toHaveBeenCalledTimes(1);
+    expect(map.get(1)).toMatchObject({
+      status: RahkaranInvoiceSyncStatus.SUCCESS,
+    });
+    expect(map.get(2)).toBeUndefined();
+    expect(map.get(3)).toMatchObject({
+      status: RahkaranInvoiceSyncStatus.FAILED,
+    });
+  });
+
+  it('skips the status query when there are no order ids', async () => {
+    const map = await service.getSyncStatusesForOrders([]);
+
+    expect(map.size).toBe(0);
+    expect(syncRepo.find).not.toHaveBeenCalled();
   });
 });

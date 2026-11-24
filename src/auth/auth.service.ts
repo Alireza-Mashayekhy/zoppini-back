@@ -9,6 +9,12 @@ import * as bcrypt from 'bcrypt';
 import { Response } from 'express';
 import { CartsService } from 'src/cart/cart.service';
 import { ClubService } from 'src/club/club.service';
+import {
+  createCorrelationId,
+  maskMobile,
+  serializeError,
+  structuredLog,
+} from 'src/common/logging/structured-logger';
 import { OtpService } from 'src/otp/otp.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { SmsService } from 'src/sms/sms.service';
@@ -121,10 +127,27 @@ export class AuthService {
       password: hashedPassword,
     });
 
+    const correlationId = createCorrelationId('rah-loyalty');
+
+    /*
+     * ثبت در راهکاران نباید ثبت‌نام را بشکند، ولی خطا باید قابل پیگیری
+     * باشد: شناسهٔ کاربر، موبایل ماسک‌شده، correlationId و مرحله.
+     * `createLoyaltyMemberForUser` idempotent است، پس فراخوانی دوباره
+     * (نظرسنجی/retry) مشتری یا عضو تکراری نمی‌سازد.
+     */
     try {
       await this.rahkaranService.createLoyaltyMemberForUser(newUser.id);
     } catch (err) {
-      this.logger.log(err);
+      this.logger.error(
+        structuredLog('rahkaran.loyalty.failed', {
+          correlationId,
+          stage: 'signup',
+          userId: newUser.id,
+          customerMobile: maskMobile(createUserDto.phone),
+          error: serializeError(err),
+          note: 'ثبت‌نام ادامه می‌یابد؛ ثبت در راهکاران با فراخوانی بعدی تکمیل می‌شود.',
+        }),
+      );
     }
     const [firstName, ...lastNameParts] = createUserDto.fullName
       .trim()
@@ -141,7 +164,15 @@ export class AuthService {
         birthDate,
       });
     } catch (err) {
-      this.logger.log(err);
+      this.logger.error(
+        structuredLog('diatech.customer.registration.failed', {
+          correlationId,
+          stage: 'signup',
+          userId: newUser.id,
+          customerMobile: maskMobile(createUserDto.phone),
+          error: serializeError(err),
+        }),
+      );
     }
 
     // ادغام سبد خرید مهمان

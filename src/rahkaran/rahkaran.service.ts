@@ -38,6 +38,34 @@ export interface RahkaranLogContext {
   stage?: string;
 }
 
+/**
+ * نتیجهٔ «نامعلوم» یک درخواست تغییردهنده (POST) به راهکاران.
+ *
+ * معنی: درخواست ارسال شده است، ولی پاسخی که برگشته قابل اعتماد نیست
+ * (Timeout، قطع اتصال، پاسخ خالی/بدشکل). در این حالت ممکن است راهکاران
+ * عملیات را انجام داده باشد؛ پس ارسال دوباره بدون بررسی، ریسک ثبت تکراری
+ * (فاکتور/مشتری/عضو وفاداری) دارد.
+ *
+ * این خطا هرگز به کاربر نهایی نمایش داده نمی‌شود؛ لایهٔ بالادست آن را به
+ * وضعیت «نیازمند تطبیق» تبدیل می‌کند.
+ */
+export class RahkaranUnknownOutcomeError extends Error {
+  readonly unknownOutcome = true;
+
+  constructor(message: string) {
+    super(message);
+
+    this.name = 'RahkaranUnknownOutcomeError';
+  }
+}
+
+/** آیا این خطا یعنی «نتیجهٔ عملیات در راهکاران نامعلوم است»؟ */
+export function isRahkaranUnknownOutcome(error: unknown): boolean {
+  return (
+    (error as { unknownOutcome?: boolean } | null)?.unknownOutcome === true
+  );
+}
+
 interface RahkaranSession {
   id: string;
   rsa: {
@@ -664,6 +692,15 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       this.captureCookies(response.headers);
 
       if (response.status < 200 || response.status >= 300) {
+        /*
+         * 401/403 یعنی Session مرده است. قبلاً فقط مسیرهای GET (در
+         * authenticatedRequest) State را پاک می‌کردند و یک POST با 401
+         * Session مرده را نگه می‌داشت تا همهٔ درخواست‌های بعدی هم 401 شوند.
+         */
+        if (response.status === 401 || response.status === 403) {
+          this.clearState();
+        }
+
         this.logger.warn(
           structuredLog('rahkaran.http.non_2xx', {
             correlationId: ctx?.correlationId,
@@ -724,6 +761,43 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
         throw new BadRequestException(
           'Session راهکاران معتبر نیست یا منقضی شده است.',
+        );
+      }
+
+      /**
+       * خطای HTTP صریح (۴xx/۵xx) که خودمان بالا به BadRequestException تبدیل
+       * کردیم «صریحاً رد شده / پردازش نشده» است و نباید «نامعلوم» تلقی شود.
+       * (این بررسی باید بعد از 401/403 بیاید تا پاک‌سازی Session از دست نرود.)
+       */
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
+
+      /*
+       * درخواست تغییردهنده (POST/PUT/PATCH/DELETE) که هیچ پاسخ HTTP
+       * نگرفته است (Timeout، ECONNRESET، قطع شبکه): نمی‌دانیم راهکاران
+       * عملیات را انجام داده یا نه. این را «نتیجهٔ نامعلوم» علامت می‌زنیم تا
+       * لایهٔ بالادست کورکورانه retry نکند.
+       */
+      const isMutatingMethod = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+
+      if (isMutatingMethod && !axiosError?.response) {
+        this.logger.error(
+          structuredLog('rahkaran.http.outcome_unknown', {
+            correlationId: ctx?.correlationId,
+            orderId: ctx?.orderId,
+            stage: ctx?.stage,
+            method,
+            endpoint: endpointPath,
+            durationMs,
+            note: 'request_sent_without_valid_response',
+            error: serializeError(error),
+          }),
+        );
+
+        throw new RahkaranUnknownOutcomeError(
+          `ارتباط با راهکاران در حین ${method} ${endpointPath} قطع شد؛ ` +
+            'نتیجهٔ عملیات نامعلوم است.',
         );
       }
 
@@ -899,6 +973,20 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       response?.result?.isSuccessfull === true ||
       response?.result?.isSuccessful === true ||
       response?.result === true
+    );
+  }
+
+  /**
+   * آیا پاسخ، «پاکت» استاندارد راهکاران (`metadata`/`result`) را دارد؟
+   *
+   * نبودِ پاکت روی یک درخواست تغییردهنده یعنی پاسخ قابل تفسیر نیست
+   * (مثلاً بدنهٔ خالی یا HTML خطای پروکسی) و نتیجه «نامعلوم» است.
+   */
+  private hasRahkaranEnvelope(response: any): boolean {
+    return (
+      !!response &&
+      typeof response === 'object' &&
+      ('metadata' in response || 'result' in response)
     );
   }
 
@@ -1163,50 +1251,205 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     return Number.isFinite(quantity) ? quantity : null;
   }
 
-  async createLoyaltyMemberForUser(id: number) {
+  /**
+   * ثبت کاربر در راهکاران: «مشتری» و سپس «عضو باشگاه وفاداری».
+   *
+   * این متد آگاهانه idempotent است، چون از چند مسیر صدا زده می‌شود
+   * (ثبت‌نام، نظرسنجی گیمیفیکیشن، retry دستی) و تکرارش نباید مشتری/عضو
+   * تکراری در راهکاران بسازد:
+   *
+   *   • اگر عضویت وفاداری قبلاً موفق شده باشد (`loyaltyMemberSyncedAt`)،
+   *     هیچ درخواستی ارسال نمی‌شود.
+   *   • اگر شناسهٔ مشتری روی کاربر ذخیره شده باشد (`rahkaranId`)، مشتری
+   *     دوباره ساخته نمی‌شود.
+   *   • اگر مشتری با همین موبایل در راهکاران باشد، همان استفاده می‌شود.
+   *   • ترتیب عملیات: ابتدا مشتری، بعد عضویت وفاداری (عضویت به
+   *     `customerId` نیاز دارد) — همان ترتیبی که قبلاً بود.
+   *
+   * اگر عملیات نیمه‌تمام بماند (مشتری ثبت شد، عضویت نشد) فراخوانی بعدی
+   * فقط بخش باقی‌مانده را انجام می‌دهد.
+   */
+  async createLoyaltyMemberForUser(id: number): Promise<{
+    customerId: number | null;
+    skipped?: 'already_synced';
+  }> {
+    const correlationId = createCorrelationId('rah-loyalty');
+
+    const logCtx: RahkaranLogContext = {
+      correlationId,
+      stage: 'start',
+    };
+
     const user = await this.usersService.findOne(id);
 
     if (!user) {
       throw new BadRequestException('کاربر پیدا نشد');
     }
 
-    const fullName = user.fullName?.trim() || 't';
+    if (user.loyaltyMemberSyncedAt) {
+      this.logger.log(
+        structuredLog('rahkaran.loyalty.skipped', {
+          correlationId,
+          userId: user.id,
+          stage: logCtx.stage,
+          reason: 'already_synced',
+          customerId: user.rahkaranId ?? null,
+        }),
+      );
 
-    const parts = fullName.split(/\s+/);
-
-    const firstName = parts.shift() || '';
-    const lastName = parts.join(' ');
+      return {
+        customerId: user.rahkaranId ?? null,
+        skipped: 'already_synced',
+      };
+    }
 
     await this.ensureAuthenticated();
 
-    const response = await this.request(
-      `${this.baseUrl}/Retail/Api/Structure/CustomerService.svc/customer`,
-      {
-        method: 'POST',
-        data: {
-          partyType: 0,
-          Id: 0,
-          firstName: firstName,
-          lastName: lastName,
-          nationalID: user?.nationalCode,
-          mobile: user?.phone,
-          tel: null,
-        },
-        headers: this.authHeaders(),
-      },
-    );
+    logCtx.stage = 'resolve_customer';
 
-    if (!this.isSuccessful(response)) {
-      throw new BadRequestException(
-        this.getRahkaranError(response) || 'ثبت کاربر در راهکاران ناموفق بود',
+    let customerId: number | null = user.rahkaranId
+      ? Number(user.rahkaranId)
+      : null;
+
+    if (customerId != null) {
+      this.logger.log(
+        structuredLog('rahkaran.customer.reused_from_db', {
+          correlationId,
+          userId: user.id,
+          stage: logCtx.stage,
+          customerId,
+        }),
       );
+    } else {
+      customerId = await this.findCustomerIdByMobile(user.phone, logCtx);
+
+      if (customerId != null) {
+        this.logger.log(
+          structuredLog('rahkaran.customer.reused_from_rahkaran', {
+            correlationId,
+            userId: user.id,
+            stage: logCtx.stage,
+            customerId,
+            customerMobile: maskMobile(user.phone),
+          }),
+        );
+      } else {
+        logCtx.stage = 'create_customer';
+
+        const fullName = user.fullName?.trim() || 't';
+
+        const parts = fullName.split(/\s+/);
+
+        const firstName = parts.shift() || '';
+        const lastName = parts.join(' ');
+
+        this.logger.log(
+          structuredLog('rahkaran.customer.create.start', {
+            correlationId,
+            userId: user.id,
+            stage: logCtx.stage,
+            customerMobile: maskMobile(user.phone),
+          }),
+        );
+
+        const response = await this.request(
+          `${this.baseUrl}/Retail/Api/Structure/CustomerService.svc/customer`,
+          {
+            method: 'POST',
+            data: {
+              partyType: 0,
+              Id: 0,
+              firstName: firstName,
+              lastName: lastName,
+              nationalID: user?.nationalCode,
+              mobile: user?.phone,
+              tel: null,
+            },
+            headers: this.authHeaders(),
+          },
+          logCtx,
+        );
+
+        /*
+         * پاسخ بی‌ساختار روی یک POST یعنی ممکن است مشتری ساخته شده باشد؛
+         * دوباره فرستادن می‌تواند مشتری تکراری بسازد.
+         */
+        if (!this.hasRahkaranEnvelope(response)) {
+          this.logger.error(
+            structuredLog('rahkaran.customer.create.outcome_unknown', {
+              correlationId,
+              userId: user.id,
+              stage: logCtx.stage,
+              customerMobile: maskMobile(user.phone),
+              note: 'customer_may_exist_in_rahkaran — قبل از تلاش دوباره بررسی کنید.',
+              responseBody: truncateForLog(stringifySafe(response), 300),
+            }),
+          );
+
+          throw new RahkaranUnknownOutcomeError(
+            'پاسخ ثبت مشتری در راهکاران قابل تفسیر نبود؛ نتیجهٔ ثبت نامعلوم است.',
+          );
+        }
+
+        if (!this.isSuccessful(response)) {
+          throw new BadRequestException(
+            this.getRahkaranError(response) ||
+              'ثبت کاربر در راهکاران ناموفق بود',
+          );
+        }
+
+        this.logger.log(
+          structuredLog('rahkaran.customer.create.success', {
+            correlationId,
+            userId: user.id,
+            stage: logCtx.stage,
+          }),
+        );
+
+        logCtx.stage = 'resolve_customer';
+
+        customerId = await this.findCustomerIdByMobile(user.phone, logCtx);
+
+        if (customerId == null) {
+          throw new BadRequestException(
+            'مشتری در راهکاران ثبت شد ولی شناسهٔ آن با این موبایل پیدا نشد؛ ' +
+              'نیاز به بررسی دستی دارد.',
+          );
+        }
+      }
+
+      /*
+       * ذخیرهٔ شناسهٔ مشتری: کلید جلوگیری از ساخت مشتری تکراری در
+       * فراخوانی‌های بعدی. اگر این ذخیره شکست بخورد، بررسی دوباره با
+       * موبایل جلوی تکرار را می‌گیرد؛ پس خطا را فقط لاگ می‌کنیم.
+       */
+      try {
+        await this.usersService.update(user.id, { rahkaranId: customerId });
+
+        this.logger.log(
+          structuredLog('rahkaran.customer.persisted', {
+            correlationId,
+            userId: user.id,
+            stage: logCtx.stage,
+            customerId,
+          }),
+        );
+      } catch (persistError) {
+        this.logger.error(
+          structuredLog('rahkaran.customer.persist_error', {
+            correlationId,
+            userId: user.id,
+            stage: logCtx.stage,
+            customerId,
+            error: serializeError(persistError),
+          }),
+        );
+      }
     }
 
-    this.logger.log(`✅ ثبت کاربر موفق بود `);
+    logCtx.stage = 'create_loyalty_member';
 
-    const customerId = await this.getCustomerIdByMobile(user.phone);
-
-    const loyalityResponse = await this.request(
+    const loyaltyResponse = await this.request(
       `${this.baseUrl}/Retail/LoyaltyApi/RetailLoyaltyMemberService.svc/loyaltyMember`,
       {
         method: 'POST',
@@ -1216,22 +1459,77 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
         },
         headers: this.authHeaders(),
       },
+      logCtx,
     );
 
-    if (!this.isSuccessful(loyalityResponse)) {
+    if (!this.hasRahkaranEnvelope(loyaltyResponse)) {
+      this.logger.error(
+        structuredLog('rahkaran.loyalty.outcome_unknown', {
+          correlationId,
+          userId: user.id,
+          stage: logCtx.stage,
+          customerId,
+          note: 'loyalty_member_may_exist_in_rahkaran — قبل از تلاش دوباره بررسی کنید.',
+          responseBody: truncateForLog(stringifySafe(loyaltyResponse), 300),
+        }),
+      );
+
+      throw new RahkaranUnknownOutcomeError(
+        'پاسخ ثبت عضو باشگاه وفاداری قابل تفسیر نبود؛ نتیجهٔ ثبت نامعلوم است.',
+      );
+    }
+
+    if (!this.isSuccessful(loyaltyResponse)) {
       throw new BadRequestException(
-        this.getRahkaranError(loyalityResponse) ||
+        this.getRahkaranError(loyaltyResponse) ||
           'ثبت کاربر در مشتریان وفادار ناموفق بود',
       );
     }
 
-    this.logger.log(`✅ ثبت کاربر در مشتریان وفادار موفق بود `);
+    /*
+     * ثبت موفق عضویت: تنها همین‌جا علامت می‌خورد. اگر این UPDATE شکست
+     * بخورد، عضویت در راهکاران ساخته شده ولی رکورد ما نمی‌داند؛ لاگ
+     * بحرانی می‌گیریم تا سفارش بعدی بررسی دستی شود.
+     */
+    try {
+      await this.usersService.update(user.id, {
+        loyaltyMemberSyncedAt: new Date(),
+      });
+    } catch (persistError) {
+      this.logger.error(
+        structuredLog('rahkaran.loyalty.persist_error', {
+          correlationId,
+          userId: user.id,
+          stage: logCtx.stage,
+          customerId,
+          note: 'loyalty_member_created_but_marker_not_persisted',
+          error: serializeError(persistError),
+        }),
+      );
+
+      throw persistError;
+    }
+
+    this.logger.log(
+      structuredLog('rahkaran.loyalty.success', {
+        correlationId,
+        userId: user.id,
+        stage: logCtx.stage,
+        customerId,
+      }),
+    );
+
+    return { customerId };
   }
 
-  async getCustomerIdByMobile(
-    mobile: string,
+  /**
+   * شناسهٔ مشتری با موبایل؛ برای مسیرهایی که «نبود مشتری» حالت عادی است
+   * (مثل ثبت‌نام) `null` برمی‌گرداند و فقط خطاهای واقعی را throw می‌کند.
+   */
+  private async findCustomerIdByMobile(
+    mobile: string | null | undefined,
     ctx?: RahkaranLogContext,
-  ): Promise<number> {
+  ): Promise<number | null> {
     const phone = mobile?.trim();
 
     if (!phone) {
@@ -1279,12 +1577,52 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!response?.result?.length) {
-      throw new BadRequestException(
-        `شناسه معتبر و یکتای مشتری با موبایل ${phone} در راهکاران پیدا نشد.`,
+      return null;
+    }
+
+    /*
+     * چند مشتری با یک موبایل: فعلاً رفتار قبلی (انتخاب اولین نتیجه) حفظ
+     * می‌شود تا هیچ سفارشی از کار نیفتد، ولی این وضعیت در لاگ علامت می‌خورد
+     * چون می‌تواند یعنی فاکتور به مشتری اشتباه وصل شود و نیاز به بررسی
+     * دستی/تصمیم کسب‌وکار دارد.
+     */
+    if (response.result.length > 1) {
+      this.logger.warn(
+        structuredLog('rahkaran.customer.multiple_matches', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          stage: ctx?.stage,
+          matches: response.result.length,
+          customerMobile: maskMobile(phone),
+          note: 'first_match_used',
+        }),
       );
     }
 
-    return response?.result[0]?.id;
+    const id = Number(response.result[0]?.id);
+
+    return Number.isFinite(id) && id > 0 ? id : null;
+  }
+
+  /**
+   * شناسهٔ مشتری راهکاران برای یک موبایل؛ اگر پیدا نشود خطا می‌دهد.
+   *
+   * مسیر ثبت فاکتور از این متد استفاده می‌کند چون بدون شناسهٔ مشتری،
+   * فاکتور نباید ثبت شود.
+   */
+  async getCustomerIdByMobile(
+    mobile: string,
+    ctx?: RahkaranLogContext,
+  ): Promise<number> {
+    const id = await this.findCustomerIdByMobile(mobile, ctx);
+
+    if (id == null) {
+      throw new BadRequestException(
+        `شناسه معتبر و یکتای مشتری با موبایل ${mobile?.trim()} در راهکاران پیدا نشد.`,
+      );
+    }
+
+    return id;
   }
 
   async createSalesInvoice(
@@ -1454,6 +1792,33 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       },
       ctx,
     );
+
+    /*
+     * پاسخ بدون «پاکت» راهکاران روی SaveInvoice: نمی‌دانیم فاکتور ثبت شده
+     * یا نه (بدنهٔ خالی، HTML خطای پروکسی، ۲xx بدون metadata). ارسال دوباره
+     * می‌تواند فاکتور تکراری بسازد؛ پس نتیجه را «نامعلوم» اعلام می‌کنیم.
+     */
+    if (!this.hasRahkaranEnvelope(response)) {
+      this.logger.error(
+        structuredLog('rahkaran.invoice.create.outcome_unknown', {
+          correlationId: ctx?.correlationId,
+          orderId: ctx?.orderId,
+          orderNumber: ctx?.orderNumber,
+          attempt: ctx?.attempt,
+          stage,
+          customerId: input.customerId,
+          itemsCount: items.length,
+          receiptAmount: Number(input.receiptAmount),
+          durationMs: Date.now() - startedAt,
+          note: 'invoice_may_exist_in_rahkaran — قبل از تلاش دوباره بررسی کنید.',
+          responseBody: truncateForLog(stringifySafe(response), 500),
+        }),
+      );
+
+      throw new RahkaranUnknownOutcomeError(
+        'پاسخ ثبت فاکتور در راهکاران قابل تفسیر نبود؛ نتیجهٔ ثبت نامعلوم است.',
+      );
+    }
 
     if (!this.isSuccessful(response)) {
       this.logger.error(

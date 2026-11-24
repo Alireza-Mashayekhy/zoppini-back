@@ -39,6 +39,7 @@ import { Variant } from 'src/products/entities/variant.entity';
 import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
 import { buildPricedPromotionCart } from 'src/promotions/promotion-cart.util';
 import { PromotionsService } from 'src/promotions/promotions.service';
+import { RahkaranInvoiceSync } from 'src/rahkaran/entities/rahkaran-invoice-sync.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranInvoiceSyncService } from 'src/rahkaran/rahkaran-invoice-sync.service';
 import { SmsService } from 'src/sms/sms.service';
@@ -1623,10 +1624,20 @@ export class OrdersService {
       paymentsByOrderId.set(payment.orderId, list);
     }
 
+    /*
+     * وضعیت ثبت فاکتور در راهکاران با یک کوئری برای کل صفحه خوانده
+     * می‌شود تا پنل ادمین بدون درخواست جدا برای هر ردیف، بداند فاکتور
+     * هر سفارش ثبت شده یا نیاز به بررسی دارد.
+     */
+    const rahkaranSyncByOrderId = await this.loadRahkaranSyncStatuses(orderIds);
+
     return {
       data: data.map(order => ({
         ...order,
         paymentBreakdown: this.buildPaymentBreakdown(order, paymentsByOrderId),
+        rahkaranInvoice: this.buildRahkaranInvoiceSummary(
+          rahkaranSyncByOrderId.get(order.id),
+        ),
       })),
 
       pagination: {
@@ -1733,9 +1744,14 @@ export class OrdersService {
       throw new NotFoundException('سفارش یافت نشد');
     }
 
+    const rahkaranSync = await this.loadRahkaranSyncStatuses([order.id]);
+
     return {
       ...order,
       paymentBreakdown: this.buildPaymentBreakdown(order, paymentsByOrderId),
+      rahkaranInvoice: this.buildRahkaranInvoiceSummary(
+        rahkaranSync.get(order.id),
+      ),
     };
   }
 
@@ -1804,6 +1820,63 @@ export class OrdersService {
       default:
         return 0;
     }
+  }
+
+  /**
+   * وضعیت ثبت فاکتور راهکاران برای چند سفارش.
+   *
+   * اگر ماژول راهکاران در دسترس نباشد (محیط بدون آن)، نقشهٔ خالی برمی‌گردد
+   * و پاسخ ادمین مثل قبل کار می‌کند.
+   */
+  private async loadRahkaranSyncStatuses(
+    orderIds: number[],
+  ): Promise<Map<number, RahkaranInvoiceSync>> {
+    if (!this.rahkaranInvoiceSyncService || !orderIds?.length) {
+      return new Map();
+    }
+
+    try {
+      return await this.rahkaranInvoiceSyncService.getSyncStatusesForOrders(
+        orderIds,
+      );
+    } catch (error) {
+      // وضعیت راهکاران نباید دیدن سفارش‌ها در پنل ادمین را بشکند.
+      this.logger.warn(
+        `خواندن وضعیت ثبت فاکتور راهکاران ناموفق بود: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+
+      return new Map();
+    }
+  }
+
+  /**
+   * خلاصهٔ قابل نمایش وضعیت فاکتور راهکاران در پنل ادمین.
+   * `null` یعنی این سفارش هنوز در جدول ردیابی راهکاران رکوردی ندارد.
+   */
+  private buildRahkaranInvoiceSummary(sync?: RahkaranInvoiceSync) {
+    if (!sync) {
+      return null;
+    }
+
+    return {
+      status: sync.status,
+      attempts: sync.attempts,
+      invoiceId: sync.invoiceId,
+      invoiceNumber: sync.invoiceNumber,
+      lastError: sync.lastError,
+      lastAttemptAt: sync.lastAttemptAt,
+      succeededAt: sync.succeededAt,
+      lastCorrelationId: sync.lastCorrelationId,
+      /*
+       * true یعنی نتیجهٔ تلاش قبلی نامعلوم بوده و ارسال دوباره تا بررسی
+       * دستی در راهکاران متوقف شده است.
+       */
+      needsReconciliation: !!sync.reconcileRequiredAt,
+      reconcileRequiredAt: sync.reconcileRequiredAt,
+      reconcileReason: sync.reconcileReason,
+    };
   }
 
   private buildPaymentBreakdown(
