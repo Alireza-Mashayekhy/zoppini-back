@@ -268,6 +268,15 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
    */
   private loginPromise: Promise<void> | null = null;
 
+  /**
+   * جلوگیری از اجرای موازی ثبت مشتری/عضو وفاداری برای یک userId واحد
+   * (جلوگیری از ساخت مشتری یا Loyalty Membership تکراری در درخواست‌های هم‌زمان).
+   */
+  private readonly loyaltySyncInFlight = new Map<
+    number,
+    Promise<{ customerId: number | null; skipped?: 'already_synced' }>
+  >();
+
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
@@ -1269,11 +1278,40 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
    * اگر عملیات نیمه‌تمام بماند (مشتری ثبت شد، عضویت نشد) فراخوانی بعدی
    * فقط بخش باقی‌مانده را انجام می‌دهد.
    */
-  async createLoyaltyMemberForUser(id: number): Promise<{
+  async createLoyaltyMemberForUser(
+    id: number,
+    externalCorrelationId?: string,
+  ): Promise<{
     customerId: number | null;
     skipped?: 'already_synced';
   }> {
-    const correlationId = createCorrelationId('rah-loyalty');
+    const inFlight = this.loyaltySyncInFlight.get(id);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const promise = this.performCreateLoyaltyMemberForUser(
+      id,
+      externalCorrelationId,
+    );
+    this.loyaltySyncInFlight.set(id, promise);
+
+    try {
+      return await promise;
+    } finally {
+      this.loyaltySyncInFlight.delete(id);
+    }
+  }
+
+  private async performCreateLoyaltyMemberForUser(
+    id: number,
+    externalCorrelationId?: string,
+  ): Promise<{
+    customerId: number | null;
+    skipped?: 'already_synced';
+  }> {
+    const correlationId =
+      externalCorrelationId || createCorrelationId('rah-loyalty');
 
     const logCtx: RahkaranLogContext = {
       correlationId,

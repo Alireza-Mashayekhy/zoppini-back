@@ -2,6 +2,10 @@
 import { HttpService } from '@nestjs/axios';
 import { Injectable, Logger } from '@nestjs/common';
 import { firstValueFrom } from 'rxjs';
+import {
+  maskMobile,
+  sanitizeForLog,
+} from 'src/common/logging/structured-logger';
 
 @Injectable()
 export class SmsService {
@@ -19,18 +23,14 @@ export class SmsService {
     template: string,
     param1: string,
   ): Promise<{ success: boolean; message: string }> {
+    const maskedReceptor = maskMobile(receptor);
     try {
       // نرمال‌سازی شماره (مشابه normalize_iran_phone)
       const normalizedPhone = this.normalizePhone(receptor);
 
       this.logger.log(
-        normalizedPhone,
-        [...normalizedPhone],
-        receptor,
-        [receptor],
-        [...receptor],
+        `📤 ارسال پیامک OTP به ${maskedReceptor} با قالب ${template}`,
       );
-      this.logger.log(`📤 ارسال پیامک به ${receptor} با قالب ${template}`);
 
       const response = await firstValueFrom(
         this.httpService.post(
@@ -56,20 +56,24 @@ export class SmsService {
         ),
       );
 
-      this.logger.log(`✅ پیامک به ${receptor} با موفقیت ارسال شد`);
+      this.logger.log(`✅ پیامک OTP به ${maskedReceptor} با موفقیت ارسال شد`);
       return {
         success: true,
         message: response.data?.message || 'پیامک با موفقیت ارسال شد',
       };
     } catch (error) {
-      this.logger.error(`❌ خطا در ارسال پیامک به ${receptor}:`, error.message);
-      if (error.response) {
-        this.logger.error('📄 پاسخ سرور:', error.response.data);
-        this.logger.error('📊 وضعیت:', error.response.status);
+      this.logger.error(
+        `❌ خطا در ارسال پیامک OTP به ${maskedReceptor}: ${error?.message}`,
+      );
+      if (error?.response) {
+        this.logger.error(
+          `📄 وضعیت پاسخ درگاه پیامک: ${error.response.status}`,
+          JSON.stringify(sanitizeForLog(error.response.data)),
+        );
       }
       return {
         success: false,
-        message: error.message,
+        message: error?.message ?? 'SMS send failed',
       };
     }
   }

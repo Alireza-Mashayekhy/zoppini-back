@@ -11,13 +11,15 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  *    دوباره می‌فرستاد → احتمال فاکتور تکراری. این ستون «نیازمند تطبیق»
  *    را علامت می‌زند تا retry خودکار برای آن متوقف شود.
  *
- * ۲) `users.loyalty_member_synced_at`
+ * ۲) `user.loyalty_member_synced_at`
  *    ثبت مشتری و عضویت وفاداری در راهکاران دو عملیات جدا هستند و قبلاً هیچ
  *    ردی از موفقیتشان ذخیره نمی‌شد؛ هر فراخوانی دوباره مشتری می‌ساخت
  *    (احتمال مشتری تکراری در راهکاران). با این ستون، ثبت یک‌باره می‌شود و
  *    عملیات نیمه‌تمام قابل تکمیل است.
  *
- * ستون `users.rahkaran_id` از قبل وجود دارد و همین‌جا فقط استفاده می‌شود.
+ * توجه: جدول entity `User` (`@Entity() export class User`) در MySQL با نام
+ * مفرد `user` ساخته می‌شود (مشابه `order`، `cart` و `category`).
+ * ستون `user.rahkaranId` از قبل وجود دارد و همین‌جا فقط استفاده می‌شود.
  *
  * Migration فقط افزودنی است (ADD COLUMN با شرط وجود) و `down` آن ستون‌ها را
  * برمی‌دارد؛ هیچ داده‌ای حذف یا بازنویسی نمی‌شود.
@@ -77,15 +79,15 @@ export class RahkaranReconciliationAndLoyaltyTracking1808000000000 implements Mi
     }
 
     if (
-      (await this.tableExists(queryRunner, 'users')) &&
+      (await this.tableExists(queryRunner, 'user')) &&
       !(await this.columnExists(
         queryRunner,
-        'users',
+        'user',
         'loyalty_member_synced_at',
       ))
     ) {
       await queryRunner.query(
-        'ALTER TABLE `users` ' +
+        'ALTER TABLE `user` ' +
           'ADD COLUMN `loyalty_member_synced_at` DATETIME(6) NULL',
       );
     }
@@ -119,15 +121,11 @@ export class RahkaranReconciliationAndLoyaltyTracking1808000000000 implements Mi
     }
 
     if (
-      (await this.tableExists(queryRunner, 'users')) &&
-      (await this.columnExists(
-        queryRunner,
-        'users',
-        'loyalty_member_synced_at',
-      ))
+      (await this.tableExists(queryRunner, 'user')) &&
+      (await this.columnExists(queryRunner, 'user', 'loyalty_member_synced_at'))
     ) {
       await queryRunner.query(
-        'ALTER TABLE `users` DROP COLUMN `loyalty_member_synced_at`',
+        'ALTER TABLE `user` DROP COLUMN `loyalty_member_synced_at`',
       );
     }
   }

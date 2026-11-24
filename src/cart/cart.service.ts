@@ -304,10 +304,13 @@ export class CartsService {
       userCart.items = [];
     }
 
-    for (const guestItem of guestCart.items) {
+    for (const guestItem of guestCart.items ?? []) {
+      if (!guestItem?.variant) {
+        continue;
+      }
       const existing = userCart.items.find(
         item =>
-          item.variant.id === guestItem.variant.id &&
+          item.variant?.id === guestItem.variant.id &&
           item.promotionRewardId == null &&
           guestItem.promotionRewardId == null,
       );

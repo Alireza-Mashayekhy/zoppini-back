@@ -1,19 +1,18 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, MaxLength, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { IsIranMobileField } from 'src/common/decorators/is-iran-mobile.decorator';
+import { IsOtpCodeField } from 'src/common/decorators/is-otp-code.decorator';
 
 export class ResetPasswordDto {
   @IsIranMobileField()
   phone: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  @MaxLength(5)
-  @MinLength(5)
+  @IsOtpCodeField()
   code: string;
 
   @ApiProperty()
   @IsNotEmpty()
+  @IsString()
   @MinLength(6)
   newPassword: string;
 }

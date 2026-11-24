@@ -18,6 +18,7 @@ import { RahkaranInvoiceSync1805000000000 } from 'src/migrations/1805000000000-R
 import { SequentialSaleDiscounts1806000000000 } from 'src/migrations/1806000000000-SequentialSaleDiscounts';
 import { CartDiscountEligibility1807000000000 } from 'src/migrations/1807000000000-CartDiscountEligibility';
 import { RahkaranReconciliationAndLoyaltyTracking1808000000000 } from 'src/migrations/1808000000000-RahkaranReconciliationAndLoyaltyTracking';
+import { FixUserLoyaltyMemberSyncedAtColumn1809000000000 } from 'src/migrations/1809000000000-FixUserLoyaltyMemberSyncedAtColumn';
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
@@ -73,6 +74,7 @@ export class TypeOrmConfigService implements TypeOrmOptionsFactory {
         SequentialSaleDiscounts1806000000000,
         CartDiscountEligibility1807000000000,
         RahkaranReconciliationAndLoyaltyTracking1808000000000,
+        FixUserLoyaltyMemberSyncedAtColumn1809000000000,
       ],
       migrationsRun,
 

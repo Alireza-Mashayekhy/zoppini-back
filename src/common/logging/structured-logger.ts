@@ -25,7 +25,7 @@ export function createCorrelationId(prefix = 'req'): string {
 }
 
 const SENSITIVE_KEY_PATTERN =
-  /pass(word)?|secret|token|api[-_]?key|authorization|cookie|encrypted|session[-_]?id/i;
+  /pass(word)?|secret|token|api[-_]?key|authorization|cookie|encrypted|session[-_]?id|^otp([-_]?code)?$|^verification[-_]?code$/i;
 
 const MAX_STRING_LENGTH = 1000;
 const MAX_ARRAY_ITEMS = 50;
@@ -123,16 +123,17 @@ export function maskMobile(phone: string | null | undefined): string | null {
 export interface SerializedError {
   type: string;
   message: string;
+  errorCode?: string | number;
   stack?: string;
-  /** کد وضعیت HTTP در صورت خطای Axios */
+  /** کد وضعیت HTTP در صورت خطای Axios یا HttpException */
   httpStatus?: number;
   /** خلاصهٔ بدنهٔ پاسخ upstream در صورت وجود */
   httpResponseBody?: string;
 }
 
 /**
- * تبدیل Error (از جمله AxiosError) به ساختار قابل لاگ؛ بدون افشای
- * هدرها/توکن‌ها.
+ * تبدیل Error (از جمله AxiosError / HttpException / QueryFailedError) به ساختار
+ * قابل لاگ؛ بدون افشای هدرها/توکن‌ها.
  */
 export function serializeError(error: unknown): SerializedError {
   if (!(error instanceof Error)) {
@@ -147,26 +148,47 @@ export function serializeError(error: unknown): SerializedError {
     message: truncateForLog(error.message || 'unknown error'),
   };
 
-  const axiosLike = error as {
+  const extended = error as {
     response?: { status?: number; data?: unknown };
     isAxiosError?: boolean;
-    code?: string;
+    code?: string | number;
+    errno?: number;
+    status?: number;
+    getStatus?: () => number;
+    driverError?: { code?: string; errno?: number };
   };
 
-  if (axiosLike?.response?.status !== undefined) {
-    serialized.httpStatus = axiosLike.response.status;
+  const httpStatus =
+    extended?.response?.status ??
+    (typeof extended?.getStatus === 'function'
+      ? extended.getStatus()
+      : extended?.status);
+
+  if (httpStatus !== undefined) {
+    serialized.httpStatus = httpStatus;
   }
 
-  if (axiosLike?.response?.data !== undefined) {
+  const errorCode =
+    extended?.code ??
+    extended?.driverError?.code ??
+    extended?.errno ??
+    extended?.driverError?.errno ??
+    httpStatus;
+
+  if (errorCode !== undefined) {
+    serialized.errorCode = errorCode;
+  }
+
+  if (extended?.response?.data !== undefined) {
     serialized.httpResponseBody = truncateForLog(
-      stringifySafe(axiosLike.response.data),
+      stringifySafe(extended.response.data),
       500,
     );
   }
 
-  if (axiosLike?.code) {
-    // کدهای شبکه‌ای مانند ETIMEDOUT / ECONNABORTED / ECONNREFUSED
-    serialized.type = `${serialized.type}(${axiosLike.code})`;
+  if (typeof extended?.code === 'string') {
+    // کدهای شبکه‌ای و دیتابیسی مانند ETIMEDOUT / ECONNREFUSED / ER_BAD_FIELD_ERROR
+    serialized.type = `${serialized.type}(${extended.code})`;
   }
 
   return serialized;

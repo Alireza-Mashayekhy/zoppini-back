@@ -1,14 +1,10 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, MaxLength, MinLength } from 'class-validator';
 import { IsIranMobileField } from 'src/common/decorators/is-iran-mobile.decorator';
+import { IsOtpCodeField } from 'src/common/decorators/is-otp-code.decorator';
 
 export class SendVerifyOtp {
   @IsIranMobileField()
   phone: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  @MaxLength(5)
-  @MinLength(5)
+  @IsOtpCodeField()
   code: string;
 }

@@ -1,16 +1,12 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
-import {
-  IsEmail,
-  IsOptional,
-  IsString,
-  MaxLength,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsOptional, IsString, MinLength } from 'class-validator';
 import { IsIranMobileField } from 'src/common/decorators/is-iran-mobile.decorator';
+import { IsOtpCodeField } from 'src/common/decorators/is-otp-code.decorator';
 
 export class CreateUserDto {
   @ApiProperty()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
   fullName: string;
 
@@ -31,13 +27,11 @@ export class CreateUserDto {
   @IsEmail({}, { message: 'ایمیل وارد شده معتبر نیست' })
   email?: string | null;
 
-  @ApiProperty()
-  @IsString()
-  @MinLength(5)
-  @MaxLength(5)
+  @IsOtpCodeField()
   code: string;
 
   @ApiProperty()
+  @IsString()
   @MinLength(6)
   password: string;
 

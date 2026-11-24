@@ -46,9 +46,11 @@ describe('RahkaranReconciliationAndLoyaltyTracking migration', () => {
     expect(statements[1]).toContain(
       'ADD COLUMN `reconcile_reason` VARCHAR(255) NULL',
     );
+    expect(statements[2]).toContain('ALTER TABLE `user`');
     expect(statements[2]).toContain(
       'ADD COLUMN `loyalty_member_synced_at` DATETIME(6) NULL',
     );
+    expect(statements.join('\n')).not.toContain('ALTER TABLE `users`');
     // فقط ستون اضافه می‌شود: هیچ DROP/UPDATE/DELETE در up وجود ندارد
     expect(
       query.mock.calls

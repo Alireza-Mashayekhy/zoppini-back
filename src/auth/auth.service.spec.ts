@@ -1,4 +1,10 @@
-import { UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import type { Response } from 'express';
 
 import { AuthService } from './auth.service';
@@ -56,7 +62,9 @@ function makeService() {
     usersService,
     otpService,
     jwtService,
+    cartsService,
     clubService,
+    rahkaranService,
     response,
   };
 }
@@ -124,8 +132,9 @@ describe('AuthService.login — کاربر ثبتنامنکرده', () => {
 
     expect(result.message).toBe('login successfully');
     expect(otpService.verifyOtp).toHaveBeenCalledWith(PHONE, CODE, {
-      consume: true,
+      consume: false,
     });
+    expect(otpService.consumeOtp).toHaveBeenCalledWith(PHONE);
     expect((response as any).cookie).toHaveBeenCalledTimes(2);
   });
 });
@@ -295,5 +304,120 @@ describe('AuthService — سایر مسیرها', () => {
       expect.anything(),
       expect.objectContaining({ expiresIn: '6h' }),
     );
+  });
+
+  it('کاربر غیرفعال (isActive=false) با 403 مسدود می‌شود و OTP مصرف نمی‌شود', async () => {
+    const { service, usersService, otpService, response } = makeService();
+    usersService.findWithPhone.mockResolvedValue({
+      id: 9,
+      phone: PHONE,
+      isActive: false,
+    });
+
+    await expect(
+      service.login({ phone: PHONE, code: CODE }, undefined, response),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(otpService.consumeOtp).not.toHaveBeenCalled();
+  });
+
+  it('در صورت شکست ساخت کاربر یا امضای JWT، کد OTP زودهنگام مصرف نمی‌شود', async () => {
+    const { service, usersService, otpService, jwtService } = makeService();
+    usersService.findWithPhone.mockResolvedValue(null);
+    usersService.create.mockRejectedValueOnce(new Error('DB write error'));
+
+    await expect(
+      service.signUp(signUpDto(), undefined, emptyResponse()),
+    ).rejects.toThrow('DB write error');
+    expect(otpService.consumeOtp).not.toHaveBeenCalled();
+
+    usersService.findWithPhone.mockResolvedValue({ id: 1, phone: PHONE });
+    jwtService.signAsync.mockRejectedValueOnce(
+      new Error('secretOrPrivateKey must have a value'),
+    );
+    await expect(
+      service.login({ phone: PHONE, code: CODE }, undefined, emptyResponse()),
+    ).rejects.toThrow('secretOrPrivateKey');
+    expect(otpService.consumeOtp).not.toHaveBeenCalled();
+  });
+
+  it('درخواست هم‌زمان برای یک شماره با 409 رد می‌شود و کاربر/راهکاران تکراری ساخته نمی‌شود', async () => {
+    const { service, usersService, rahkaranService } = makeService();
+    let releaseCreate!: () => void;
+    usersService.findWithPhone.mockResolvedValue(null);
+    usersService.create.mockImplementation(
+      () =>
+        new Promise(resolve => {
+          releaseCreate = () => resolve({ id: 44, phone: PHONE });
+        }),
+    );
+
+    const first = service.signUp(signUpDto(), undefined, emptyResponse());
+    const second = service.signUp(signUpDto(), undefined, emptyResponse());
+
+    await expect(second).rejects.toBeInstanceOf(ConflictException);
+    while (!releaseCreate) {
+      await new Promise(r => setTimeout(r, 5));
+    }
+    releaseCreate();
+    await expect(first).resolves.toEqual({ message: 'sign up successfully' });
+    expect(usersService.create).toHaveBeenCalledTimes(1);
+    expect(rahkaranService.createLoyaltyMemberForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('قطع دیتابیس (ECONNREFUSED) با 503 برگردانده می‌شود و خطای ادغام سبد مانع ورود نمی‌شود', async () => {
+    const { service, usersService, cartsService, response } = makeService();
+    usersService.findWithPhone.mockRejectedValueOnce(
+      Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3306'), {
+        code: 'ECONNREFUSED',
+      }),
+    );
+
+    await expect(
+      service.login({ phone: PHONE, code: CODE }, undefined, response),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    usersService.findWithPhone.mockResolvedValue({ id: 1, phone: PHONE });
+    cartsService.mergeGuestCart.mockRejectedValueOnce(
+      new Error('orphan variant'),
+    );
+    const ok = await service.login(
+      { phone: PHONE, code: CODE },
+      'guest-xyz',
+      response,
+    );
+    expect(ok).toEqual({ message: 'login successfully' });
+  });
+
+  it('لاگ‌های ساختاریافته شامل correlationId و موبایل ماسک‌شده‌اند و هرگز OTP یا رمز را فاش نمی‌کنند', async () => {
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+    const errSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    try {
+      const { service, usersService } = makeService();
+      usersService.findWithPhone.mockResolvedValue(null);
+      usersService.create.mockResolvedValue({ id: 77 });
+
+      await service.signUp(
+        signUpDto({ password: 'SuperSecretPassword!99' }),
+        undefined,
+        emptyResponse(),
+        'corr-test-1234',
+      );
+
+      const allLogs = [
+        ...logSpy.mock.calls.map(c => String(c[0])),
+        ...errSpy.mock.calls.map(c => String(c[0])),
+      ].join('\n');
+
+      expect(allLogs).toContain('"operation":"REGISTER"');
+      expect(allLogs).toContain('"correlationId":"corr-test-1234"');
+      expect(allLogs).toContain('"phone":"0991****340"');
+      expect(allLogs).not.toContain(PHONE);
+      expect(allLogs).not.toContain(CODE);
+      expect(allLogs).not.toContain('SuperSecretPassword!99');
+      expect(allLogs).not.toContain('signed-token');
+    } finally {
+      logSpy.mockRestore();
+      errSpy.mockRestore();
+    }
   });
 });
