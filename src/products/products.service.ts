@@ -24,9 +24,9 @@ import {
   QueryDto,
 } from 'src/common/query';
 import { DiscountService } from 'src/discounts/discounts.service';
-import { PromotionsService } from 'src/promotions/promotions.service';
-import { PromotionType } from 'src/promotions/entities/promotion.entity';
 import { FilesService } from 'src/files/files.service';
+import { PromotionType } from 'src/promotions/entities/promotion.entity';
+import { PromotionsService } from 'src/promotions/promotions.service';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { extractBothWarehouseStocks } from 'src/rahkaran/rahkaran.service';
 import { RahkaranProduct } from 'src/rahkaran/rahkaran-product-sync.service';
@@ -1748,6 +1748,15 @@ export class ProductsService {
     }
 
     return this.categoriesService.findMatchingNames(term.spaced, limit);
+  }
+
+  /** Add the same sale-discount and promotion badge data used by product grids. */
+  async enrichForProductCards(products: Product[]): Promise<Product[]> {
+    if (!products.length) return products;
+
+    await this.attachDiscounts(products);
+    await this.attachPromotionBadges(products);
+    return products;
   }
 
   private async attachDiscounts(products: Product[]) {

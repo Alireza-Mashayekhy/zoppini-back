@@ -15,6 +15,7 @@ import {
 } from './dto/create-featured-product.dto';
 import { FeaturedProduct } from './entities/featured-product.entity';
 import { Variant } from './entities/variant.entity';
+import { ProductsService } from './products.service';
 import { findInStockProductColorPairs } from './utils/stock.util';
 
 @Injectable()
@@ -28,6 +29,7 @@ export class FeaturedService {
     private colorRepo: Repository<Color>,
     @InjectRepository(Variant)
     private variantRepo: Repository<Variant>,
+    private readonly productsService: ProductsService,
   ) {}
 
   async getFeaturedProducts(options?: {
@@ -45,6 +47,7 @@ export class FeaturedService {
           colorImages: {
             color: true,
           },
+          categories: true,
         },
         color: true,
       },
@@ -64,9 +67,15 @@ export class FeaturedService {
       })),
     );
 
-    return featured.filter(item =>
+    const inStockFeatured = featured.filter(item =>
       inStockPairs.has(`${item.productId}-${item.colorId}`),
     );
+
+    await this.productsService.enrichForProductCards(
+      inStockFeatured.map(item => item.product),
+    );
+
+    return inStockFeatured;
   }
 
   async getFeaturedProduct(
