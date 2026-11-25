@@ -1686,7 +1686,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
     const inventoryId = input.inventoryId ?? RETAIL_WAREHOUSE_ID;
 
-    const settlementPolicyId = 18;
+    const settlementPolicyId = 25;
 
     const documentPatternId = 3;
 
