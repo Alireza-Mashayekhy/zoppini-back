@@ -1597,9 +1597,11 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
       this.clearState();
       await this.login();
-      response = await this.request<
-        RahkaranResponse<RahkaranCustomer[]>
-      >(url, { method: 'GET', headers: this.authHeaders() }, ctx);
+      response = await this.request<RahkaranResponse<RahkaranCustomer[]>>(
+        url,
+        { method: 'GET', headers: this.authHeaders() },
+        ctx,
+      );
     }
 
     if (response?.metadata?.isSuccessfull !== true) {
@@ -1640,7 +1642,9 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     const id = Number(response.result[0]?.Id);
 
     if (!Number.isSafeInteger(id) || id <= 0) {
-      throw new BadRequestException('شناسهٔ مشتری در پاسخ راهکاران معتبر نیست.');
+      throw new BadRequestException(
+        'شناسهٔ مشتری در پاسخ راهکاران معتبر نیست.',
+      );
     }
 
     return id;
@@ -1769,7 +1773,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
 
       data: {
         discountCards: [],
-        loyaltyProgramID: null,
+        loyaltyProgramID: 1,
       },
     };
 
