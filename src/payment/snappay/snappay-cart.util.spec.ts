@@ -71,6 +71,35 @@ describe('SnappPay cart builder', () => {
     ]);
   });
 
+  it('sends the fixed shipping once in rial for a discounted multicategory order', () => {
+    const built = buildSnappPayCart({
+      orderId: 43,
+      lines: [
+        {
+          id: 1,
+          name: 'a',
+          category: 'a',
+          unitPriceToman: 1_000_000,
+          quantity: 1,
+        },
+        {
+          id: 2,
+          name: 'b',
+          category: 'b',
+          unitPriceToman: 500_000,
+          quantity: 2,
+        },
+      ],
+      shippingToman: 250_000,
+      discountToman: 200_000,
+      externalToman: 0,
+      expectedPayableToman: 2_050_000,
+      commissionType: 100,
+    });
+    expect(built.shippingAmount).toBe(2_500_000);
+    expect(built.amount).toBe(20_500_000);
+  });
+
   it('works without discount, wallet and shipping', () => {
     const built = buildSnappPayCart({
       orderId: 7,

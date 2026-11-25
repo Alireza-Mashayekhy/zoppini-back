@@ -55,6 +55,7 @@ export interface RahkaranSyncableOrder {
   id: number;
   orderNumber: string;
   finalPrice: number;
+  shippingCost: number;
   user: { phone: string };
   items: Array<{
     quantity: number;

@@ -43,6 +43,7 @@ describe('RahkaranService invoice flow logging', () => {
     id: 42,
     orderNumber: 'ORD-12345678-1234',
     finalPrice: 1_250_000,
+    shippingCost: 0,
     user: { phone: '09120000000' },
     items: [
       {
@@ -133,6 +134,21 @@ describe('RahkaranService invoice flow logging', () => {
         });
       }
 
+      if (url.includes('GetProduct?id=83467')) {
+        return of({
+          data: {
+            result: {
+              productId: 83467,
+              productName: 'هزینه ارسال',
+              RetailUnitRef: 3,
+              fee: 2_500_000,
+            },
+            metadata: { isSuccessfull: true, errorMessage: null },
+          },
+          headers: {},
+        });
+      }
+
       if (url.includes('GetRemainingQuantityInfo')) {
         return of({
           data: {
@@ -181,6 +197,59 @@ describe('RahkaranService invoice flow logging', () => {
       return of({ data: {}, headers: {} });
     });
   }
+
+  it('adds one priced-by-catalog shipping product without adding to the receipt again', async () => {
+    stubAuthenticated();
+    mockInvoiceFlowHttp();
+    const chargedOrder = {
+      ...order,
+      shippingCost: 250_000,
+      finalPrice: 1_500_000,
+    };
+    await service.syncOrderToRahkaran(chargedOrder);
+    const save = httpService.request.mock.calls
+      .map(call => call[0])
+      .find(config => config.url.includes('SaveInvoice'));
+    expect(
+      save.data.document.items.filter((item: any) => item.productId === 83467),
+    ).toEqual([
+      expect.objectContaining({ productId: 83467, quantity: 1, unitId: 3 }),
+    ]);
+    expect(save.data.receipts[0].amount).toBe(15_000_000);
+    expect(chargedOrder.items).toHaveLength(1);
+  });
+
+  it('does not add a shipping line for free or postpaid orders', async () => {
+    stubAuthenticated();
+    mockInvoiceFlowHttp();
+    await service.syncOrderToRahkaran({ ...order, shippingCost: 0 });
+    const calls = httpService.request.mock.calls.map(call => call[0]);
+    const save = calls.find(config => config.url.includes('SaveInvoice'));
+    expect(
+      save.data.document.items.some((item: any) => item.productId === 83467),
+    ).toBe(false);
+    expect(
+      calls.some(config => config.url.includes('GetProduct?id=83467')),
+    ).toBe(false);
+  });
+
+  it('refuses to post an invoice when Rahkaran shipping price differs from the frozen order', async () => {
+    stubAuthenticated();
+    mockInvoiceFlowHttp();
+    jest.spyOn(service, 'getRetailProduct').mockResolvedValue({
+      productId: 83467,
+      RetailUnitRef: 3,
+      fee: 1_700_000,
+    } as any);
+    await expect(
+      service.syncOrderToRahkaran({ ...order, shippingCost: 250_000 }),
+    ).rejects.toThrow('مطابقت ندارد');
+    expect(
+      httpService.request.mock.calls.some(call =>
+        call[0].url.includes('SaveInvoice'),
+      ),
+    ).toBe(false);
+  });
 
   it('logs the whole invoice registration with one correlationId and masked mobile', async () => {
     stubAuthenticated();

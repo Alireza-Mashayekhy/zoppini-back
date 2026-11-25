@@ -55,6 +55,7 @@ import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
 import { OrderItem } from './entities/order-item';
 import { summarizeOrderStatusCounts } from './order-status-summary';
+import { POST_SHIPPING_COST_TOMAN } from './shipping';
 
 @Injectable()
 export class OrdersService {
@@ -344,9 +345,6 @@ export class OrdersService {
       };
     });
 
-    const subtotalAfterSale =
-      totalPrice - saleDiscountAmount - promotionDiscountAmount;
-
     // =====================================================
     // 5. هزینه ارسال
     // =====================================================
@@ -355,7 +353,7 @@ export class OrdersService {
 
     const shippingCost = promotionFreeShipping
       ? 0
-      : this.calculateShippingCost(dto.shippingMethod, subtotalAfterSale);
+      : this.calculateShippingCost(dto.shippingMethod);
 
     // =====================================================
     // 6. تخفیف
@@ -1273,10 +1271,10 @@ export class OrdersService {
     );
 
     const freeShipping = promotionResult.freeShipping;
-    const shippingMethod = dto.shippingMethod ?? ShippingMethod.POST;
+    const shippingMethod = dto.shippingMethod;
     const shippingCost = freeShipping
       ? 0
-      : this.calculateShippingCost(shippingMethod, subtotalAfterSale);
+      : this.calculateShippingCost(shippingMethod);
 
     let codeDiscountAmount = 0;
     if (dto.discountCode?.trim()) {
@@ -1802,24 +1800,12 @@ export class OrdersService {
     return this.findOneForAdmin(id);
   }
 
-  private calculateShippingCost(
-    shippingMethod: ShippingMethod,
-    totalPrice: number,
-  ): number {
-    // Free shipping for orders over 10 million Tomans
-    if (totalPrice >= 10000000) {
-      return 0;
-    }
-    switch (shippingMethod) {
-      case ShippingMethod.POST:
-        return 170000;
-
-      case ShippingMethod.PICKUP:
-      case ShippingMethod.COURIER:
-      case ShippingMethod.TIBAX:
-      default:
-        return 0;
-    }
+  private calculateShippingCost(shippingMethod?: ShippingMethod): number {
+    // Courier and Tibax are paid on delivery; pickup is free. Promotions may
+    // waive the prepaid postal charge before this function is called.
+    return shippingMethod === ShippingMethod.POST
+      ? POST_SHIPPING_COST_TOMAN
+      : 0;
   }
 
   /**

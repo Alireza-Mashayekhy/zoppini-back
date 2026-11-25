@@ -80,6 +80,8 @@ describe('order item persistence boundary', () => {
       Order,
       expect.objectContaining({
         items: [expect.objectContaining({ quantity: 2, totalPrice: 180 })],
+        shippingCost: 250_000,
+        finalPrice: 250_180,
       }),
     );
     expect(manager.count).toHaveBeenCalledWith(OrderItem, {
@@ -89,6 +91,28 @@ describe('order item persistence boundary', () => {
     expect(commit).toHaveBeenCalled();
     expect(rollback).not.toHaveBeenCalled();
   });
+  it('preview and saved order agree for post, pickup, postpaid and no selection', async () => {
+    const { service } = setup(1);
+    for (const [method, expected] of [
+      [ShippingMethod.POST, 250_000],
+      [ShippingMethod.PICKUP, 0],
+      [ShippingMethod.COURIER, 0],
+      [ShippingMethod.TIBAX, 0],
+      [undefined, 0],
+    ] as const) {
+      const preview = await service.previewCheckout(1, {
+        shippingMethod: method,
+      });
+      expect(preview.data.totals.shippingCost).toBe(expected);
+      expect(preview.data.totals.finalPrice).toBe(180 + expected);
+    }
+    const order = await service.createOrder(1, dto);
+    const preview = await service.previewCheckout(1, {
+      shippingMethod: ShippingMethod.POST,
+    });
+    expect(Number(order.finalPrice)).toBe(preview.data.totals.finalPrice);
+  });
+
   it('creates a pickup order without an address or shipping charge', async () => {
     const { service, manager, addressRepo } = setup(1);
     const order = await service.createOrder(1, {

@@ -204,6 +204,8 @@ interface RahkaranRemainingQuantity {
   MaxNegativeReserves: number | null;
 }
 
+const RAHKARAN_SHIPPING_PRODUCT_ID = 83467;
+
 export interface CreateRahkaranInvoiceItem {
   productId: number;
   unitId: number;
@@ -1913,6 +1915,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       id: number;
       orderNumber: string;
       finalPrice: number;
+      shippingCost: number;
       user: {
         phone: string;
       };
@@ -2011,6 +2014,14 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
           );
         }
 
+        if (
+          Number(rahkaranProduct.productId) === RAHKARAN_SHIPPING_PRODUCT_ID
+        ) {
+          throw new BadRequestException(
+            'کالای هزینه ارسال نباید در اقلام سبد باشد.',
+          );
+        }
+
         const unitId = rahkaranProduct.RetailUnitRef ?? rahkaranProduct.unitRef;
 
         if (!unitId) {
@@ -2105,6 +2116,46 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
             retailAvailable: retail.quantity,
           }),
         );
+      }
+
+      // SaveInvoice obtains prices from Rahkaran's price list, not item.price.
+      // Use the order's frozen charge (also for older orders/retries), and
+      // fail before POST if the configured service product would charge more
+      // or less. No stock lookup is needed for this service line.
+      const shippingCost = Number(order.shippingCost);
+      if (
+        order.shippingCost == null ||
+        !Number.isFinite(shippingCost) ||
+        shippingCost < 0
+      ) {
+        throw new BadRequestException('هزینه ارسال سفارش معتبر نیست.');
+      }
+      if (shippingCost > 0) {
+        const shippingProduct = await this.getRetailProduct(
+          RAHKARAN_SHIPPING_PRODUCT_ID,
+        );
+        const unitId =
+          shippingProduct?.RetailUnitRef ?? shippingProduct?.unitRef;
+        if (
+          Number(shippingProduct?.productId) !== RAHKARAN_SHIPPING_PRODUCT_ID ||
+          !unitId
+        ) {
+          throw new BadRequestException(
+            'کالای هزینه ارسال یا واحد فروش آن در راهکاران معتبر نیست.',
+          );
+        }
+        if (Number(shippingProduct.fee) !== shippingCost * 10) {
+          throw new BadRequestException(
+            `قیمت کالای هزینه ارسال در راهکاران با هزینه سفارش ${order.id} مطابقت ندارد.`,
+          );
+        }
+        invoiceItems.push({
+          productId: RAHKARAN_SHIPPING_PRODUCT_ID,
+          unitId: Number(unitId),
+          quantity: 1,
+          fee: Number(shippingProduct.fee),
+          price: shippingCost,
+        });
       }
 
       logCtx.stage = 'save_invoice';

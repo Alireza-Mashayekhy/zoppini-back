@@ -19,6 +19,7 @@ describe('RahkaranInvoiceSyncService', () => {
     id: 42,
     orderNumber: 'ORD-12345678-1234',
     finalPrice: 1_250_000,
+    shippingCost: 0,
     user: { phone: '09120000000' },
     items: [
       {
