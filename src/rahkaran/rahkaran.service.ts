@@ -187,7 +187,7 @@ export function extractBothWarehouseStocks(
 }
 
 interface RahkaranCustomer {
-  id: number;
+  Id: number;
   mobile: string;
 }
 
@@ -1577,11 +1577,11 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     }
 
     const url =
-      `${this.baseUrl}/Services/Retail/ESales.svc/customers?` +
-      new URLSearchParams({ mobile: phone }).toString();
+      `${this.baseUrl}/Retail/Api/Structure/CustomerService.svc/customer?` +
+      new URLSearchParams({ input: phone, searchMode: '2' }).toString();
 
     let response = await this.authenticatedRequest<
-      RahkaranResponse<RahkaranCustomer[] | null>
+      RahkaranResponse<RahkaranCustomer[]>
     >(url, { method: 'GET' }, ctx);
 
     // Some Rahkaran endpoints report an expired session with HTTP 200.
@@ -1598,7 +1598,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       this.clearState();
       await this.login();
       response = await this.request<
-        RahkaranResponse<RahkaranCustomer[] | null>
+        RahkaranResponse<RahkaranCustomer[]>
       >(url, { method: 'GET', headers: this.authHeaders() }, ctx);
     }
 
@@ -1610,7 +1610,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     }
 
     // Do not use an unrelated result (or the website's user ID) for an invoice.
-    if (response.result != null && !Array.isArray(response.result)) {
+    if (!Array.isArray(response.result)) {
       throw new BadRequestException('پاسخ جستجوی مشتری راهکاران معتبر نیست.');
     }
 
@@ -1637,9 +1637,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
-    const id = Number(response.result[0]?.id);
+    const id = Number(response.result[0]?.Id);
 
-    return Number.isFinite(id) && id > 0 ? id : null;
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new BadRequestException('شناسهٔ مشتری در پاسخ راهکاران معتبر نیست.');
+    }
+
+    return id;
   }
 
   /**

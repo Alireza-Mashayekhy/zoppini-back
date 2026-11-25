@@ -520,13 +520,13 @@ describe('Auth HTTP — ماتریس کامل سناریوهای ورود، ثب
 
     rahkaranHttpMock.mockImplementation(
       (cfg: { url: string; method?: string }) => {
-        if (cfg.url.includes('/ESales.svc/customers')) {
+        if (cfg.url.includes('/CustomerService.svc/customer?')) {
           return of({
             status: 200,
             headers: {},
             data: {
               metadata: { isSuccessfull: true },
-              result: createdInRahkaran ? [{ id: 8801, mobile: phone }] : [],
+              result: createdInRahkaran ? [{ Id: 8801, mobile: phone }] : [],
             },
           });
         }
@@ -599,14 +599,14 @@ describe('Auth HTTP — ماتریس کامل سناریوهای ورود، ثب
     let loyaltyAttemptCount = 0;
 
     rahkaranHttpMock.mockImplementation((cfg: { url: string }) => {
-      if (cfg.url.includes('/ESales.svc/customers')) {
+      if (cfg.url.includes('/CustomerService.svc/customer?')) {
         return of({
           status: 200,
           headers: {},
           data: {
             metadata: { isSuccessfull: true },
             result:
-              customerCreatedCount > 0 ? [{ id: 9902, mobile: phone }] : [],
+              customerCreatedCount > 0 ? [{ Id: 9902, mobile: phone }] : [],
           },
         });
       }
@@ -721,7 +721,7 @@ describe('Auth HTTP — ماتریس کامل سناریوهای ورود، ثب
       of({
         status: 200,
         headers: {},
-        data: { metadata: { isSuccessful: true }, result: [{ id: 5001 }] },
+        data: { metadata: { isSuccessfull: true }, result: [{ Id: 5001 }] },
       }),
     );
 

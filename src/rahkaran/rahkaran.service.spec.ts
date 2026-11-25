@@ -105,10 +105,10 @@ describe('RahkaranService invoice flow logging', () => {
     httpService.request.mockImplementation((config: any) => {
       const url: string = config.url;
 
-      if (url.includes('/ESales.svc/customers')) {
+      if (url.includes('/CustomerService.svc/customer?')) {
         return of({
           data: {
-            result: [{ id: 77, mobile: '09120000000' }],
+            result: [{ Id: 77, mobile: '09120000000' }],
             metadata: { isSuccessfull: true, errorMessage: null },
           },
           headers: {},
@@ -266,10 +266,10 @@ describe('RahkaranService invoice flow logging', () => {
         });
       }
 
-      if (url.includes('/ESales.svc/customers')) {
+      if (url.includes('/CustomerService.svc/customer?')) {
         return of({
           data: {
-            result: [{ id: 77, mobile: '09120000000' }],
+            result: [{ Id: 77, mobile: '09120000000' }],
             metadata: { isSuccessfull: true, errorMessage: null },
           },
           headers: {},

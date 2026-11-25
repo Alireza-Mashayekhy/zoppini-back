@@ -225,6 +225,125 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
     });
   });
 
+  describe('customer lookup', () => {
+    it('uses mobile search and customer Id, not partyId', async () => {
+      httpService.request.mockReturnValue(
+        of({
+          status: 200,
+          headers: {},
+          data: {
+            result: [
+              {
+                Id: 7132,
+                partyId: 10714,
+                partyType: 0,
+                customerName: 'اقای لطیفی',
+                firstName: 'اقای',
+                lastName: 'لطیفی',
+                number: '2738',
+                mobile: '09124030586',
+                economicCode: '',
+                nationalID: '',
+                fidaRegistration: null,
+                tel: '',
+                email: '',
+                addresses: [],
+              },
+            ],
+            metadata: { isSuccessfull: true, errorMessage: null },
+          },
+        }),
+      );
+
+      await expect(
+        service.getCustomerIdByMobile(' 09124030586 '),
+      ).resolves.toBe(7132);
+      expect(httpService.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: 'GET',
+          url: `${BASE_URL}/Retail/Api/Structure/CustomerService.svc/customer?input=09124030586&searchMode=2`,
+          headers: expect.objectContaining({ Cookie: 'auth-cookie=value' }),
+        }),
+      );
+    });
+
+    it('reports an empty result as not found for invoice lookup', async () => {
+      httpService.request.mockReturnValue(
+        of({
+          status: 200,
+          headers: {},
+          data: { result: [], metadata: { isSuccessfull: true } },
+        }),
+      );
+      await expect(service.getCustomerIdByMobile(user.phone)).rejects.toThrow(
+        'پیدا نشد',
+      );
+    });
+
+    it.each([
+      { result: null, metadata: { isSuccessfull: true } },
+      { result: {}, metadata: { isSuccessfull: true } },
+      { result: [{ partyId: 10714 }], metadata: { isSuccessfull: true } },
+      { result: [{ Id: 0 }], metadata: { isSuccessfull: true } },
+      {
+        result: [],
+        metadata: { isSuccessfull: false, errorMessage: 'خطای جستجو' },
+      },
+      { result: [] },
+    ])(
+      'does not create a customer on failed or invalid search: %j',
+      async data => {
+        httpService.request.mockReturnValue(
+          of({ status: 200, headers: {}, data }),
+        );
+        await expect(service.createLoyaltyMemberForUser(9)).rejects.toThrow();
+        expect(httpService.request).toHaveBeenCalledTimes(1);
+        expect(usersService.update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('retries the same search after an expired session response', async () => {
+      httpService.request
+        .mockReturnValueOnce(
+          of({
+            status: 200,
+            headers: {},
+            data: {
+              result: null,
+              metadata: {
+                isSuccessfull: false,
+                errorMessage: 'session expired',
+              },
+            },
+          }),
+        )
+        .mockReturnValueOnce(
+          of({
+            status: 200,
+            headers: {},
+            data: {
+              result: [{ Id: 7132 }],
+              metadata: { isSuccessfull: true },
+            },
+          }),
+        );
+      jest.spyOn(service, 'login').mockImplementation(async () => {
+        (service as any).state = { cookie: 'new-cookie=value' };
+        return undefined as any;
+      });
+
+      await expect(service.getCustomerIdByMobile('09124030586')).resolves.toBe(
+        7132,
+      );
+      expect(httpService.request).toHaveBeenCalledTimes(2);
+      expect(httpService.request.mock.calls[1][0]).toMatchObject({
+        method: 'GET',
+        url: `${BASE_URL}/Retail/Api/Structure/CustomerService.svc/customer?input=09124030586&searchMode=2`,
+        headers: { Cookie: 'new-cookie=value' },
+      });
+    });
+  });
+
   describe('loyalty registration idempotency', () => {
     it('sends nothing when the user is already synced', async () => {
       usersService.findOne.mockResolvedValue({
@@ -242,10 +361,10 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
 
     it('reuses the existing customer by mobile instead of creating a duplicate', async () => {
       httpService.request.mockImplementation((config: any) => {
-        if (config.url.includes('/ESales.svc/customers')) {
+        if (config.url.includes('/CustomerService.svc/customer?')) {
           return of({
             data: {
-              result: [{ id: 77 }],
+              result: [{ Id: 77 }],
               metadata: { isSuccessfull: true },
             },
             headers: {},
@@ -266,12 +385,12 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
 
       expect(result).toEqual({ customerId: 77 });
 
-      const urls = httpService.request.mock.calls.map(call => call[0].url);
-
       // هیچ درخواست ساخت مشتری ارسال نشده است
       expect(
-        urls.filter((url: string) =>
-          url.includes('/Structure/CustomerService.svc/customer'),
+        httpService.request.mock.calls.filter(
+          ([config]) =>
+            config.method === 'POST' &&
+            config.url.includes('/Structure/CustomerService.svc/customer'),
         ),
       ).toHaveLength(0);
 
@@ -286,12 +405,12 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
       let customerLookups = 0;
 
       httpService.request.mockImplementation((config: any) => {
-        if (config.url.includes('/ESales.svc/customers')) {
+        if (config.url.includes('/CustomerService.svc/customer?')) {
           customerLookups += 1;
 
           return of({
             data: {
-              result: customerLookups === 1 ? [] : [{ id: 88 }],
+              result: customerLookups === 1 ? [] : [{ Id: 88 }],
               metadata: { isSuccessfull: true },
             },
             headers: {},
@@ -323,9 +442,9 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
 
     it('keeps the customer id when only the loyalty step fails, so the retry does not duplicate it', async () => {
       httpService.request.mockImplementation((config: any) => {
-        if (config.url.includes('/ESales.svc/customers')) {
+        if (config.url.includes('/CustomerService.svc/customer?')) {
           return of({
-            data: { result: [{ id: 77 }], metadata: { isSuccessfull: true } },
+            data: { result: [{ Id: 77 }], metadata: { isSuccessfull: true } },
             headers: {},
           });
         }
@@ -378,7 +497,9 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
       expect(
         httpService.request.mock.calls
           .map(call => call[0].url)
-          .filter((url: string) => url.includes('/ESales.svc/customers')),
+          .filter((url: string) =>
+            url.includes('/CustomerService.svc/customer?'),
+          ),
       ).toHaveLength(0);
       expect(usersService.update).toHaveBeenCalledWith(
         9,
@@ -388,10 +509,10 @@ describe('RahkaranService — unknown outcome and idempotent loyalty', () => {
 
     it('warns (without failing) when several customers share the mobile', async () => {
       httpService.request.mockImplementation((config: any) => {
-        if (config.url.includes('/ESales.svc/customers')) {
+        if (config.url.includes('/CustomerService.svc/customer?')) {
           return of({
             data: {
-              result: [{ id: 77 }, { id: 91 }],
+              result: [{ Id: 77 }, { Id: 91 }],
               metadata: { isSuccessfull: true },
             },
             headers: {},
