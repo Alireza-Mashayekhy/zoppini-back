@@ -105,6 +105,7 @@ export class PaymentController {
     res: Response,
     status: 'success' | 'failed' | 'pending',
     orderId?: number | string,
+    transactionId?: string | null,
   ) {
     const frontUrl = this.getFrontUrl();
     let url = `${frontUrl}/checkout/payment/result?status=${status}`;
@@ -116,6 +117,12 @@ export class PaymentController {
 
     if (orderId) {
       url += `&orderId=${orderId}`;
+    }
+
+    // شناسهٔ تراکنش اسنپ‌پی (transactionId) را همراه نتیجه می‌فرستیم تا در
+    // صفحهٔ نتیجه به کاربر نمایش داده شود (مستند صفحهٔ ۸ و ۱۵).
+    if (transactionId) {
+      url += `&transactionId=${encodeURIComponent(transactionId)}`;
     }
 
     return res.redirect(url);
@@ -736,6 +743,7 @@ export class PaymentController {
         res,
         result.pending ? 'pending' : result.success ? 'success' : 'failed',
         result.orderId ?? payment.orderId ?? undefined,
+        payment.providerId,
       );
     } catch (error) {
       /*

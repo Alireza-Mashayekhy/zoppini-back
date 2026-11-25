@@ -8,26 +8,33 @@ import { SnappPayCart } from './snappay.client';
  * همهٔ مبالغ این فایل در خروجی «ریال صحیح» هستند (واحد اسنپ‌پی IRR است) و
  * ورودی‌ها «تومان» (واحد داخلی سایت؛ مثل بقیهٔ درگاه‌ها ×۱۰ می‌شود).
  *
- * فرمول خود مستند اسنپ‌پی (بخش نحوهٔ محاسبهٔ totalAmount و amount):
+ * فرمول خود مستند اسنپ‌پی (بخش نحوهٔ محاسبهٔ totalAmount و amount، صفحه ۱۴):
  *   totalAmount هر سبد = Σ(count × amount هر قلم)
  *                        + هزینه ارسال (اگر داخل قیمت اقلام نباشد)
  *                        + مالیات (اگر داخل قیمت اقلام نباشد)
  *   amount سفارش       = Σ(totalAmount سبدها) − discountAmount − externalSourceAmount
  *
- * نگاشت به مدل سفارش زوپینی:
- *   - amount هر قلم: قیمت واحد «قبل از تخفیف» فریز‌شده در OrderItem
- *     (originalPrice و در نبودش price) تا تخفیف فقط یک‌بار و در
- *     discountAmount اعمال شود.
- *   - discountAmount: Order.discount (فروش ویژه + کد تخفیف)
- *   - externalSourceAmount: سهم کیف پول (Order.walletPayment)؛ مبلغی که
- *     از منبع دیگری غیر از اسنپ‌پی پرداخت می‌شود.
- *   - هزینهٔ ارسال جدا از قیمت اقلام است → isShipmentIncluded=false
- *   - مالیات جدا در سایت نداریم و قیمت‌ها شامل آن است → taxAmount=0 و
- *     isTaxIncluded=true
+ * طبق الزام مستند (صفحه‌های ۱۰–۱۴ و ۲۳–۲۵) پرچم‌های `isShipmentIncluded`
+ * و `isTaxIncluded` همیشه `true` ارسال می‌شوند. یعنی هزینهٔ ارسال و مالیات
+ * «شاملِ» مبلغ کل گزارش‌شده هستند و نباید جای دیگر دوباره جمع زده شوند.
+ * در مدل زوپینی قیمت واحدِ هر قلم شامل ارسال/مالیات نیست، پس برای اینکه
+ * مبلغ ارسال دقیقاً «یک بار» و نه دو بار در totalAmount لحاظ شود، مبلغ
+ * ارسال را مستقیماً به totalAmount اضافه می‌کنیم و پرچم را `true` می‌گذاریم
+ * (شارژ ارسال جزء totalAmount است و جداگانه دو‌باره جمع نمی‌شود).
+ *
+ * نگاشت به مدل سفارش زوپینی (طبق مستند صفحه ۱۴ و ۱۲–۱۴):
+ *   - cartItems.amount: قیمت نهاییِ «هر واحد» پس از تخفیف‌های عمومی/محصول
+ *     (OrderItem.price فریز‌شده؛ در نبودش originalPrice). مبلغ خط‌خورده یا
+ *     تخفیف محصول در اینجا نمی‌آید.
+ *   - discountAmount: فقط تخفیفِ اعمال‌شده از طریق «کد/کوپن سفارش»
+ *     (externalSourceAmount نباید تخفیف محصول/فروش‌ویژه را دربربگیرد).
+ *   - externalSourceAmount: سهم منبع خارجی (کیف پول/اعتبار باشگاه)؛ مبلغی
+ *     که از مسیری غیر از اسنپ‌پی پرداخت می‌شود. نگاشت دقیقِ انواع اعتبار
+ *     به این فیلد طبق بخش ۳ مستند نیازمند تأیید اسنپ‌پی است.
  *
  * پس amount نهایی دقیقاً می‌شود:
- *   totalPrice + shippingCost − discount − externalSourceAmount
- *   = finalPrice − سهم کیف پول − اعتبار باشگاه (مبلغ قابل پرداخت با درگاه)
+ *   Σ(count × amount) + shippingCost − discountAmount − externalSourceAmount
+ *   = finalPrice − سهم منبع خارجی (مبلغ قابل پرداخت با درگاه)
  */
 
 /** تبدیل مبلغ تومانی (ممکن است اعشاریِ دیتابیس باشد) به ریال صحیح */
@@ -60,7 +67,7 @@ export interface SnappPayOrderLine {
   id: number;
   name: string;
   category: string;
-  /** قیمت واحد قبل از تخفیف، تومان */
+  /** قیمت واحدِ نهایی پس از تخفیف‌های محصول/عمومی، تومان (مبلغ خط‌خورده نیست) */
   unitPriceToman: number;
   quantity: number;
 }
@@ -70,9 +77,9 @@ export interface BuildSnappPayCartInput {
   lines: SnappPayOrderLine[];
   /** هزینهٔ ارسال، تومان */
   shippingToman: number;
-  /** مجموع تخفیف سفارش (فروش ویژه + کد تخفیف)، تومان */
+  /** فقط تخفیف کوپن/کد سفارش (externalSourceAmount نباید تخفیف محصول را شامل شود)، تومان */
   discountToman: number;
-  /** سهم کیف پول داخلی و اعتبار باشگاه/منبع خارجی، تومان */
+  /** سهم منبع خارجی (کیف پول/اعتبار باشگاه)، تومان */
   externalToman: number;
   /** مبلغ قابل پرداخت با درگاه به تومان پس از کسر منابع خارجی */
   expectedPayableToman: number;
@@ -145,7 +152,13 @@ export function buildSnappPayCart(
     throw new Error('هزینه ارسال، تخفیف یا سهم کیف پول سفارش منفی است');
   }
 
-  // isShipmentIncluded=false یعنی هزینهٔ ارسال به totalAmount اضافه می‌شود.
+  /*
+   * طبق مستند هر دو پرچم همیشه true هستند. در مدل زوپینی قیمتِ واحدِ هر
+   * قلم شامل ارسال نیست، پس برای اینکه ارسال دقیقاً «یک بار» در totalAmount
+   * بیاید (نه دو بار)، مبلغ ارسال را به صورت صریح به totalAmount اضافه
+   * می‌کنیم و پرچم isShipmentIncluded=true اعلام می‌کند که ارسال جزءِ مبلغ
+   * کل گزارش‌شده است.
+   */
   const totalAmount = itemsTotalAmount + shippingAmount;
   const amount = totalAmount - discountAmount - externalSourceAmount;
 
@@ -178,7 +191,7 @@ export function buildSnappPayCart(
       {
         cartId: input.orderId,
         cartItems,
-        isShipmentIncluded: false,
+        isShipmentIncluded: true,
         isTaxIncluded: true,
         shippingAmount,
         taxAmount: 0,
@@ -244,10 +257,13 @@ export function buildSnappPayUpdateCart(
     0,
   );
   const shippingAmount = originalCart.shippingAmount;
-  const totalAmount =
-    itemsTotalAmount +
-    (originalCart.isShipmentIncluded ? 0 : originalCart.shippingAmount) +
-    (originalCart.isTaxIncluded ? 0 : originalCart.taxAmount);
+  /*
+   * هم‌راستا با درخواست توکن، ارسال همیشه جزءِ totalAmount است (پرچم
+   * isShipmentIncluded=true). چون قیمت واحدِ اقلام در زوپینی شامل ارسال
+   * نیست، مبلغ ارسال را همواره یک‌بار به totalAmount اضافه می‌کنیم تا با
+   * محاسبهٔ توکن هم‌خوانی داشته باشد و دوبار جمع نشود.
+   */
+  const totalAmount = itemsTotalAmount + shippingAmount;
   const amount = totalAmount - discountAmount - externalSourceAmount;
 
   if (!Number.isSafeInteger(amount) || amount <= 0) {

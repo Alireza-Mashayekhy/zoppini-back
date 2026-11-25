@@ -35,9 +35,15 @@ function makeOrder(overrides: Record<string, unknown> = {}) {
     ],
     totalPrice: 1_000_000,
     shippingCost: 170_000,
+    // discount کل = ۲۰۰٬۰۰۰ که تماماً تخفیف محصول (فروش ویژه) است؛
+    // پس تخفیف کوپنِ گزارش‌شده به اسنپ‌پی صفر است (مستند صفحهٔ ۱۴).
     discount: 200_000,
+    saleDiscount: 200_000,
+    promotionDiscount: 0,
+    firstPurchaseGiftDiscount: 0,
     finalPrice: 970_000,
     walletPayment: 0,
+    clubCreditPayment: 0,
     ...overrides,
   } as never;
 }
@@ -265,7 +271,8 @@ describe('SnappayPaymentService', () => {
     };
 
     expect(purchase.amount).toBe(AMOUNT_IRR);
-    expect(purchase.discountAmount).toBe(2_000_000);
+    // تخفیف ۲۰۰٬۰۰۰ تومانی این سفارش تماماً تخفیف محصول است، نه کوپن
+    expect(purchase.discountAmount).toBe(0);
     expect(purchase.externalSourceAmount).toBe(0);
     expect(purchase.mobile).toBe('+989123456789');
     expect(purchase.returnURL).toBe(
@@ -768,9 +775,11 @@ describe('SnappayPaymentService with the real SnappPayClient (contract flow)', (
     });
 
     // قرارداد دقیق درخواست توکن مطابق مستند و کالکشن Postman
+    // discountAmount فقط تخفیف کوپن است؛ در این سفارش تخفیف ۲۰۰٬۰۰۰ تومانی
+    // تماماً تخفیف محصول (فروش ویژه) است و روی قیمت واحد اعمال شده، پس صفر.
     expect(purchaseBody).toMatchObject({
       amount: AMOUNT_IRR,
-      discountAmount: 2_000_000,
+      discountAmount: 0,
       externalSourceAmount: 0,
       mobile: '+989123456789',
       returnURL: 'https://shop.example/api/payment/callback/snappay',
@@ -780,17 +789,17 @@ describe('SnappayPaymentService with the real SnappPayClient (contract flow)', (
           cartItems: [
             {
               id: 101,
-              amount: 5_000_000,
+              amount: 4_000_000,
               category: 'پوشاک زنانه',
               count: 2,
               commissionType: 100,
             },
           ],
-          isShipmentIncluded: false,
+          isShipmentIncluded: true,
           isTaxIncluded: true,
           shippingAmount: 1_700_000,
           taxAmount: 0,
-          totalAmount: 11_700_000,
+          totalAmount: 9_700_000,
         },
       ],
     });
@@ -812,5 +821,76 @@ describe('SnappayPaymentService with the real SnappPayClient (contract flow)', (
     expect(payment.status).toBe(PaymentStatus.SUCCESS);
     expect(harness.ordersService.confirmOrderPayment).toHaveBeenCalledWith(10);
     expect(harness.order.status).toBe(OrderStatus.PAID);
+  });
+
+  it('sends final per-unit price (not crossed-out) and coupon-only discountAmount', async () => {
+    // سفارش: یک کالا با تخفیف محصول (قیمت ۵۰۰→۴۰۰) تعداد ۲، و یک کالا بدون
+    // تخفیف به قیمت ۳۵۰ تعداد ۱. کد تخفیف (coupon) = ۵۰٬۰۰۰ تومان.
+    // order.discount کل = ۲۵۰٬۰۰۰ (۲۰۰ محصول + ۵۰ کوپن)؛ saleDiscount=۲۰۰٬۰۰۰
+    // → تخفیف کوپنِ گزارش‌شده به اسنپ‌پی باید فقط ۵۰٬۰۰۰ تومان باشد.
+    const order = makeOrder({
+      id: 20,
+      items: [
+        {
+          id: 201,
+          quantity: 2,
+          price: 400_000,
+          originalPrice: 500_000,
+          variant: {
+            product: {
+              title: 'مانتو',
+              categories: [{ name: 'پوشاک زنانه' }],
+            },
+            color: { name: 'مشکی' },
+            size: { name: 'M' },
+          },
+        },
+        {
+          id: 202,
+          quantity: 1,
+          price: 350_000,
+          originalPrice: 350_000,
+          variant: {
+            product: { title: 'شال', categories: [{ name: 'پوشاک زنانه' }] },
+          },
+        },
+      ],
+      totalPrice: 1_350_000,
+      shippingCost: 100_000,
+      discount: 250_000,
+      saleDiscount: 200_000,
+      promotionDiscount: 0,
+      firstPurchaseGiftDiscount: 0,
+      finalPrice: 1_200_000,
+      walletPayment: 0,
+      clubCreditPayment: 0,
+    });
+
+    const harness = makeHarness(order);
+
+    let purchaseBody: any;
+    harness.client.createPayment.mockImplementation((purchase: any) => {
+      purchaseBody = purchase;
+      return Promise.resolve({
+        paymentToken: PAYMENT_TOKEN,
+        paymentPageUrl: 'https://pay.example/start',
+      });
+    });
+
+    await harness.service.requestPayment(20, 1);
+
+    // قیمت واحد ارسالی = قیمت نهایی پس از تخفیف محصول (نه قیمت خط‌خورده)
+    expect(purchaseBody.cartList[0].cartItems).toEqual([
+      expect.objectContaining({ id: 201, amount: 4_000_000, count: 2 }),
+      expect.objectContaining({ id: 202, amount: 3_500_000, count: 1 }),
+    ]);
+
+    // discountAmount فقط تخفیف کوپن است (۵۰٬۰۰۰ تومان = ۵۰۰٬۰۰۰ ریال)
+    expect(purchaseBody.discountAmount).toBe(500_000);
+    // هر دو پرچم همیشه true هستند
+    expect(purchaseBody.cartList[0].isShipmentIncluded).toBe(true);
+    expect(purchaseBody.cartList[0].isTaxIncluded).toBe(true);
+    // مبلغ کل = جمع (count×amount) + ارسال − کوپن = ۱٬۲۰۰٬۰۰۰ تومان = finalPrice
+    expect(purchaseBody.amount).toBe(12_000_000);
   });
 });

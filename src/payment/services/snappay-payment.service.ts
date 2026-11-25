@@ -344,6 +344,22 @@ export class SnappayPaymentService {
       );
     }
 
+    /*
+     * ترکیب اسنپ‌پی با کیف پول داخلی / اعتبار باشگاه (Dayatech) تا زمانی که
+     * اسنپ‌پی نحوهٔ نگاشت و قواعد تسویه/برگشت این منابع خارجی را تأیید
+     * نکرده باشد، پشتیبانی نمی‌شود (نگاه کنید به بخش ۳ مستند). در غیر این
+     * صورت ارسال مبلغِ فرضی در externalSourceAmount باعث اشتباه در مبلغ
+     * برداشتی یا دوباره‌کاری می‌شد.
+     */
+    const hasExternalSource =
+      Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0) > 0;
+    if (hasExternalSource && !this.getExternalSourceEnabled()) {
+      throw new BadRequestException(
+        'پرداخت اسنپ‌پی در حال حاضر با کیف پول داخلی یا اعتبار باشگاه قابل ' +
+          'ترکیب نیست؛ تا تأیید ارائه‌دهنده، لطفاً یکی از دو روش را انتخاب کنید',
+      );
+    }
+
     // اسنپ‌پی شماره را با قالب بین‌المللی می‌خواهد: +989xxxxxxxxx
     const mobile = `+98${localMobile.slice(1)}`;
 
@@ -463,6 +479,31 @@ export class SnappayPaymentService {
   private buildCartFromOrder(order: Order): BuiltSnappPayCart {
     const defaultCategory = this.getDefaultCategory();
 
+    // منبع خارجی (کیف پول / اعتبار باشگاه) فقط وقتی به اسنپ‌پی گزارش می‌شود
+    // که پشتیبانی از آن توسط اسنپ‌پی تأیید و در تنظیمات فعال شده باشد
+    // (نگاه کنید به بخش ۳ مستند / تاییدیهٔ پیوست). تا قبل از تأیید، طبق
+    // مستند نباید مقدارِ فرضی برای این فیلد ارسال شود.
+    const walletPayment = Number(order.walletPayment ?? 0);
+    const clubCreditPayment = Number(order.clubCreditPayment ?? 0);
+    const externalEnabled = this.getExternalSourceEnabled();
+    const externalToman = externalEnabled
+      ? walletPayment + clubCreditPayment
+      : 0;
+
+    /*
+     * تخفیفِ گزارش‌شده به اسنپ‌پی فقط تخفیفِ «کد/کوپن» سفارش است. تخفیف‌های
+     * محصول (فروش ویژه) و پروموشن و هدیهٔ اولین خرید قبلاً روی قیمت واحدِ
+     * هر قلم (OrderItem.price) اعمال شده‌اند، پس نباید دوباره در
+     * discountAmount لحاظ شوند. مجموع تخفیف سفارش منهایِ آن‌ها = تخفیف کوپن.
+     */
+    const couponDiscountToman = Math.max(
+      0,
+      Number(order.discount ?? 0) -
+        Number(order.saleDiscount ?? 0) -
+        Number(order.promotionDiscount ?? 0) -
+        Number(order.firstPurchaseGiftDiscount ?? 0),
+    );
+
     return buildSnappPayCart({
       orderId: order.id,
       lines: (order.items ?? []).map(item => {
@@ -480,20 +521,26 @@ export class SnappayPaymentService {
           id: item.id,
           name: variantLabel ? `${title} (${variantLabel})` : title,
           category: product?.categories?.[0]?.name?.trim() || defaultCategory,
-          unitPriceToman: Number(item.originalPrice ?? item.price),
+          // قیمت نهاییِ هر واحد پس از تخفیف محصول/عمومی (مبلغ خط‌خورده نیست)
+          unitPriceToman: Number(item.price ?? item.originalPrice),
           quantity: Number(item.quantity),
         };
       }),
       shippingToman: Number(order.shippingCost ?? 0),
-      discountToman: Number(order.discount ?? 0),
-      externalToman:
-        Number(order.walletPayment ?? 0) + Number(order.clubCreditPayment ?? 0),
-      expectedPayableToman:
-        Number(order.finalPrice ?? 0) -
-        Number(order.walletPayment ?? 0) -
-        Number(order.clubCreditPayment ?? 0),
+      discountToman: couponDiscountToman,
+      externalToman,
+      expectedPayableToman: Number(order.finalPrice ?? 0) - externalToman,
       commissionType: this.getCommissionType(),
     });
+  }
+
+  /**
+   * آیا ارسال سهم کیف پول/اعتبار باشگاه در فیلد `externalSourceAmount` به
+   * اسنپ‌پی فعال است؟ طبق بخش ۳ مستند، نگاشت انواع اعتبار به این فیلد نیازمند
+   * تأیید اسنپ‌پی است؛ پیش‌فرض غیرفعال است تا مقدارِ فرضی ارسال نشود.
+   */
+  private getExternalSourceEnabled(): boolean {
+    return this.getConfig('SNAPPAY_EXTERNAL_SOURCE_ENABLED') === 'true';
   }
 
   // =========================================================

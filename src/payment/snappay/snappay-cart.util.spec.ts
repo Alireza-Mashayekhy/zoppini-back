@@ -62,7 +62,7 @@ describe('SnappPay cart builder', () => {
             commissionType: 100,
           },
         ],
-        isShipmentIncluded: false,
+        isShipmentIncluded: true,
         isTaxIncluded: true,
         shippingAmount: 1_700_000,
         taxAmount: 0,
@@ -290,5 +290,63 @@ describe('SnappPay cart builder', () => {
       expect(id).toMatch(/[A-Z]/);
       expect(id).toMatch(/^[A-Z0-9]+$/);
     }
+  });
+
+  it('acceptance scenario: two decreasing Updates each lower than the previous total (flags always true)', () => {
+    // سناریوی پذیرش (بخش ۲): محصول A قیمت عادی تعداد ۲، محصول B تعداد ۱،
+    // کد تخفیف ۳۰٬۰۰۰ تومان، ارسال ۵۰٬۰۰۰ تومان.
+    const original = buildSnappPayCart({
+      orderId: 55,
+      lines: [
+        { id: 1, name: 'A', category: 'پوشاک', unitPriceToman: 200_000, quantity: 2 },
+        { id: 2, name: 'B', category: 'پوشاک', unitPriceToman: 150_000, quantity: 1 },
+      ],
+      shippingToman: 50_000,
+      discountToman: 30_000, // فقط کوپن
+      externalToman: 0,
+      expectedPayableToman: 570_000,
+      commissionType: 100,
+    });
+
+    // پرچم‌ها همیشه true
+    expect(original.cartList[0].isShipmentIncluded).toBe(true);
+    expect(original.cartList[0].isTaxIncluded).toBe(true);
+
+    // مبلغ اولیه: (۲۰۰×۲ + ۱۵۰) + ۵۰ ارسال − ۳۰ کوپن = ۵۷۰٬۰۰۰ تومان
+    const initial = original.amount;
+    expect(initial).toBe(5_700_000);
+
+    // Update 1: کاهش تعداد محصول A از ۲ به ۱
+    const afterUpdate1 = buildSnappPayUpdateCart(
+      original.cartList[0],
+      new Map([
+        [1, 1],
+        [2, 1],
+      ]),
+      original.discountAmount,
+      original.externalSourceAmount,
+    );
+    const update1Amount = afterUpdate1.amount;
+    // (۲۰۰ + ۱۵۰) + ۵۰ ارسال − ۳۰ کوپن = ۳۷۰٬۰۰۰ تومان → کمتر از اولیه
+    expect(update1Amount).toBe(3_700_000);
+    expect(update1Amount).toBeLessThan(initial);
+
+    // Update 2: حذف کامل محصول B (count=0) → باید از cartItems حذف شود
+    const afterUpdate2 = buildSnappPayUpdateCart(
+      afterUpdate1.cartList[0],
+      new Map([
+        [1, 1],
+        [2, 0],
+      ]),
+      afterUpdate1.discountAmount,
+      afterUpdate1.externalSourceAmount,
+    );
+    const update2Amount = afterUpdate2.amount;
+    // ۲۰۰ + ۵۰ ارسال − ۳۰ کوپن = ۲۲۰٬۰۰۰ تومان → کمتر از Update 1
+    expect(update2Amount).toBe(2_200_000);
+    expect(update2Amount).toBeLessThan(update1Amount);
+    // محصول B از cartItems حذف شده است
+    expect(afterUpdate2.cartList[0].cartItems).toHaveLength(1);
+    expect(afterUpdate2.cartList[0].cartItems[0]).toMatchObject({ id: 1, count: 1 });
   });
 });
