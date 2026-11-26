@@ -134,11 +134,11 @@ describe('RahkaranService invoice flow logging', () => {
         });
       }
 
-      if (url.includes('GetProduct?id=83467')) {
+      if (url.includes('GetProduct?id=2782520')) {
         return of({
           data: {
             result: {
-              productId: 83467,
+              productId: 2782520,
               productName: 'هزینه ارسال',
               RetailUnitRef: 3,
               fee: 2_500_000,
@@ -211,9 +211,11 @@ describe('RahkaranService invoice flow logging', () => {
       .map(call => call[0])
       .find(config => config.url.includes('SaveInvoice'));
     expect(
-      save.data.document.items.filter((item: any) => item.productId === 83467),
+      save.data.document.items.filter(
+        (item: any) => item.productId === 2782520,
+      ),
     ).toEqual([
-      expect.objectContaining({ productId: 83467, quantity: 1, unitId: 3 }),
+      expect.objectContaining({ productId: 2782520, quantity: 1, unitId: 3 }),
     ]);
     expect(save.data.receipts[0].amount).toBe(15_000_000);
     expect(chargedOrder.items).toHaveLength(1);
@@ -226,10 +228,10 @@ describe('RahkaranService invoice flow logging', () => {
     const calls = httpService.request.mock.calls.map(call => call[0]);
     const save = calls.find(config => config.url.includes('SaveInvoice'));
     expect(
-      save.data.document.items.some((item: any) => item.productId === 83467),
+      save.data.document.items.some((item: any) => item.productId === 2782520),
     ).toBe(false);
     expect(
-      calls.some(config => config.url.includes('GetProduct?id=83467')),
+      calls.some(config => config.url.includes('GetProduct?id=2782520')),
     ).toBe(false);
   });
 
@@ -237,7 +239,7 @@ describe('RahkaranService invoice flow logging', () => {
     stubAuthenticated();
     mockInvoiceFlowHttp();
     jest.spyOn(service, 'getRetailProduct').mockResolvedValue({
-      productId: 83467,
+      productId: 2782520,
       RetailUnitRef: 3,
       fee: 1_700_000,
     } as any);

@@ -204,7 +204,7 @@ interface RahkaranRemainingQuantity {
   MaxNegativeReserves: number | null;
 }
 
-const RAHKARAN_SHIPPING_PRODUCT_ID = 83467;
+const RAHKARAN_SHIPPING_PRODUCT_ID = 2782520;
 
 export interface CreateRahkaranInvoiceItem {
   productId: number;
