@@ -1,11 +1,12 @@
 import { HttpModule } from '@nestjs/axios';
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AnalyticsModule } from 'src/analytics/analytics.module';
 import { ClubModule } from 'src/club/club.module';
 import { FirstPurchaseGiftModule } from 'src/first-purchase-gift/first-purchase-gift.module';
 import { OrdersModule } from 'src/order/order.module';
 import { PromotionsModule } from 'src/promotions/promotions.module';
+import { RahkaranModule } from 'src/rahkaran/rahkaran.module';
 import { WalletCharge } from 'src/wallet/entities/wallet-charge.entity';
 import { WalletModule } from 'src/wallet/wallet.module';
 
@@ -34,6 +35,8 @@ import { ZarinpalPaymentService } from './services/zarinpal-payment.service';
     OrdersModule,
     WalletModule,
     PromotionsModule,
+    // بررسی دوبارهٔ موجودی از راهکاران درست پیش از انتقال به درگاه
+    forwardRef(() => RahkaranModule),
   ],
   controllers: [PaymentController],
   providers: [

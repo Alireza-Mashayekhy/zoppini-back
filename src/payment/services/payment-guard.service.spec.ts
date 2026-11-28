@@ -27,6 +27,9 @@ describe('PaymentGuardService Diatech credit validation', () => {
       paymentRepo as any,
       promotionsRevalidation as any,
       clubService as any,
+      undefined,
+      // موجودی راهکاران در این تست موضوع نیست؛ همیشه کافی
+      { assertCheckoutStock: jest.fn().mockResolvedValue(undefined) } as any,
     );
     return { guard, clubService };
   };

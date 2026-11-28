@@ -1,6 +1,8 @@
 // src/carts/carts.service.ts
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -15,6 +17,7 @@ import {
 } from 'src/promotions/engine/promotion-engine';
 import { buildPricedPromotionCart } from 'src/promotions/promotion-cart.util';
 import { PromotionsService } from 'src/promotions/promotions.service';
+import { RahkaranStockService } from 'src/rahkaran/rahkaran-stock.service';
 import { Repository } from 'typeorm';
 
 import { AddToCartDto } from './dto/add-to-cart.dto';
@@ -58,7 +61,25 @@ export class CartsService {
     private readonly discountService: DiscountService,
 
     private readonly promotionsService: PromotionsService,
+
+    /**
+     * بررسی لحظه‌ای موجودی از راهکاران (عمداً Optional نیست تا اپ بدون آن
+     * بالا نیاید و بررسی بی‌صدا دور زده نشود).
+     */
+    @Inject(forwardRef(() => RahkaranStockService))
+    private readonly rahkaranStockService: RahkaranStockService,
   ) {}
+
+  /** جمع تعداد یک واریانت در همهٔ ردیف‌های سبد (ردیف عادی + هدیه) */
+  private quantityInCart(cart: Cart, variantId: number, exceptItemId?: number) {
+    return (cart.items ?? [])
+      .filter(
+        item =>
+          item.variant?.id === variantId &&
+          (exceptItemId === undefined || item.id !== exceptItemId),
+      )
+      .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  }
 
   private cartRelations = {
     items: {
@@ -165,18 +186,31 @@ export class CartsService {
       throw new NotFoundException('واریانت یافت نشد');
     }
 
+    // ردیف عادی همین واریانت (ردیف هدیهٔ پروموشن جدا نگه داشته می‌شود)
     const existingItem = cart.items.find(
-      item => item.variant.id === dto.variantId,
+      item =>
+        item.variant?.id === dto.variantId && item.promotionRewardId == null,
     );
 
-    const requestedTotal = (existingItem?.quantity ?? 0) + dto.quantity;
+    // تعداد درخواستی = تعداد فعلی همین واریانت در سبد + تعداد جدید
+    const inCart = this.quantityInCart(cart, dto.variantId);
+    const requestedTotal = inCart + dto.quantity;
 
-    if (variant.stock < requestedTotal) {
-      throw new BadRequestException('موجودی کافی نیست');
-    }
+    /*
+     * موجودی لحظه‌ای از راهکاران گرفته، موجودی سایت به‌روز و کفایت بررسی
+     * می‌شود. ناکافی → 409 با پیام فارسی؛ راهکاران در دسترس نیست → 503.
+     * در هر دو حالت چیزی به سبد اضافه نمی‌شود.
+     */
+    await this.rahkaranStockService.assertCanAddToCart({
+      variantId: dto.variantId,
+      requestedTotal,
+      inCart,
+      stage: 'add_to_cart',
+      userId,
+    });
 
     if (existingItem) {
-      existingItem.quantity = requestedTotal;
+      existingItem.quantity += dto.quantity;
       await this.cartItemRepo.save(existingItem);
     } else {
       const newItem = this.cartItemRepo.create({
@@ -213,9 +247,24 @@ export class CartsService {
       if (!variant) {
         throw new NotFoundException('واریانت یافت نشد');
       }
-      if (variant.stock < dto.quantity) {
-        throw new BadRequestException('موجودی کافی نیست');
+
+      /*
+       * افزایش تعداد در عمل «افزودن به سبد» است و همان بررسی راهکاران را
+       * لازم دارد. کاهش تعداد هرگز وضعیت را بدتر نمی‌کند و بدون تماس با
+       * راهکاران انجام می‌شود (تا قطعی راهکاران مانع اصلاح سبد نشود).
+       */
+      if (dto.quantity > Number(item.quantity)) {
+        const otherRows = this.quantityInCart(cart, variant.id, item.id);
+
+        await this.rahkaranStockService.assertCanAddToCart({
+          variantId: variant.id,
+          requestedTotal: otherRows + dto.quantity,
+          inCart: otherRows + Number(item.quantity),
+          stage: 'update_cart',
+          userId,
+        });
       }
+
       item.quantity = dto.quantity;
       await this.cartItemRepo.save(item);
     }

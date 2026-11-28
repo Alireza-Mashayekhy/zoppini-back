@@ -7,6 +7,7 @@ import {
   Logger,
   NotFoundException,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Address } from 'src/address/entities/address.entity';
@@ -42,6 +43,12 @@ import { PromotionsService } from 'src/promotions/promotions.service';
 import { RahkaranInvoiceSync } from 'src/rahkaran/entities/rahkaran-invoice-sync.entity';
 import { RahkaranService } from 'src/rahkaran/rahkaran.service';
 import { RahkaranInvoiceSyncService } from 'src/rahkaran/rahkaran-invoice-sync.service';
+import {
+  RahkaranStockService,
+  STOCK_ERROR_CODES,
+  StockCheckStage,
+  unavailableMessage,
+} from 'src/rahkaran/rahkaran-stock.service';
 import { SmsService } from 'src/sms/sms.service';
 import {
   TOROB_CLICK_WINDOW_MS,
@@ -55,7 +62,7 @@ import { CreateOrderDto, ShippingMethod } from './dto/create-order.dto';
 import { Order, OrderStatus } from './entities/order.entity';
 import { OrderItem } from './entities/order-item';
 import { summarizeOrderStatusCounts } from './order-status-summary';
-import { POST_SHIPPING_COST_TOMAN } from './shipping';
+import { getShippingCostToman } from './shipping';
 
 @Injectable()
 export class OrdersService {
@@ -117,7 +124,49 @@ export class OrdersService {
     @Optional()
     @Inject(forwardRef(() => RahkaranInvoiceSyncService))
     private readonly rahkaranInvoiceSyncService?: RahkaranInvoiceSyncService,
+
+    /**
+     * بررسی لحظه‌ای موجودی از راهکاران پیش از ثبت/تأیید سفارش.
+     *
+     * دکوریتور @Optional ندارد، پس در اپ واقعی DI آن را الزامی می‌داند و
+     * بدون آن اپ بالا نمی‌آید. اگر در ساخت دستی (تست) داده نشود، مسیرهای
+     * خرید «Fail closed» می‌شوند (نگاه کنید به assertStockForPurchase).
+     */
+    @Inject(forwardRef(() => RahkaranStockService))
+    private readonly rahkaranStockService?: RahkaranStockService,
   ) {}
+
+  /**
+   * بررسی موجودی همهٔ اقلام از راهکاران (و به‌روزرسانی موجودی سایت).
+   * ناکافی → 409 با فهرست اقلام؛ عدم دسترسی → 503.
+   */
+  private async assertStockForPurchase(
+    items: Array<{ quantity: number; variant?: { id: number } | null }>,
+    stage: StockCheckStage,
+    userId: number,
+    orderId?: number,
+  ): Promise<void> {
+    if (!this.rahkaranStockService) {
+      this.logger.error(
+        structuredLog('stock.check.service_missing', { stage, orderId }),
+      );
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: STOCK_ERROR_CODES.UNAVAILABLE,
+        message: unavailableMessage(stage),
+      });
+    }
+
+    await this.rahkaranStockService.assertCheckoutStock(
+      items
+        .filter(item => item.variant?.id)
+        .map(item => ({
+          variantId: item.variant!.id,
+          quantity: Number(item.quantity),
+        })),
+      { stage, excludeUserId: userId, orderId },
+    );
+  }
 
   // تولید شماره سفارش منحصربه‌فرد
   private generateOrderNumber(): string {
@@ -190,6 +239,17 @@ export class OrdersService {
     if (!cart || !cart.items?.length) {
       throw new BadRequestException('سبد خرید خالی است.');
     }
+
+    // =====================================================
+    // 3-b. بررسی دوبارهٔ موجودی همهٔ اقلام از راهکاران
+    // =====================================================
+
+    /*
+     * پیش از ساخت سفارش: اگر یک یا چند قلم کافی نباشد سفارشی ساخته
+     * نمی‌شود و فهرست «کالا / تنوع / تعداد موجود» برمی‌گردد تا مشتری
+     * سبدش را اصلاح کند. راهکاران در دسترس نباشد → 503 (سفارش ثبت نمی‌شود).
+     */
+    await this.assertStockForPurchase(cart.items, 'checkout', userId);
 
     // =====================================================
     // 4. محاسبه قیمت محصولات
@@ -752,7 +812,16 @@ export class OrdersService {
 
       const stockChanges: VariantStockChangeInput[] = [];
 
-      for (const item of order.items) {
+      /*
+       * ترتیب ثابت (بر اساس id واریانت) تا با به‌روزرسانی موجودی از راهکاران
+       * (RahkaranStockService که ردیف‌ها را به همین ترتیب قفل می‌کند) یا
+       * پرداخت هم‌زمان دیگر بن‌بست (deadlock) رخ ندهد.
+       */
+      const stockItems = [...order.items]
+        .filter(item => item.variant)
+        .sort((a, b) => a.variant!.id - b.variant!.id);
+
+      for (const item of stockItems) {
         if (!item.variant) {
           continue;
         }
@@ -793,13 +862,27 @@ export class OrdersService {
           newStock,
         });
 
-        await queryRunner.manager.update(
-          Variant,
-          { id: variant.id },
-          {
-            stock: () => `stock - ${item.quantity}`,
-          },
-        );
+        /*
+         * کسر اتمیک و شرطی: دو پرداخت هم‌زمانِ آخرین واحد هر دو از بررسی
+         * بالا (خواندن بدون قفل) رد می‌شدند و موجودی منفی می‌شد. شرط
+         * `stock >= quantity` در خود UPDATE این رقابت را می‌بندد.
+         */
+        const quantity = Number(item.quantity);
+        const decrement = await queryRunner.manager
+          .createQueryBuilder()
+          .update(Variant)
+          .set({ stock: () => `stock - ${quantity}` })
+          .where('id = :id AND stock >= :quantity', {
+            id: variant.id,
+            quantity,
+          })
+          .execute();
+
+        if (!decrement.affected) {
+          throw new BadRequestException(
+            `موجودی کافی نیست برای ${variant.product?.title || 'محصول'}`,
+          );
+        }
       }
 
       // =========================================================
@@ -1075,6 +1158,14 @@ export class OrdersService {
         'مجموع اعتبارهای انتخابی برای پوشش کامل سفارش کافی نیست.',
       );
     }
+
+    // این مسیر جایگزین «انتقال به درگاه» است؛ همان بررسی پیش از پرداخت
+    await this.assertStockForPurchase(
+      order.items ?? [],
+      'wallet_confirm',
+      userId,
+      order.id,
+    );
 
     return this.confirmOrderPayment(orderId);
   }
@@ -1801,11 +1892,10 @@ export class OrdersService {
   }
 
   private calculateShippingCost(shippingMethod?: ShippingMethod): number {
-    // Courier and Tibax are paid on delivery; pickup is free. Promotions may
-    // waive the prepaid postal charge before this function is called.
-    return shippingMethod === ShippingMethod.POST
-      ? POST_SHIPPING_COST_TOMAN
-      : 0;
+    // Post and Tipax are prepaid at a fixed rate; courier is paid on delivery
+    // and pickup is free. Free-shipping promotions waive the prepaid charge
+    // before this function is called.
+    return getShippingCostToman(shippingMethod);
   }
 
   /**

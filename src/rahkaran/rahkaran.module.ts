@@ -19,6 +19,7 @@ import { RahkaranService } from './rahkaran.service';
 import { RahkaranInvoiceSyncScheduler } from './rahkaran-invoice-sync.scheduler';
 import { RahkaranInvoiceSyncService } from './rahkaran-invoice-sync.service';
 import { RahkaranProductSyncService } from './rahkaran-product-sync.service';
+import { RahkaranStockService } from './rahkaran-stock.service';
 
 @Module({
   imports: [
@@ -46,12 +47,14 @@ import { RahkaranProductSyncService } from './rahkaran-product-sync.service';
     RahkaranProductSyncService,
     RahkaranInvoiceSyncService,
     RahkaranInvoiceSyncScheduler,
+    RahkaranStockService,
   ],
   controllers: [RahkaranController],
   exports: [
     RahkaranService,
     RahkaranProductSyncService,
     RahkaranInvoiceSyncService,
+    RahkaranStockService,
   ],
 })
 export class RahkaranModule {}

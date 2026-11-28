@@ -1,13 +1,21 @@
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   Logger,
   Optional,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClubService } from 'src/club/club.service';
 import { FirstPurchaseGiftService } from 'src/first-purchase-gift/first-purchase-gift.service';
 import { Order, OrderStatus } from 'src/order/entities/order.entity';
+import {
+  RahkaranStockService,
+  STOCK_ERROR_CODES,
+  unavailableMessage,
+} from 'src/rahkaran/rahkaran-stock.service';
 import { In, Repository } from 'typeorm';
 
 import { Payment, PaymentStatus } from '../entities/payment.entity';
@@ -24,6 +32,9 @@ import { PromotionRevalidationService } from './promotion-revalidation.service';
  *    امکان پرداخت همزمان با دو درگاه (پرداخت دوگانه) از بین برود.
  *    اگر کاربر واقعاً یکی از آن‌ها را پرداخته باشد، در callback همان
  *    پرداخت با درخواست verify به درگاه، همچنان تأیید و نهایی می‌شود.
+ *
+ * ۳. موجودی همهٔ اقلام سفارش درست پیش از انتقال به درگاه دوباره از
+ *    راهکاران بررسی می‌شود (همهٔ درگاه‌ها از همین متد عبور می‌کنند).
  */
 @Injectable()
 export class PaymentGuardService {
@@ -39,6 +50,13 @@ export class PaymentGuardService {
 
     @Optional()
     private readonly firstPurchaseGiftService?: FirstPurchaseGiftService,
+
+    /**
+     * عمداً بدون @Optional: در اپ واقعی DI الزامی است. اگر در ساخت دستی
+     * داده نشود، شروع پرداخت «Fail closed» می‌شود.
+     */
+    @Inject(forwardRef(() => RahkaranStockService))
+    private readonly rahkaranStockService?: RahkaranStockService,
   ) {}
 
   async ensureOrderPayable(order: Order): Promise<void> {
@@ -101,6 +119,7 @@ export class PaymentGuardService {
     });
 
     if (!openPayments.length) {
+      await this.assertStockBeforeGateway(order);
       return;
     }
 
@@ -124,6 +143,8 @@ export class PaymentGuardService {
       );
     }
 
+    await this.assertStockBeforeGateway(order);
+
     const pendingPayments = openPayments;
 
     for (const payment of pendingPayments) {
@@ -136,5 +157,36 @@ export class PaymentGuardService {
           ` به‌عنوان درخواست قدیمی باطل شد (STALE).`,
       );
     }
+  }
+
+  /**
+   * بررسی موجودی همهٔ اقلام از راهکاران پیش از ساخت درخواست پرداخت.
+   * ناکافی → 409 با فهرست کالا/تنوع/تعداد موجود؛ عدم دسترسی → 503.
+   */
+  private async assertStockBeforeGateway(order: Order): Promise<void> {
+    if (!this.rahkaranStockService) {
+      this.logger.error(
+        `بررسی موجودی برای سفارش ${order.id} ممکن نیست (سرویس موجودی تزریق نشده)؛ شروع پرداخت متوقف شد.`,
+      );
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        code: STOCK_ERROR_CODES.UNAVAILABLE,
+        message: unavailableMessage('payment_start'),
+      });
+    }
+
+    await this.rahkaranStockService.assertCheckoutStock(
+      (order.items ?? [])
+        .filter(item => item.variant?.id)
+        .map(item => ({
+          variantId: item.variant!.id,
+          quantity: Number(item.quantity),
+        })),
+      {
+        stage: 'payment_start',
+        excludeUserId: order.user?.id,
+        orderId: order.id,
+      },
+    );
   }
 }

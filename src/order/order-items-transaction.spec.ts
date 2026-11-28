@@ -1,10 +1,15 @@
+import { EMPTY_PROMOTION_RESULT } from 'src/promotions/engine/promotion-engine';
+
 import { ShippingMethod } from './dto/create-order.dto';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item';
 import { OrdersService } from './order.service';
 
 describe('order item persistence boundary', () => {
-  function setup(persistedCount: number) {
+  function setup(
+    persistedCount: number,
+    options: { freeShipping?: boolean } = {},
+  ) {
     const userRepo = {
       findOne: jest.fn().mockResolvedValue({ id: 1, phone: '09120000000' }),
     };
@@ -69,6 +74,19 @@ describe('order item persistence boundary', () => {
       {} as never,
       dataSource as never,
       {} as never,
+      undefined, // botEventsService
+      options.freeShipping
+        ? ({
+            evaluateCart: jest.fn().mockResolvedValue({
+              ...EMPTY_PROMOTION_RESULT,
+              freeShipping: true,
+            }),
+          } as never)
+        : undefined, // promotionsService
+      undefined, // firstPurchaseGiftService
+      undefined, // rahkaranInvoiceSyncService
+      // موجودی راهکاران در این تست موضوع نیست؛ همیشه کافی
+      { assertCheckoutStock: jest.fn().mockResolvedValue(undefined) } as never,
     );
     return { service, manager, commit, rollback, addressRepo, clubService };
   }
@@ -91,13 +109,13 @@ describe('order item persistence boundary', () => {
     expect(commit).toHaveBeenCalled();
     expect(rollback).not.toHaveBeenCalled();
   });
-  it('preview and saved order agree for post, pickup, postpaid and no selection', async () => {
+  it('preview and saved order agree for post, tipax, pickup, postpaid and no selection', async () => {
     const { service } = setup(1);
     for (const [method, expected] of [
       [ShippingMethod.POST, 250_000],
+      [ShippingMethod.TIBAX, 250_000],
       [ShippingMethod.PICKUP, 0],
       [ShippingMethod.COURIER, 0],
-      [ShippingMethod.TIBAX, 0],
       [undefined, 0],
     ] as const) {
       const preview = await service.previewCheckout(1, {
@@ -111,6 +129,46 @@ describe('order item persistence boundary', () => {
       shippingMethod: ShippingMethod.POST,
     });
     expect(Number(order.finalPrice)).toBe(preview.data.totals.finalPrice);
+  });
+
+  it('charges Tipax the fixed 250,000 toman and freezes it on the order', async () => {
+    const { service, manager } = setup(1);
+    const order = await service.createOrder(1, {
+      addressId: 2,
+      shippingMethod: ShippingMethod.TIBAX,
+    });
+    expect(manager.save).toHaveBeenCalledWith(
+      Order,
+      expect.objectContaining({
+        shippingMethod: ShippingMethod.TIBAX,
+        shippingCost: 250_000,
+        finalPrice: 250_180,
+      }),
+    );
+    const preview = await service.previewCheckout(1, {
+      shippingMethod: ShippingMethod.TIBAX,
+    });
+    expect(Number(order.finalPrice)).toBe(preview.data.totals.finalPrice);
+    expect(Number(order.shippingCost)).toBe(preview.data.totals.shippingCost);
+  });
+
+  it('free-shipping promotions waive the fixed Tipax charge like the postal one', async () => {
+    const { service, manager } = setup(1, { freeShipping: true });
+    for (const method of [ShippingMethod.POST, ShippingMethod.TIBAX]) {
+      const preview = await service.previewCheckout(1, {
+        shippingMethod: method,
+      });
+      expect(preview.data.totals.shippingCost).toBe(0);
+      expect(preview.data.totals.finalPrice).toBe(180);
+    }
+    await service.createOrder(1, {
+      addressId: 2,
+      shippingMethod: ShippingMethod.TIBAX,
+    });
+    expect(manager.save).toHaveBeenCalledWith(
+      Order,
+      expect.objectContaining({ shippingCost: 0, finalPrice: 180 }),
+    );
   });
 
   it('creates a pickup order without an address or shipping charge', async () => {

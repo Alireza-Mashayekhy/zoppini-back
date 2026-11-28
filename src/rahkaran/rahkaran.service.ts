@@ -66,6 +66,16 @@ export function isRahkaranUnknownOutcome(error: unknown): boolean {
   );
 }
 
+/**
+ * تنظیمات اختیاری یک درخواست خواندنی (GET) به راهکاران.
+ *
+ * `timeoutMs` برای مسیرهای تعاملی (افزودن به سبد/شروع پرداخت) استفاده می‌شود
+ * تا کاربر ۳۰ ثانیه (Timeout پیش‌فرض HttpModule) منتظر نماند.
+ */
+export interface RahkaranReadOptions {
+  timeoutMs?: number;
+}
+
 interface RahkaranSession {
   id: string;
   rsa: {
@@ -191,7 +201,7 @@ interface RahkaranCustomer {
   mobile: string;
 }
 
-interface RahkaranRemainingQuantity {
+export interface RahkaranRemainingQuantity {
   StoreID: number;
   StoreName: string;
   RemainingQuantity: number | null;
@@ -1078,7 +1088,12 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     page = 1,
     count = 10,
     ctx?: RahkaranLogContext,
+    options: RahkaranReadOptions = {},
   ): Promise<any> {
+    const timeoutConfig: AxiosRequestConfig = options.timeoutMs
+      ? { timeout: options.timeoutMs }
+      : {};
+
     const params = new URLSearchParams({
       barcode,
       page: String(page),
@@ -1092,6 +1107,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     let response = await this.authenticatedRequest<any>(
       url,
       {
+        ...timeoutConfig,
         method: 'GET',
       },
       ctx,
@@ -1115,6 +1131,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       response = await this.request<any>(
         url,
         {
+          ...timeoutConfig,
           method: 'GET',
           headers: this.authHeaders(),
         },
@@ -1176,8 +1193,13 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
   async getRemainingQuantityInfo(
     productId: number,
     ctx?: RahkaranLogContext,
+    options: RahkaranReadOptions = {},
   ): Promise<RahkaranRemainingQuantity[]> {
     await this.ensureAuthenticated();
+
+    const timeoutConfig: AxiosRequestConfig = options.timeoutMs
+      ? { timeout: options.timeoutMs }
+      : {};
 
     const url =
       `${this.baseUrl}/Retail/Api/DocumentStructure/StoreService.svc/` +
@@ -1193,6 +1215,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
     }>(
       url,
       {
+        ...timeoutConfig,
         method: 'GET',
       },
       ctx,
@@ -1221,6 +1244,7 @@ export class RahkaranService implements OnModuleInit, OnModuleDestroy {
       response = await this.request(
         url,
         {
+          ...timeoutConfig,
           method: 'GET',
           headers: this.authHeaders(),
         },

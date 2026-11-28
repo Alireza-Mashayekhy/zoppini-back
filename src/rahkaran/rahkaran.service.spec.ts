@@ -1,6 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
 import { generateKeyPairSync } from 'crypto';
 import { of } from 'rxjs';
+import { ShippingMethod } from 'src/order/dto/create-order.dto';
+import { getShippingCostToman } from 'src/order/shipping';
 
 import { RahkaranService } from './rahkaran.service';
 
@@ -219,6 +221,33 @@ describe('RahkaranService invoice flow logging', () => {
     ]);
     expect(save.data.receipts[0].amount).toBe(15_000_000);
     expect(chargedOrder.items).toHaveLength(1);
+  });
+
+  it('posts the shipping product for a Tipax order with the fixed charge', async () => {
+    stubAuthenticated();
+    mockInvoiceFlowHttp();
+    const tipaxOrder = {
+      ...order,
+      shippingCost: getShippingCostToman(ShippingMethod.TIBAX),
+      finalPrice: 1_500_000,
+    };
+    await service.syncOrderToRahkaran(tipaxOrder);
+    const calls = httpService.request.mock.calls.map(call => call[0]);
+    // قیمت کالای هزینه ارسال در راهکاران (۲٬۵۰۰٬۰۰۰ ریال) با هزینهٔ سفارش
+    // (۲۵۰٬۰۰۰ تومان) مقایسه می‌شود؛ اگر برابر نبود فاکتور ارسال نمی‌شد.
+    expect(
+      calls.some(config => config.url.includes('GetProduct?id=2782520')),
+    ).toBe(true);
+    const save = calls.find(config => config.url.includes('SaveInvoice'));
+    expect(
+      save.data.document.items.filter(
+        (item: any) => item.productId === 2782520,
+      ),
+    ).toEqual([
+      expect.objectContaining({ productId: 2782520, quantity: 1, unitId: 3 }),
+    ]);
+    // هزینهٔ ارسال در finalPrice هست؛ دریافت دوباره اضافه نمی‌شود
+    expect(save.data.receipts[0].amount).toBe(15_000_000);
   });
 
   it('does not add a shipping line for free or postpaid orders', async () => {
